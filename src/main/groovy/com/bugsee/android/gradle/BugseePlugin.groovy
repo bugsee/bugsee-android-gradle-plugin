@@ -1,18 +1,29 @@
 package com.bugsee.android.gradle
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 import groovy.xml.Namespace
-
+import org.apache.http.HttpEntity
 import org.apache.http.HttpResponse
 import org.apache.http.client.HttpClient
 import org.apache.http.client.methods.HttpPost
+import org.apache.http.client.methods.HttpPut
+import org.apache.http.entity.FileEntity
+import org.apache.http.entity.StringEntity
 import org.apache.http.entity.mime.MultipartEntity
 import org.apache.http.entity.mime.content.FileBody
 import org.apache.http.entity.mime.content.StringBody
 import org.apache.http.impl.client.DefaultHttpClient
+import org.apache.http.message.BasicHeader
+import org.apache.http.protocol.HTTP
 import org.apache.http.util.EntityUtils
 
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+
+import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class BugseePlugin implements Plugin<Project> {
     private static final String APP_TOKEN_TAG = 'com.bugsee.android.APP_TOKEN'
@@ -131,30 +142,58 @@ class BugseePlugin implements Plugin<Project> {
                         return
                     }
 
+                    // Zip the file
+                    def zipTemp = File.createTempFile(buildUUID, 'zip')
+                    zipTemp.deleteOnExit()
+                    def zos = new ZipOutputStream(new FileOutputStream(zipTemp))
+                    zos.putNextEntry(new ZipEntry('mapping.txt'))
+                    Files.copy(new FileInputStream(mappingFile), zos)
+                    zos.closeEntry()
+                    zos.close()
+
                     // Upload the mapping file to Bugsee
-                    MultipartEntity mpEntity = new MultipartEntity();
-                    mpEntity.addPart("mapping", new FileBody(mappingFile));
-                    mpEntity.addPart("app_token", new StringBody(appToken));
-//                    mpEntity.addPart("appId", new StringBody(appId));
-                    mpEntity.addPart("build", new StringBody(versionCode));
-                    mpEntity.addPart("uuid", new StringBody(buildUUID));
+                    String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode]);
 
-                    if (versionName != null) {
-                        mpEntity.addPart("version", new StringBody(versionName));
-                    }
-//                    if (System.properties['bugsee.overwrite']) {
-//                        mpEntity.addPart("overwrite", new StringBody("true"));
-//                    }
-
-                    HttpPost httpPost = new HttpPost(project.bugsee.endpoint)
-                    httpPost.setEntity(mpEntity);
+                    // 1. Create request, get presigned url
+                    HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
+                    StringEntity body = new StringEntity(json);
+                    body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"));
+                    httpPost.setEntity(body);
 
                     HttpClient httpClient = new DefaultHttpClient();
                     HttpResponse response = httpClient.execute(httpPost);
 
                     if (response.getStatusLine().getStatusCode() != 200) {
                         project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
+                        return
                     }
+
+                    HttpEntity resEntity = response.getEntity()
+
+                    if (resEntity == null) {
+                        project.logger.warn("Bugsee upload failed: no response from server", "utf-8")
+                        return
+                    }
+
+                    // 2. Upload to presigned URL
+                    def jsonSlurper = new JsonSlurper()
+                    def responseBody = jsonSlurper.parseText(resEntity.content.text)
+
+                    HttpPut httpPut = new HttpPut(responseBody.endpoint)
+                    httpPut.setEntity(new FileEntity(zipTemp));
+                    response = httpClient.execute(httpPut);
+
+                    if (response.getStatusLine().getStatusCode() != 200) {
+                        project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
+                        return
+                    }
+
+                    zipTemp.delete()
+
+                    // 3. Let server know
+                    httpClient = new DefaultHttpClient();
+                    httpPost = new HttpPost(project.bugsee.endpoint + '/symbols/' + responseBody.symbol_id + '/status')
+                    response = httpClient.execute(httpPost);
                 }
 
                 // Run Bugseepost-build tasks as part of a build
