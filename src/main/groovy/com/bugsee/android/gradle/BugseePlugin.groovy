@@ -25,11 +25,15 @@ import java.util.zip.ZipOutputStream
 class BugseePlugin implements Plugin<Project> {
     private static final String APP_TOKEN_TAG = 'com.bugsee.android.APP_TOKEN'
     private static final String BUILD_UUID_TAG = 'com.bugsee.android.BUILD_UUID'
+    private static final String STRING_RESOURCE_START = "@string/";
+
+    private boolean mDebug;
 
     void apply(Project project) {
         project.extensions.create("bugsee", BugseePluginExtension)
 
         def debug = project.extensions.bugsee.debug;
+        mDebug = debug;
         if (debug) project.logger.warn("Started Bugsee script");
         project.afterEvaluate {
 
@@ -102,22 +106,11 @@ class BugseePlugin implements Plugin<Project> {
                         def xml = new XmlParser().parse(manifestPath)
 
                         // Get the Bugsee API key
-                        String appToken
-                        def metaDataTags = xml.application['meta-data']
-                        if (project.bugsee.appToken) { // This check is equivalent to (value != null && value != "")
-                            appToken = project.bugsee.appToken
-                        } else {
-                            def appTokenTags = metaDataTags.findAll {
-                                it.attributes()[ns.name].equals(APP_TOKEN_TAG)
-                            }
-                            if (appTokenTags.size() == 0) {
-                                project.logger.warn("Could not find '$APP_TOKEN_TAG' <meta-data> tag in your AndroidManifest.xml")
-                                return
-                            }
-                            appToken = appTokenTags[0].attributes()[ns.value]
-                            if (appToken.startsWith("@string/")) {
-                                //TODO: handle this case.
-                            }
+                        NodeList metaDataTags = xml.application['meta-data']
+                        String appToken = getAppToken(project, ns, metaDataTags);
+                        if (appToken == null) {
+                            project.logger.warn("Could not get appToken.");
+                            return
                         }
 
                         if (debug) project.logger.warn("appToken is " + appToken);
@@ -220,5 +213,50 @@ class BugseePlugin implements Plugin<Project> {
                 }
             }
         }
+    }
+
+    String getAppToken(Project project, Namespace androidNamespace, NodeList appMetaData) {
+        if (project.bugsee.appToken) { // This check is equivalent to (value != null && value != "")
+            return project.bugsee.appToken
+        } else {
+            def appTokenTags = appMetaData.findAll {
+                it.attributes()[androidNamespace.name].equals(APP_TOKEN_TAG)
+            }
+            if (appTokenTags.size() == 0) {
+                project.logger.warn("Could not find '$APP_TOKEN_TAG' <meta-data> tag in your AndroidManifest.xml")
+                return null
+            }
+            def appToken = appTokenTags[0].attributes()[androidNamespace.value]
+            if (!appToken) {
+                project.logger.warn("App token is null.");
+                return null;
+            }
+
+            if (appToken.startsWith(STRING_RESOURCE_START))
+                return getStringResource(project, appToken)
+
+            return appToken;
+        }
+    }
+
+    String getStringResource(Project project, String resourceIdString) {
+        String resourceId = resourceIdString.substring(STRING_RESOURCE_START.length());
+        if (!resourceId) {
+            project.logger.warn("Invalid string resource name specified: " + resourceIdString);
+            return null;
+        }
+
+        def stringResourceFiles = project.android.sourceSets.main.res.sourceFiles.findAll { it.name.equals 'strings.xml' }
+        if (mDebug) project.logger.warn("resourceId: " + resourceId);
+
+        for (int i = 0; i < stringResourceFiles.size(); i++) {
+            def currentXml = new XmlSlurper().parse(stringResourceFiles.get(i))
+            def value = currentXml.string.find { resourceId.equals(it.attributes()['name']) }
+            if (value)
+                return value.text();
+        }
+
+        project.logger.warn("Could not find " + resourceIdString + " string resource");
+        return null;
     }
 }
