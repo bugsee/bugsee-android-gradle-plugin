@@ -196,11 +196,26 @@ class BugseePlugin implements Plugin<Project> {
             return
         }
 
-        if (mDebug) project.logger.warn("Bugsee Upload task step 2.");
-        // 2. Upload to presigned URL
+        String contentText = resEntity.content.text;
+        if (mDebug) project.logger.warn("Bugsee Upload task step 2. Content text: " + contentText);
         def jsonSlurper = new JsonSlurper()
-        def responseBody = jsonSlurper.parseText(resEntity.content.text)
+        def responseBody = jsonSlurper.parseText(contentText)
+        // Check responseBody.endpoint
+        if (!responseBody.endpoint) {
+            if (responseBody.error) {
+                String errorType = responseBody.error.type;
+                if ("ApplicationNotFoundError".equals(errorType)) {
+                    project.logger.warn("App token is invalid: " + appToken);
+                } else {
+                    project.logger.warn("Bugsee upload failed with error: " + responseBody.error)
+                }
+            } else { // No responseBody.error
+                project.logger.warn("Bugsee upload failed: null endpoint")
+            }
+            return
+        }
 
+        // 2. Upload to presigned URL
         HttpPut httpPut = new HttpPut(responseBody.endpoint)
         httpPut.setEntity(new FileEntity(file));
         response = httpClient.execute(httpPut);
