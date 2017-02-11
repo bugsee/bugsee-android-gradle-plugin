@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle
 
+import com.android.build.gradle.api.ApplicationVariant
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
@@ -58,147 +59,12 @@ class BugseePlugin implements Plugin<Project> {
 
                     // Create Bugsee pre-proguard task
                     def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") << {
-
-                        // Find the processed manifest for this variant
-                        def manifestPath = variant.outputs[0].processManifest.manifestOutputFile
-
-                        def appId = variant.applicationId
-
-                        // Parse the AndroidManifest.xml
-                        def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
-                        def xml = new XmlParser().parse(manifestPath)
-
-                        // Uniquely identify the build so that we can identify the proguard file.
-                        def buildUUID = UUID.randomUUID().toString()
-
-                        def application = xml.application[0]
-
-                        if (application) {
-
-                            if (debug) project.logger.warn("Bugsee manifestTask has app");
-                            def metaDataTags = application['meta-data']
-                            // remove any old BUILD_UUID tags
-                            def buildUuidTags = metaDataTags.findAll {
-                                it.attributes()[ns.name].equals(BUILD_UUID_TAG)
-                            }.each {
-                                it.parent().remove(it)
-                            }
-
-                            application.appendNode('meta-data', [(ns.name): BUILD_UUID_TAG, (ns.value): buildUUID])
-
-                            def writer = new FileWriter(manifestPath)
-                            def printer = new XmlNodePrinter(new PrintWriter(writer))
-                            printer.preserveWhitespace = true
-                            printer.print(xml)
-                        }
+                        executeBugseeManifestAction(project, variant);
                     }
 
                     // Create Bugsee post-proguard task
                     def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") << {
-
-                        // Find the processed manifest for this variant
-                        def manifestPath = variant.outputs[0].processManifest.manifestOutputFile
-
-                        def appId = variant.applicationId
-
-                        // Parse the AndroidManifest.xml
-                        def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
-                        def xml = new XmlParser().parse(manifestPath)
-
-                        // Get the Bugsee API key
-                        NodeList metaDataTags = xml.application['meta-data']
-                        String appToken = getAppToken(project, ns, metaDataTags);
-                        if (appToken == null) {
-                            project.logger.warn("Could not get appToken.");
-                            return
-                        }
-
-                        if (debug) project.logger.warn("appToken is " + appToken);
-                        // Uniquely identify the build so that we can identify the proguard file.
-                        def buildUUID
-                        def buildUUIDTags = metaDataTags.findAll {
-                            it.attributes()[ns.name].equals(BUILD_UUID_TAG)
-                        }
-                        if (buildUUIDTags.size() == 0) {
-                            project.logger.warn("Could not find '$BUILD_UUID_TAG' <meta-data> tag in your AndroidManifest.xml")
-                            return
-                        } else {
-                            buildUUID = buildUUIDTags[0].attributes()[ns.value]
-                        }
-
-                        // Get the build version
-                        def versionName = xml.attributes()[ns.versionName]
-                        def versionCode = xml.attributes()[ns.versionCode]
-                        if (versionCode == null) {
-                            project.logger.warn("Could not find 'android:versionCode' value in your AndroidManifest.xml")
-                            return
-                        }
-
-                        // Find the Proguard mapping file
-                        File mappingFile = variant.getMappingFile()
-
-                        // If proguard configuration includes -dontobfuscate, the mapping file
-                        // will not exist (but we also won't need it).
-                        if (!mappingFile.exists()) {
-                            return
-                        }
-
-                        if (debug) project.logger.warn("Bugsee Upload task step 0 (found mapping file). buildUUID: " + buildUUID);
-                        // Zip the file
-                        def zipTemp = File.createTempFile(buildUUID, 'zip')
-                        zipTemp.deleteOnExit()
-                        def zos = new ZipOutputStream(new FileOutputStream(zipTemp))
-                        zos.putNextEntry(new ZipEntry('mapping.txt'))
-                        Files.copy(new FileInputStream(mappingFile), zos)
-                        zos.closeEntry()
-                        zos.close()
-
-                        if (debug) project.logger.warn("Bugsee Upload task step 1.");
-                        // Upload the mapping file to Bugsee
-                        String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode]);
-
-                        // 1. Create request, get presigned url
-                        HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
-                        StringEntity body = new StringEntity(json);
-                        body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"));
-                        httpPost.setEntity(body);
-
-                        HttpClient httpClient = new DefaultHttpClient();
-                        HttpResponse response = httpClient.execute(httpPost);
-
-                        if (response.getStatusLine().getStatusCode() != 200) {
-                            project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
-                            return
-                        }
-
-                        HttpEntity resEntity = response.getEntity()
-
-                        if (resEntity == null) {
-                            project.logger.warn("Bugsee upload failed: no response from server", "utf-8")
-                            return
-                        }
-
-                        if (debug) project.logger.warn("Bugsee Upload task step 2.");
-                        // 2. Upload to presigned URL
-                        def jsonSlurper = new JsonSlurper()
-                        def responseBody = jsonSlurper.parseText(resEntity.content.text)
-
-                        HttpPut httpPut = new HttpPut(responseBody.endpoint)
-                        httpPut.setEntity(new FileEntity(zipTemp));
-                        response = httpClient.execute(httpPut);
-
-                        if (response.getStatusLine().getStatusCode() != 200) {
-                            project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
-                            return
-                        }
-
-                        zipTemp.delete()
-
-                        if (debug) project.logger.warn("Bugsee Upload task step 3.");
-                        // 3. Let server know
-                        httpClient = new DefaultHttpClient();
-                        httpPost = new HttpPost(project.bugsee.endpoint + '/symbols/' + responseBody.symbol_id + '/status')
-                        response = httpClient.execute(httpPost);
+                        executeBugseeUploadTask(project, variant);
                     }
 
                     def variantOutput = variant.outputs.first()
@@ -213,6 +79,139 @@ class BugseePlugin implements Plugin<Project> {
                 }
             }
         }
+    }
+
+    void executeBugseeManifestAction(Project project, ApplicationVariant variant) {
+        // Find the processed manifest for this variant
+        def manifestPath = variant.outputs[0].processManifest.manifestOutputFile
+
+        // Parse the AndroidManifest.xml
+        def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
+        def xml = new XmlParser().parse(manifestPath)
+
+        // Uniquely identify the build so that we can identify the proguard file.
+        def buildUUID = UUID.randomUUID().toString()
+        def application = xml.application[0]
+        if (application) {
+
+            if (mDebug) project.logger.warn("Bugsee manifestTask has app");
+            def metaDataTags = application['meta-data']
+            // remove any old BUILD_UUID tags
+            def buildUuidTags = metaDataTags.findAll {
+                it.attributes()[ns.name].equals(BUILD_UUID_TAG)
+            }.each {
+                it.parent().remove(it)
+            }
+
+            application.appendNode('meta-data', [(ns.name): BUILD_UUID_TAG, (ns.value): buildUUID])
+
+            def writer = new FileWriter(manifestPath)
+            def printer = new XmlNodePrinter(new PrintWriter(writer))
+            printer.preserveWhitespace = true
+            printer.print(xml)
+        }
+    }
+
+    void executeBugseeUploadTask(Project project, ApplicationVariant variant) {
+        // Find the processed manifest for this variant
+        def manifestPath = variant.outputs[0].processManifest.manifestOutputFile
+
+        // Parse the AndroidManifest.xml
+        def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
+        def xml = new XmlParser().parse(manifestPath)
+
+        // Get the Bugsee API key
+        NodeList metaDataTags = xml.application['meta-data']
+        String appToken = getAppToken(project, ns, metaDataTags);
+        if (appToken == null) {
+            project.logger.warn("Could not get appToken.");
+            return
+        }
+
+        if (mDebug) project.logger.warn("appToken is " + appToken);
+        // Uniquely identify the build so that we can identify the proguard file.
+        def buildUUID
+        def buildUUIDTags = metaDataTags.findAll {
+            it.attributes()[ns.name].equals(BUILD_UUID_TAG)
+        }
+        if (buildUUIDTags.size() == 0) {
+            project.logger.warn("Could not find '$BUILD_UUID_TAG' <meta-data> tag in your AndroidManifest.xml")
+            return
+        } else {
+            buildUUID = buildUUIDTags[0].attributes()[ns.value]
+        }
+
+        // Get the build version
+        def versionName = xml.attributes()[ns.versionName]
+        def versionCode = xml.attributes()[ns.versionCode]
+        if (versionCode == null) {
+            project.logger.warn("Could not find 'android:versionCode' value in your AndroidManifest.xml")
+            return
+        }
+
+        // Find the Proguard mapping file
+        File mappingFile = variant.getMappingFile()
+
+        // If proguard configuration includes -dontobfuscate, the mapping file
+        // will not exist (but we also won't need it).
+        if (!mappingFile.exists()) {
+            return
+        }
+
+        if (mDebug) project.logger.warn("Bugsee Upload task step 0 (found mapping file). buildUUID: " + buildUUID);
+        // Zip the file
+        def zipTemp = File.createTempFile(buildUUID, 'zip')
+        zipTemp.deleteOnExit()
+        def zos = new ZipOutputStream(new FileOutputStream(zipTemp))
+        zos.putNextEntry(new ZipEntry('mapping.txt'))
+        Files.copy(new FileInputStream(mappingFile), zos)
+        zos.closeEntry()
+        zos.close()
+
+        if (mDebug) project.logger.warn("Bugsee Upload task step 1.");
+        // Upload the mapping file to Bugsee
+        String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode]);
+        uploadData(project, zipTemp, json, appToken);
+    }
+
+    void uploadData(Project project, File file, String json, String appToken) {
+        // 1. Create request, get presigned url
+        HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
+        StringEntity body = new StringEntity(json);
+        body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"));
+        httpPost.setEntity(body);
+
+        HttpClient httpClient = new DefaultHttpClient();
+        HttpResponse response = httpClient.execute(httpPost);
+
+        if (response.getStatusLine().getStatusCode() != 200) {
+            project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
+            return
+        }
+
+        HttpEntity resEntity = response.getEntity()
+
+        if (resEntity == null) {
+            project.logger.warn("Bugsee upload failed: no response from server", "utf-8")
+            return
+        }
+
+        if (mDebug) project.logger.warn("Bugsee Upload task step 2.");
+        // 2. Upload to presigned URL
+        def jsonSlurper = new JsonSlurper()
+        def responseBody = jsonSlurper.parseText(resEntity.content.text)
+
+        HttpPut httpPut = new HttpPut(responseBody.endpoint)
+        httpPut.setEntity(new FileEntity(file));
+        response = httpClient.execute(httpPut);
+
+        if (response.getStatusLine().getStatusCode() != 200) {
+            project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
+            return
+        }
+
+        file.delete()
+        if (mDebug) project.logger.warn("Bugsee Upload task finish.");
     }
 
     String getAppToken(Project project, Namespace androidNamespace, NodeList appMetaData) {
