@@ -4,6 +4,7 @@ import com.android.build.gradle.api.ApplicationVariant
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
+import org.apache.commons.io.FilenameUtils
 import org.apache.http.HttpEntity
 import org.apache.http.HttpResponse
 import org.apache.http.client.HttpClient
@@ -26,7 +27,10 @@ import java.util.zip.ZipOutputStream
 class BugseePlugin implements Plugin<Project> {
     private static final String APP_TOKEN_TAG = 'com.bugsee.android.APP_TOKEN'
     private static final String BUILD_UUID_TAG = 'com.bugsee.android.BUILD_UUID'
+
     private static final String STRING_RESOURCE_START = "@string/";
+    private static final String MIPMAP_RESOURCE_START = "@mipmap/";
+    private static final String DRAWABLE_RESOURCE_START = "@drawable/";
 
     private boolean mDebug;
 
@@ -109,6 +113,8 @@ class BugseePlugin implements Plugin<Project> {
             def printer = new XmlNodePrinter(new PrintWriter(writer))
             printer.preserveWhitespace = true
             printer.print(xml)
+        } else {
+            project.logger.warn("Application section not found in manifest");
         }
     }
 
@@ -149,24 +155,9 @@ class BugseePlugin implements Plugin<Project> {
             return
         }
 
-        // Find the Proguard mapping file
-        File mappingFile = variant.getMappingFile()
-
-        // If proguard configuration includes -dontobfuscate, the mapping file
-        // will not exist (but we also won't need it).
-        if (!mappingFile.exists()) {
+        File zipTemp = getZipDataToUpload(project, variant, xml, ns, buildUUID);
+        if (!zipTemp)
             return
-        }
-
-        if (mDebug) project.logger.warn("Bugsee Upload task step 0 (found mapping file). buildUUID: " + buildUUID);
-        // Zip the file
-        def zipTemp = File.createTempFile(buildUUID, 'zip')
-        zipTemp.deleteOnExit()
-        def zos = new ZipOutputStream(new FileOutputStream(zipTemp))
-        zos.putNextEntry(new ZipEntry('mapping.txt'))
-        Files.copy(new FileInputStream(mappingFile), zos)
-        zos.closeEntry()
-        zos.close()
 
         if (mDebug) project.logger.warn("Bugsee Upload task step 1.");
         // Upload the mapping file to Bugsee
@@ -174,6 +165,57 @@ class BugseePlugin implements Plugin<Project> {
         uploadData(project, zipTemp, json, appToken);
     }
 
+    File getZipDataToUpload(Project project, ApplicationVariant variant, Node manifestXml, Namespace namespace, String buildUUID) {
+        // Find the Proguard mapping file
+        File mappingFile = variant.getMappingFile()
+
+        // If proguard configuration includes -dontobfuscate, the mapping file
+        // will not exist (but we also won't need it).
+        if (!mappingFile.exists()) {
+            return null
+        }
+
+        if (mDebug) project.logger.warn("Bugsee Upload task step 0 (found mapping file). buildUUID: " + buildUUID);
+        // Zip the file
+        def zipTemp = File.createTempFile(buildUUID, 'zip')
+        zipTemp.deleteOnExit()
+        def zos = new ZipOutputStream(new FileOutputStream(zipTemp))
+        zos.withStream {
+            // Add mapping file
+            zos.putNextEntry(new ZipEntry('mapping.txt'))
+            def mappingFileFis = new FileInputStream(mappingFile)
+            mappingFileFis.withStream { Files.copy(mappingFileFis, zos) }
+            zos.closeEntry()
+            // Add icon file
+            Node application =  manifestXml.application[0]
+            if (application) {
+                def iconResourceId = application.attribute(namespace.icon);
+                if (iconResourceId) {
+                    if (mDebug) project.logger.warn("Icon resource id: " + iconResourceId)
+                    File icon = getIcon(project, iconResourceId)
+                    if (mDebug) project.logger.warn("Chosen icon file: " + icon?.path)
+                    if (icon) {
+                        def iconFileExtension = FilenameUtils.getExtension(icon.getName());
+                        zos.putNextEntry(new ZipEntry('icon.' + iconFileExtension))
+                        def iconFis = new FileInputStream(icon)
+                        iconFis.withStream { Files.copy(iconFis, zos); }
+                        zos.closeEntry()
+                    }
+                } else {
+                    project.logger.warn("Didn't find app icon.")
+                }
+            }
+        }
+        return zipTemp
+    }
+
+    /**
+     *
+     * @param project
+     * @param file file to upload. It is deleted after uploading.
+     * @param json
+     * @param appToken
+     */
     void uploadData(Project project, File file, String json, String appToken) {
         // 1. Create request, get presigned url
         HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
@@ -272,5 +314,36 @@ class BugseePlugin implements Plugin<Project> {
 
         project.logger.warn("Could not find " + resourceIdString + " string resource");
         return null;
+    }
+
+    // Tries to get xxhdpi icon, because it has the most suitable size for us (144*144). If xxhdpi icon is not found, get the largest icon.
+    File getIcon(Project project, String resourceIdString) {
+        String resourceStart;
+        if (resourceIdString.startsWith(MIPMAP_RESOURCE_START)) {
+            resourceStart = MIPMAP_RESOURCE_START
+        } else if (resourceIdString.startsWith(DRAWABLE_RESOURCE_START)) {
+            resourceStart = DRAWABLE_RESOURCE_START
+        } else return null
+
+        String resourceId = resourceIdString.substring(resourceStart.length())
+        if (!resourceId)
+            return null
+
+        String resourceFolderType = resourceStart.substring(1, resourceStart.length() - 1);
+        if (mDebug) project.logger.warn("Icon resourceFolderType: " + resourceFolderType)
+
+        List<File> iconFiles = project.android.sourceSets.main.res.sourceFiles.findAll {
+            // We don't handle case, when specified icon resource has xml type (for example, selector).
+            // We get files only from folders of specified type. For example, if specified resource is mipmap, we don't consider drawable with the same name.
+            FilenameUtils.getBaseName(it.name).equals(resourceId) && !FilenameUtils.getExtension(it.name).equals('xml') && it.getParent().toLowerCase(Locale.ENGLISH).contains(resourceFolderType)}
+        if (!iconFiles || iconFiles.size() == 0)
+            return null
+        // Try to find xxhdpi icon.
+        File xxhdpiFile = iconFiles.find { it.getParent().contains("xxhdpi") };
+        if (xxhdpiFile)
+            return xxhdpiFile;
+        // Get the largest icon.
+        iconFiles.sort { left, right -> left.size() <=> right.size() }
+        return iconFiles.last()
     }
 }
