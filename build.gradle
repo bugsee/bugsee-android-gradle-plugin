@@ -1,14 +1,6 @@
 apply plugin: 'groovy'
 apply plugin: 'maven'
-
-uploadArchives {
-    repositories {
-        mavenDeployer {
-            pom.artifactId = 'gradle-plugin'
-            repository(url: "file://maven")
-        }
-    }
-}
+apply from: 'maven-push.gradle'
 
 group = 'com.bugsee.android'
 version = '1.0.0'
@@ -23,4 +15,22 @@ dependencies {
   compile 'com.android.tools.build:gradle:1.0.0'
   compile 'org.apache.httpcomponents:httpclient:4.3.6'
   compile 'org.apache.httpcomponents:httpmime:4.3.6'
+}
+
+def buildShaCommand = "git --git-dir=" + projectDir + "/.git rev-parse --short HEAD";
+
+ext {
+  File versionFile = file("${projectDir}/version.txt")
+  versionName = versionFile.readLines()[0].trim()
+  buildSha = buildShaCommand.execute().text.trim()
+
+  Properties properties = new Properties()
+  releaseBuild = System.env.RELEASE ?System.env.RELEASE.toBoolean(): false
+
+  if (releaseBuild) {
+  } else {
+    versionName = versionName + "-SNAPSHOT"
+  }
+  println 'Build version ' + versionName
+  println 'Release build:' + releaseBuild
 }
