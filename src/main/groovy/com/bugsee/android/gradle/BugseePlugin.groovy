@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle
 
 import com.android.build.gradle.api.ApplicationVariant
+import com.android.build.gradle.api.BaseVariantOutput
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
@@ -41,6 +42,8 @@ class BugseePlugin implements Plugin<Project> {
         mDebug = debug;
         if (debug) project.logger.warn("Started Bugsee script");
         project.afterEvaluate {
+            // "debug" setting should be initialized here, because client settings are not applied earlier.
+            //mDebug = project.bugsee.debug;
 
             if (debug) project.logger.warn("Bugsee script afterEvaluate");
             // Make sure there's an android configuration
@@ -87,7 +90,11 @@ class BugseePlugin implements Plugin<Project> {
 
     void executeBugseeManifestAction(Project project, ApplicationVariant variant) {
         // Find the processed manifest for this variant
-        def manifestPath = variant.outputs[0].processManifest.manifestOutputFile
+        def manifestPath = getManifestPathFile(variant.outputs[0])
+        if (!manifestPath) {
+            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName);
+            return
+        }
 
         // Parse the AndroidManifest.xml
         def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
@@ -118,9 +125,34 @@ class BugseePlugin implements Plugin<Project> {
         }
     }
 
+    File getManifestPathFile(BaseVariantOutput variantOutput) {
+        def manifestPath
+        try {
+            // Android Gradle Plugin < 3.0.0
+            manifestPath = variantOutput.processManifest.manifestOutputFile
+        } catch (Exception ignored) {
+            // Android Gradle Plugin >= 3.0.0
+            manifestPath = new File(
+                variantOutput.processManifest.manifestOutputDirectory,
+                "AndroidManifest.xml")
+            if (!manifestPath.isFile()) {
+                manifestPath = new File(
+                    new File(
+                        variantOutput.processManifest.manifestOutputDirectory,
+                        variantOutput.dirName),
+                    "AndroidManifest.xml")
+            }
+        }
+        return manifestPath;
+    }
+
     void executeBugseeUploadTask(Project project, ApplicationVariant variant) {
         // Find the processed manifest for this variant
-        def manifestPath = variant.outputs[0].processManifest.manifestOutputFile
+        def manifestPath = getManifestPathFile(variant.outputs[0])
+        if (!manifestPath) {
+            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName);
+            return
+        }
 
         // Parse the AndroidManifest.xml
         def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
@@ -258,6 +290,7 @@ class BugseePlugin implements Plugin<Project> {
         }
 
         // 2. Upload to presigned URL
+        if (mDebug) project.logger.warn("Endpoint: " + responseBody.endpoint);
         HttpPut httpPut = new HttpPut(responseBody.endpoint)
         httpPut.setEntity(new FileEntity(file));
         response = httpClient.execute(httpPut);
@@ -273,6 +306,7 @@ class BugseePlugin implements Plugin<Project> {
 
     String getAppToken(Project project, Namespace androidNamespace, NodeList appMetaData) {
         if (project.bugsee.appToken) { // This check is equivalent to (value != null && value != "")
+            if (mDebug) project.logger.warn("Use project.bugsee.appToken: " + project.bugsee.appToken);
             return project.bugsee.appToken
         } else {
             def appTokenTags = appMetaData.findAll {
