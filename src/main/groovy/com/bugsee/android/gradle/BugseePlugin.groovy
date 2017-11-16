@@ -160,7 +160,7 @@ class BugseePlugin implements Plugin<Project> {
 
         // Get the Bugsee API key
         NodeList metaDataTags = xml.application['meta-data']
-        String appToken = getAppToken(project, ns, metaDataTags);
+        String appToken = getAppToken(project, variant, ns, metaDataTags);
         if (appToken == null) {
             project.logger.warn("Could not get appToken.");
             return
@@ -304,10 +304,17 @@ class BugseePlugin implements Plugin<Project> {
         if (mDebug) project.logger.warn("Bugsee Upload task finish.");
     }
 
-    String getAppToken(Project project, Namespace androidNamespace, NodeList appMetaData) {
-        if (project.bugsee.appToken) { // This check is equivalent to (value != null && value != "")
-            if (mDebug) project.logger.warn("Use project.bugsee.appToken: " + project.bugsee.appToken);
-            return project.bugsee.appToken
+    String getAppToken(Project project, ApplicationVariant variant, Namespace androidNamespace, NodeList appMetaData) {
+        if (project.bugsee.getAppTokenByVariant()) {
+            def variantAppToken = project.bugsee.getAppTokenByVariant()(variant);
+            if (variantAppToken) {
+                if (mDebug) project.logger.warn("Use appTokenByVariant: " + variantAppToken)
+                return variantAppToken
+            }
+        }
+        if (project.bugsee.getDefaultAppToken()) { // This check is equivalent to (value != null && value != "")
+            if (mDebug) project.logger.warn("Use project.bugsee.defaultAppToken: " + project.bugsee.getDefaultAppToken())
+            return project.bugsee.getDefaultAppToken()
         } else {
             def appTokenTags = appMetaData.findAll {
                 it.attributes()[androidNamespace.name].equals(APP_TOKEN_TAG)
