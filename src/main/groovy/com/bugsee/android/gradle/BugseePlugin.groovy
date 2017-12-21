@@ -43,7 +43,7 @@ class BugseePlugin implements Plugin<Project> {
         if (debug) project.logger.warn("Started Bugsee script");
         project.afterEvaluate {
             // "debug" setting should be initialized here, because client settings are not applied earlier.
-            //mDebug = project.bugsee.debug;
+            mDebug = project.bugsee.debug;
 
             if (debug) project.logger.warn("Bugsee script afterEvaluate");
             // Make sure there's an android configuration
@@ -141,7 +141,7 @@ class BugseePlugin implements Plugin<Project> {
         def application = xml.application[0]
         if (application) {
 
-            if (mDebug) project.logger.warn("Bugsee manifestTask has app");
+            if (mDebug) project.logger.warn("Bugsee manifestTask: adding buildUUID " + buildUUID);
             def metaDataTags = application['meta-data']
             // remove any old BUILD_UUID tags
             def buildUuidTags = metaDataTags.findAll {
