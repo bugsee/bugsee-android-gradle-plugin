@@ -125,23 +125,63 @@ class BugseePlugin implements Plugin<Project> {
     }
 
     void executeBugseeManifestAction(Project project, BaseVariant variant) {
-        // Find the processed manifest for this variant
-        def manifestPath = getManifestPathFile(variant.outputs[0])
-        if (!manifestPath) {
-            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName);
+        if (!variant.outputs || variant.outputs.size() == 0) {
+            project.logger.warn("No outputs found for variant " + variant.name)
             return
         }
 
+        if (mDebug) project.logger.warn("Bugsee manifestTask. Processing variant flavor: $variant.flavorName; build type: $variant.buildType.name")
+        def buildUUID = UUID.randomUUID().toString()
+        // Process all variant outputs. It is necessary when several apks are generated at a time (when "split" block is used).
+        for (def output : variant.outputs) {
+            // Find the processed manifest for this output
+            def manifestFile = getManifestFile(output)
+
+            if (!manifestFile) {
+                project.logger.warn("Can't get manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
+                return
+            }
+
+            // No split or manifest path is not correct (occurs if manifest file was not deleted after build without split).
+            if (manifestFile.parentFile.name.equals(variant.buildType.name)) {
+                if (mDebug) project.logger.warn("No split or manifest path is not correct.")
+                if (!addBuildUuidToManifest(project, manifestFile, buildUUID)) {
+                    project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
+                }
+
+                // Iterate nested directories.
+                def manifestDirs = manifestFile.parentFile.listFiles(new FileFilter() {
+                    @Override
+                    boolean accept(File file) {
+                        def files = file.list()
+                        return (files && files.contains("AndroidManifest.xml"))
+                    }
+                })
+
+                for (def manifestDir : manifestDirs) {
+                    if (!addBuildUuidToManifest(project, new File(FilenameUtils.concat(manifestDir.path, "AndroidManifest.xml")), buildUUID)) {
+                        project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; manifest dir: $manifestDir");
+                    }
+                }
+                break;
+            }
+
+            // Normal manifest place for projects with split.
+            if (!addBuildUuidToManifest(project, manifestFile, buildUUID)) {
+                project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
+            }
+        }
+    }
+
+    boolean addBuildUuidToManifest(Project project, File manifestFile, String buildUuid) {
         // Parse the AndroidManifest.xml
         def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
-        def xml = new XmlParser().parse(manifestPath)
+        def xml = new XmlParser().parse(manifestFile)
 
         // Uniquely identify the build so that we can identify the proguard file.
-        def buildUUID = UUID.randomUUID().toString()
         def application = xml.application[0]
         if (application) {
-
-            if (mDebug) project.logger.warn("Bugsee manifestTask: adding buildUUID " + buildUUID);
+            if (mDebug) project.logger.warn("Adding buildUUID: $buildUuid to $manifestFile.parentFile.name");
             def metaDataTags = application['meta-data']
             // remove any old BUILD_UUID tags
             def buildUuidTags = metaDataTags.findAll {
@@ -150,18 +190,18 @@ class BugseePlugin implements Plugin<Project> {
                 it.parent().remove(it)
             }
 
-            application.appendNode('meta-data', [(ns.name): BUILD_UUID_TAG, (ns.value): buildUUID])
+            application.appendNode('meta-data', [(ns.name): BUILD_UUID_TAG, (ns.value): buildUuid])
 
-            def writer = new FileWriter(manifestPath)
+            def writer = new FileWriter(manifestFile)
             def printer = new XmlNodePrinter(new PrintWriter(writer))
             printer.preserveWhitespace = true
             printer.print(xml)
-        } else {
-            project.logger.warn("Application section not found in manifest");
+            return true
         }
+        return false;
     }
 
-    File getManifestPathFile(BaseVariantOutput variantOutput) {
+    File getManifestFile(BaseVariantOutput variantOutput) {
         def manifestPath
         try {
             // Android Gradle Plugin < 3.0.0
@@ -184,7 +224,7 @@ class BugseePlugin implements Plugin<Project> {
 
     void executeBugseeUploadTask(Project project, BaseVariant variant) {
         // Find the processed manifest for this variant
-        def manifestPath = getManifestPathFile(variant.outputs[0])
+        def manifestPath = getManifestFile(variant.outputs[0])
         if (!manifestPath) {
             project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName);
             return
