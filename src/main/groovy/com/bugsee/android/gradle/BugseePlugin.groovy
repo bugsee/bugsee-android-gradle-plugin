@@ -22,6 +22,7 @@ import org.gradle.api.Project
 import org.slf4j.helpers.BasicMarker
 
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -268,9 +269,23 @@ class BugseePlugin implements Plugin<Project> {
             return
 
         if (mDebug) project.logger.warn("Bugsee Upload task step 1.");
+        String mappingHash = getHash(variant.getMappingFile().text);
         // Upload the mapping file to Bugsee
-        String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode]);
+        String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode, hash: mappingHash]);
         uploadData(project, zipTemp, json, appToken);
+    }
+
+    String getHash(String text) {
+        MessageDigest md = MessageDigest.getInstance("SHA-1");
+        md.update(text.getBytes("UTF-8"));
+
+        byte[] result = md.digest();
+        return String.format("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+            result[0], result[1], result[2], result[3],
+            result[4], result[5], result[6], result[7],
+            result[8], result[9], result[10], result[11],
+            result[12], result[13], result[14], result[15],
+            result[16], result[17], result[18], result[19]);
     }
 
     File getZipDataToUpload(Project project, BaseVariant variant, Node manifestXml, Namespace namespace, String buildUUID) {
@@ -325,6 +340,7 @@ class BugseePlugin implements Plugin<Project> {
      * @param appToken
      */
     void uploadData(Project project, File file, String json, String appToken) {
+        if (mDebug) project.logger.warn("Starting to send data. Body: $json")
         // 1. Create request, get presigned url
         HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
         StringEntity body = new StringEntity(json);
@@ -350,6 +366,11 @@ class BugseePlugin implements Plugin<Project> {
         if (mDebug) project.logger.warn("Bugsee Upload task step 2. Content text: " + contentText);
         def jsonSlurper = new JsonSlurper()
         def responseBody = jsonSlurper.parseText(contentText)
+
+        if (responseBody.code && responseBody.code == 16004) { // This mapping has been already uploaded. Starting from Gradle 3.0 mapping is re-generated only on code changes.
+            if (mDebug) project.logger.warn("Got SymbolAlreadyExistsError from server")
+            return
+        }
         // Check responseBody.endpoint
         if (!responseBody.endpoint) {
             if (responseBody.error) {
