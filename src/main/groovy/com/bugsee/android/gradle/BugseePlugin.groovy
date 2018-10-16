@@ -381,6 +381,7 @@ class BugseePlugin implements Plugin<Project> {
     }
 
     String getAppToken(Project project, BaseVariant variant, Namespace androidNamespace, NodeList appMetaData) {
+        // Check closure, which chooses app token for concrete build variant.
         if (project.bugsee.getAppTokenByVariant()) {
             def variantAppToken = project.bugsee.getAppTokenByVariant()(variant);
             if (variantAppToken) {
@@ -388,6 +389,15 @@ class BugseePlugin implements Plugin<Project> {
                 return variantAppToken
             }
         }
+        // Check AppTokenProvider.
+        if (project.bugsee.getAppTokenProvider()) {
+            def variantAppToken = project.bugsee.getAppTokenProvider().getAppToken(variant)
+            if (variantAppToken) {
+                if (mDebug) project.logger.warn("Use app token, taken from AppTokenProvider: " + variantAppToken)
+                return variantAppToken
+            }
+        }
+        // Check default app token.
         if (project.bugsee.getDefaultAppToken()) { // This check is equivalent to (value != null && value != "")
             if (mDebug) project.logger.warn("Use project.bugsee.defaultAppToken: " + project.bugsee.getDefaultAppToken())
             return project.bugsee.getDefaultAppToken()
