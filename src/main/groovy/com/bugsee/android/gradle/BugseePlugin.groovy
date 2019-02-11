@@ -19,6 +19,7 @@ import org.apache.http.protocol.HTTP
 import org.apache.http.util.EntityUtils
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.file.FileTree
 import org.slf4j.helpers.BasicMarker
 
 import java.nio.file.Files
@@ -135,7 +136,7 @@ class BugseePlugin implements Plugin<Project> {
         // Process all variant outputs. It is necessary when several apks are generated at a time (when "split" block is used).
         for (def output : variant.outputs) {
             // Find the processed manifest for this output
-            def manifestFile = getManifestFile(output)
+            def manifestFile = getManifestFile(project, output)
 
             if (!manifestFile) {
                 project.logger.warn("Can't get manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
@@ -201,20 +202,24 @@ class BugseePlugin implements Plugin<Project> {
         return false;
     }
 
-    File getManifestFile(BaseVariantOutput variantOutput) {
+    File getManifestFile(Project project, BaseVariantOutput variantOutput) {
         def manifestPath
         try {
             // Android Gradle Plugin < 3.0.0
             manifestPath = variantOutput.processManifest.manifestOutputFile
         } catch (Exception ignored) {
             // Android Gradle Plugin >= 3.0.0
+            String outString = getManifestOutputString(project, variantOutput);
+            if (outString?.endsWith(".xml"))
+                return new File(outString)
+
             manifestPath = new File(
-                variantOutput.processManifest.manifestOutputDirectory,
+                outString,
                 "AndroidManifest.xml")
             if (!manifestPath.isFile()) {
                 manifestPath = new File(
                     new File(
-                        variantOutput.processManifest.manifestOutputDirectory,
+                        outString,
                         variantOutput.dirName),
                     "AndroidManifest.xml")
             }
@@ -222,9 +227,25 @@ class BugseePlugin implements Plugin<Project> {
         return manifestPath;
     }
 
+    // Can return manifest output file or directory path depending on Android Gradle Plugin version.
+    static String getManifestOutputString(Project project, BaseVariantOutput variantOutput) {
+        // 3.3.3 > Android Gradle Plugin >= 3.0.0
+        def outDir = variantOutput.processManifest.manifestOutputDirectory
+        if (outDir instanceof String)
+            return outDir
+
+        if (outDir instanceof File)
+            return outDir.getPath()
+
+        // Android Gradle Plugin >= 3.3.0
+        FileTree fileTree = outDir.getAsFileTree()
+        File manifestFile = fileTree.filter {File f -> f.name == "AndroidManifest.xml"}.first();
+        return manifestFile?.getPath()
+    }
+
     void executeBugseeUploadTask(Project project, BaseVariant variant) {
         // Find the processed manifest for this variant
-        def manifestPath = getManifestFile(variant.outputs[0])
+        def manifestPath = getManifestFile(project, variant.outputs[0])
         if (!manifestPath) {
             project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName);
             return
