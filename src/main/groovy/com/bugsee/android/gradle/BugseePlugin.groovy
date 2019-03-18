@@ -66,13 +66,17 @@ class BugseePlugin implements Plugin<Project> {
                         def variantName = variant.name.capitalize()
 
                         // Create Bugsee pre-proguard task
-                        def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") << {
-                            executeBugseeManifestAction(project, variant);
+                        def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") {
+                            doLast {
+                                executeBugseeManifestAction(project, variant);
+                            }
                         }
 
                         // Create Bugsee post-proguard task
-                        def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") << {
-                            executeBugseeUploadTask(project, variant);
+                        def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") {
+                            doLast {
+                                executeBugseeUploadTask(project, variant);
+                            }
                         }
 
                         def variantOutput = variant.outputs.first()
@@ -101,13 +105,17 @@ class BugseePlugin implements Plugin<Project> {
                         def variantName = variant.name.capitalize()
 
                         // Create Bugsee pre-proguard task
-                        def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") << {
-                            executeBugseeManifestAction(project, variant);
+                        def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") {
+                            doLast {
+                                executeBugseeManifestAction(project, variant);
+                            }
                         }
 
                         // Create Bugsee post-proguard task
-                        def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") << {
-                            executeBugseeUploadTask(project, variant);
+                        def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") {
+                            doLast {
+                                executeBugseeUploadTask(project, variant);
+                            }
                         }
 
                         def variantOutput = variant.outputs.first()
