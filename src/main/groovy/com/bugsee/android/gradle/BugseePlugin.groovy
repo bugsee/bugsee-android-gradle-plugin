@@ -1,7 +1,9 @@
 package com.bugsee.android.gradle
 
+import com.android.build.gradle.api.ApkVariant
 import com.android.build.gradle.api.BaseVariant
 import com.android.build.gradle.api.BaseVariantOutput
+import com.android.build.gradle.api.FeatureVariant
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
@@ -13,12 +15,13 @@ import org.apache.http.client.methods.HttpPost
 import org.apache.http.client.methods.HttpPut
 import org.apache.http.entity.FileEntity
 import org.apache.http.entity.StringEntity
-import org.apache.http.impl.client.DefaultHttpClient
+import org.apache.http.impl.client.HttpClientBuilder
 import org.apache.http.message.BasicHeader
 import org.apache.http.protocol.HTTP
 import org.apache.http.util.EntityUtils
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.Task
 import org.gradle.api.file.FileTree
 import org.slf4j.helpers.BasicMarkerFactory
 
@@ -54,12 +57,12 @@ class BugseePlugin implements Plugin<Project> {
                 throw new IllegalStateException('Must apply \'com.android.application\' or \'com.android.library\' first!')
             }
             if (project.android.hasProperty('applicationVariants') && project.android.applicationVariants) {
-                project.android.applicationVariants.all { BaseVariant variant ->
+                project.android.applicationVariants.all { ApkVariant variant ->
 
                     try {
                         if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
-                        if (variant.getObfuscation() == null && variant.getMappingFile() == null) {
+                        if (variant.mappingFileProvider.map { it.empty }.getOrElse(true)) {
                             return
                         }
 
@@ -68,37 +71,45 @@ class BugseePlugin implements Plugin<Project> {
                         def variantName = variant.name.capitalize()
 
                         // Create Bugsee pre-proguard task
-                        def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") {
+                        project.task("createBugsee${variantName}ProguardConfig") { Task bugseeManifestTask ->
                             doLast {
                                 executeBugseeManifestAction(project, variant)
+                            }
+                            def variantOutput = variant.outputs.first()
+                            // Make bugseeManifestTask a part of build.
+                            variantOutput.processManifestProvider.configure { Task processManifest ->
+                                bugseeManifestTask.mustRunAfter processManifest
+                            }
+                            variantOutput.processResourcesProvider.configure {
+                                dependsOn bugseeManifestTask
                             }
                         }
 
                         // Create Bugsee post-proguard task
-                        def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") {
+                        project.task("uploadBugsee${variantName}Mapping") { Task bugseeUploadTask ->
                             doLast {
                                 executeBugseeUploadTask(project, variant)
                             }
+                            // Make bugseeUploadTask a part of build.
+                            variant.packageApplicationProvider.configure { Task packageApplication ->
+                                bugseeUploadTask.mustRunAfter packageApplication
+                            }
+                            variant.assembleProvider.configure {
+                                dependsOn bugseeUploadTask
+                            }
                         }
 
-                        def variantOutput = variant.outputs.first()
-                        // Make bugseeManifestTask a part of build.
-                        bugseeManifestTask.mustRunAfter variantOutput.processManifest
-                        variantOutput.processResources.dependsOn bugseeManifestTask
-                        // Make bugseeUploadTask a part of build.
-                        variant.getAssemble().dependsOn bugseeUploadTask
-                        bugseeUploadTask.mustRunAfter variantOutput.packageApplication
                     } catch (Exception ex) {
                         project.logger.error(mMarkerFactory.getMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
                     }
                 }
             } else if (project.android.hasProperty('featureVariants') && project.android.featureVariants) {
-                project.android.featureVariants.all { BaseVariant variant ->
+                project.android.featureVariants.all { FeatureVariant variant ->
 
                     try {
                         if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
-                        if (variant.getObfuscation() == null && variant.getMappingFile() == null) {
+                        if (variant.mappingFileProvider.map { it.empty }.getOrElse(true)) {
                             return
                         }
 
@@ -107,26 +118,31 @@ class BugseePlugin implements Plugin<Project> {
                         def variantName = variant.name.capitalize()
 
                         // Create Bugsee pre-proguard task
-                        def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") {
+                        project.task("createBugsee${variantName}ProguardConfig") { Task bugseeManifestTask ->
                             doLast {
                                 executeBugseeManifestAction(project, variant)
+                            }
+
+                            def variantOutput = variant.outputs.first()
+                            // Make bugseeManifestTask a part of build.
+                            variantOutput.processManifestProvider.configure { processManifest ->
+                                bugseeManifestTask.mustRunAfter processManifest
+                            }
+                            variantOutput.processResourcesProvider.configure {
+                                dependsOn bugseeManifestTask
                             }
                         }
 
                         // Create Bugsee post-proguard task
-                        def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") {
+                        project.task("uploadBugsee${variantName}Mapping") { Task bugseeUploadTask ->
                             doLast {
                                 executeBugseeUploadTask(project, variant)
                             }
+                            // Make bugseeUploadTask a part of build.
+                            bugseeUploadTask.mustRunAfter "transformClassesAndResourcesWithProguardFor${variantName}"
+                            project.tasks.findByPath("package${variantName}").dependsOn bugseeUploadTask
                         }
 
-                        def variantOutput = variant.outputs.first()
-                        // Make bugseeManifestTask a part of build.
-                        bugseeManifestTask.mustRunAfter variantOutput.processManifest
-                        variantOutput.processResources.dependsOn bugseeManifestTask
-                        // Make bugseeUploadTask a part of build.
-                        bugseeUploadTask.mustRunAfter "transformClassesAndResourcesWithProguardFor${variantName}"
-                        project.tasks.findByPath("package${variantName}").dependsOn bugseeUploadTask
                     } catch (Exception ex) {
                         project.logger.error(mMarkerFactory.getMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
                     }
@@ -216,7 +232,7 @@ class BugseePlugin implements Plugin<Project> {
         def manifestPath
         try {
             // Android Gradle Plugin < 3.0.0
-            manifestPath = variantOutput.processManifest.manifestOutputFile
+            manifestPath = variantOutput.processManifestProvider.get().manifestOutputFile
         } catch (Exception ignored) {
             // Android Gradle Plugin >= 3.0.0
             String outString = getManifestOutputString(project, variantOutput)
@@ -240,7 +256,7 @@ class BugseePlugin implements Plugin<Project> {
     // Can return manifest output file or directory path depending on Android Gradle Plugin version.
     static String getManifestOutputString(Project project, BaseVariantOutput variantOutput) {
         // 3.3.3 > Android Gradle Plugin >= 3.0.0
-        def outDir = variantOutput.processManifest.manifestOutputDirectory
+        def outDir = variantOutput.processManifestProvider.get().manifestOutputDirectory
         if (outDir instanceof String)
             return outDir
 
@@ -300,7 +316,7 @@ class BugseePlugin implements Plugin<Project> {
             return
 
         if (mDebug) project.logger.warn("Bugsee Upload task step 1.")
-        String mappingHash = getHash(variant.getMappingFile().text)
+        String mappingHash = getHash(variant.mappingFileProvider.get().first().text)
         // Upload the mapping file to Bugsee
         String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode, hash: mappingHash])
         uploadData(project, zipTemp, json, appToken)
@@ -321,7 +337,7 @@ class BugseePlugin implements Plugin<Project> {
 
     File getZipDataToUpload(Project project, BaseVariant variant, Node manifestXml, Namespace namespace, String buildUUID) {
         // Find the Proguard mapping file
-        File mappingFile = variant.getMappingFile()
+        File mappingFile = variant.mappingFileProvider.get().first()
 
         // If proguard configuration includes -dontobfuscate, the mapping file
         // will not exist (but we also won't need it).
@@ -395,7 +411,7 @@ class BugseePlugin implements Plugin<Project> {
         body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"))
         httpPost.setEntity(body)
 
-        HttpClient httpClient = new DefaultHttpClient()
+        HttpClient httpClient = HttpClientBuilder.create().build()
         HttpResponse response = httpClient.execute(httpPost)
 
         if (response.getStatusLine().getStatusCode() != 200) {
