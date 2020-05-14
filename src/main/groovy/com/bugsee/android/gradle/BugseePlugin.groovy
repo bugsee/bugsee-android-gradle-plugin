@@ -22,7 +22,6 @@ import org.gradle.api.Project
 import org.gradle.api.file.FileTree
 import org.slf4j.helpers.BasicMarker
 
-import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -338,7 +337,7 @@ class BugseePlugin implements Plugin<Project> {
             // Add mapping file
             zos.putNextEntry(new ZipEntry('mapping.txt'))
             def mappingFileFis = new FileInputStream(mappingFile)
-            mappingFileFis.withStream { Files.copy(mappingFileFis, zos) }
+            mappingFileFis.withStream { copyFiles(mappingFileFis, zos) }
             zos.closeEntry()
             if (mDebug) project.logger.warn("Added mapping file")
             // Add icon file
@@ -353,7 +352,7 @@ class BugseePlugin implements Plugin<Project> {
                         def iconFileExtension = FilenameUtils.getExtension(icon.getName())
                         zos.putNextEntry(new ZipEntry('icon.' + iconFileExtension))
                         def iconFis = new FileInputStream(icon)
-                        iconFis.withStream { Files.copy(iconFis, zos) }
+                        iconFis.withStream { copyFiles(iconFis, zos) }
                         zos.closeEntry()
                     }
                 } else {
@@ -362,6 +361,21 @@ class BugseePlugin implements Plugin<Project> {
             }
         }
         return zipTemp
+    }
+
+    /**
+     * Cloned private method {@link java.nio.file.Files#copy(java.io.InputStream, java.io.OutputStream)}
+     * Reads all bytes from an input stream and writes them to an output stream.
+     */
+    private static long copyFiles(InputStream source, OutputStream sink) throws IOException {
+        long nread = 0L
+        byte[] buf = new byte[8192]
+        int n
+        while ((n = source.read(buf)) > 0) {
+            sink.write(buf, 0, n)
+            nread += n
+        }
+        return nread
     }
 
     /**
