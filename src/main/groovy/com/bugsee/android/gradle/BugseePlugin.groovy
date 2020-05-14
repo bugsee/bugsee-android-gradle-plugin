@@ -20,7 +20,7 @@ import org.apache.http.util.EntityUtils
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.FileTree
-import org.slf4j.helpers.BasicMarker
+import org.slf4j.helpers.BasicMarkerFactory
 
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
@@ -35,6 +35,8 @@ class BugseePlugin implements Plugin<Project> {
     private static final String DRAWABLE_RESOURCE_START = "@drawable/"
 
     private boolean mDebug
+
+    private mMarkerFactory = new BasicMarkerFactory()
 
     void apply(Project project) {
         project.extensions.create("bugsee", BugseePluginExtension)
@@ -87,7 +89,7 @@ class BugseePlugin implements Plugin<Project> {
                         variant.getAssemble().dependsOn bugseeUploadTask
                         bugseeUploadTask.mustRunAfter variantOutput.packageApplication
                     } catch (Exception ex) {
-                        project.logger.error(new BasicMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
+                        project.logger.error(mMarkerFactory.getMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
                     }
                 }
             } else if (project.android.hasProperty('featureVariants') && project.android.featureVariants) {
@@ -126,7 +128,7 @@ class BugseePlugin implements Plugin<Project> {
                         bugseeUploadTask.mustRunAfter "transformClassesAndResourcesWithProguardFor${variantName}"
                         project.tasks.findByPath("package${variantName}").dependsOn bugseeUploadTask
                     } catch (Exception ex) {
-                        project.logger.error(new BasicMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
+                        project.logger.error(mMarkerFactory.getMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
                     }
                 }
             }
