@@ -47,22 +47,22 @@ class BugseePlugin implements Plugin<Project> {
             // "debug" setting should be initialized here, because client settings are not applied earlier.
             mDebug = project.bugsee.debug
 
-            if (debug) project.logger.warn("Bugsee script afterEvaluate")
+            if (mDebug) project.logger.warn("Bugsee script afterEvaluate")
             // Make sure there's an android configuration
             if (!project.android) {
                 throw new IllegalStateException('Must apply \'com.android.application\' or \'com.android.library\' first!')
             }
             if (project.android.hasProperty('applicationVariants') && project.android.applicationVariants) {
-                project.android.applicationVariants.all { variant ->
+                project.android.applicationVariants.all { BaseVariant variant ->
 
                     try {
-                        if (debug) project.logger.warn("Bugsee start for variant " + variant.name)
+                        if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
                         if (variant.getObfuscation() == null && variant.getMappingFile() == null) {
                             return
                         }
 
-                        if (debug) project.logger.warn("Bugsee variant has obfuscation or mapping")
+                        if (mDebug) project.logger.warn("Bugsee variant has obfuscation or mapping")
 
                         def variantName = variant.name.capitalize()
 
@@ -92,16 +92,16 @@ class BugseePlugin implements Plugin<Project> {
                     }
                 }
             } else if (project.android.hasProperty('featureVariants') && project.android.featureVariants) {
-                project.android.featureVariants.all { variant ->
+                project.android.featureVariants.all { BaseVariant variant ->
 
                     try {
-                        if (debug) project.logger.warn("Bugsee start for variant " + variant.name)
+                        if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
                         if (variant.getObfuscation() == null && variant.getMappingFile() == null) {
                             return
                         }
 
-                        if (debug) project.logger.warn("Bugsee variant has obfuscation or mapping")
+                        if (mDebug) project.logger.warn("Bugsee variant has obfuscation or mapping")
 
                         def variantName = variant.name.capitalize()
 
@@ -254,6 +254,7 @@ class BugseePlugin implements Plugin<Project> {
 
     void executeBugseeUploadTask(Project project, BaseVariant variant) {
         // Find the processed manifest for this variant
+        if (mDebug) project.logger.warn("Bugsee upload task. Processing project: $project; variant flavor: $variant.flavorName; build type: $variant.buildType.name")
         def manifestPath = getManifestFile(project, variant.outputs[0])
         if (!manifestPath) {
             project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName)
@@ -333,11 +334,13 @@ class BugseePlugin implements Plugin<Project> {
         zipTemp.deleteOnExit()
         def zos = new ZipOutputStream(new FileOutputStream(zipTemp))
         zos.withStream {
+            if (mDebug) project.logger.warn("Created temp zip: $zipTemp")
             // Add mapping file
             zos.putNextEntry(new ZipEntry('mapping.txt'))
             def mappingFileFis = new FileInputStream(mappingFile)
             mappingFileFis.withStream { Files.copy(mappingFileFis, zos) }
             zos.closeEntry()
+            if (mDebug) project.logger.warn("Added mapping file")
             // Add icon file
             Node application = manifestXml.application[0]
             if (application) {
