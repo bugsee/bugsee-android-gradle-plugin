@@ -5,16 +5,19 @@ apply from: 'maven-push.gradle'
 group = 'com.bugsee.android'
 version = '1.0.0'
 
-dependencies {
-  repositories {
-    mavenCentral()
-  }
+repositories {
+    jcenter()
+    google()
+}
 
-  compile gradleApi()
-  compile localGroovy()
-  compile 'com.android.tools.build:gradle:2.3.0'
-  compile 'org.apache.httpcomponents:httpclient:4.3.6'
-  compile 'org.apache.httpcomponents:httpmime:4.3.6'
+dependencies {
+
+    implementation gradleApi()
+    implementation localGroovy()
+    implementation 'org.apache.httpcomponents:httpclient:4.5.8'
+    implementation 'org.apache.httpcomponents:httpmime:4.5.6'
+    implementation 'com.android.tools.build:gradle:3.6.3'
+
 }
 
 def buildShaCommand = "git --git-dir=" + projectDir + "/.git rev-parse --short HEAD";
