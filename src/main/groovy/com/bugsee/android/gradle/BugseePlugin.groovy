@@ -31,23 +31,23 @@ class BugseePlugin implements Plugin<Project> {
     private static final String APP_TOKEN_TAG = 'com.bugsee.android.APP_TOKEN'
     private static final String BUILD_UUID_TAG = 'com.bugsee.android.BUILD_UUID'
 
-    private static final String STRING_RESOURCE_START = "@string/";
-    private static final String MIPMAP_RESOURCE_START = "@mipmap/";
-    private static final String DRAWABLE_RESOURCE_START = "@drawable/";
+    private static final String STRING_RESOURCE_START = "@string/"
+    private static final String MIPMAP_RESOURCE_START = "@mipmap/"
+    private static final String DRAWABLE_RESOURCE_START = "@drawable/"
 
-    private boolean mDebug;
+    private boolean mDebug
 
     void apply(Project project) {
         project.extensions.create("bugsee", BugseePluginExtension)
 
-        def debug = project.extensions.bugsee.debug;
-        mDebug = debug;
-        if (debug) project.logger.warn("Started Bugsee script");
+        def debug = project.extensions.bugsee.debug
+        mDebug = debug
+        if (debug) project.logger.warn("Started Bugsee script")
         project.afterEvaluate {
             // "debug" setting should be initialized here, because client settings are not applied earlier.
-            mDebug = project.bugsee.debug;
+            mDebug = project.bugsee.debug
 
-            if (debug) project.logger.warn("Bugsee script afterEvaluate");
+            if (debug) project.logger.warn("Bugsee script afterEvaluate")
             // Make sure there's an android configuration
             if (!project.android) {
                 throw new IllegalStateException('Must apply \'com.android.application\' or \'com.android.library\' first!')
@@ -56,27 +56,27 @@ class BugseePlugin implements Plugin<Project> {
                 project.android.applicationVariants.all { variant ->
 
                     try {
-                        if (debug) project.logger.warn("Bugsee start for variant " + variant.name);
+                        if (debug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
                         if (variant.getObfuscation() == null && variant.getMappingFile() == null) {
                             return
                         }
 
-                        if (debug) project.logger.warn("Bugsee variant has obfuscation or mapping");
+                        if (debug) project.logger.warn("Bugsee variant has obfuscation or mapping")
 
                         def variantName = variant.name.capitalize()
 
                         // Create Bugsee pre-proguard task
                         def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") {
                             doLast {
-                                executeBugseeManifestAction(project, variant);
+                                executeBugseeManifestAction(project, variant)
                             }
                         }
 
                         // Create Bugsee post-proguard task
                         def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") {
                             doLast {
-                                executeBugseeUploadTask(project, variant);
+                                executeBugseeUploadTask(project, variant)
                             }
                         }
 
@@ -88,34 +88,34 @@ class BugseePlugin implements Plugin<Project> {
                         variant.getAssemble().dependsOn bugseeUploadTask
                         bugseeUploadTask.mustRunAfter variantOutput.packageApplication
                     } catch (Exception ex) {
-                        project.logger.error(new BasicMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex);
+                        project.logger.error(new BasicMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
                     }
                 }
             } else if (project.android.hasProperty('featureVariants') && project.android.featureVariants) {
                 project.android.featureVariants.all { variant ->
 
                     try {
-                        if (debug) project.logger.warn("Bugsee start for variant " + variant.name);
+                        if (debug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
                         if (variant.getObfuscation() == null && variant.getMappingFile() == null) {
                             return
                         }
 
-                        if (debug) project.logger.warn("Bugsee variant has obfuscation or mapping");
+                        if (debug) project.logger.warn("Bugsee variant has obfuscation or mapping")
 
                         def variantName = variant.name.capitalize()
 
                         // Create Bugsee pre-proguard task
                         def bugseeManifestTask = project.task("createBugsee${variantName}ProguardConfig") {
                             doLast {
-                                executeBugseeManifestAction(project, variant);
+                                executeBugseeManifestAction(project, variant)
                             }
                         }
 
                         // Create Bugsee post-proguard task
                         def bugseeUploadTask = project.task("uploadBugsee${variantName}Mapping") {
                             doLast {
-                                executeBugseeUploadTask(project, variant);
+                                executeBugseeUploadTask(project, variant)
                             }
                         }
 
@@ -127,7 +127,7 @@ class BugseePlugin implements Plugin<Project> {
                         bugseeUploadTask.mustRunAfter "transformClassesAndResourcesWithProguardFor${variantName}"
                         project.tasks.findByPath("package${variantName}").dependsOn bugseeUploadTask
                     } catch (Exception ex) {
-                        project.logger.error(new BasicMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex);
+                        project.logger.error(new BasicMarker("Bugsee"), "Build variant handling failed for " + variant.name, ex)
                     }
                 }
             }
@@ -148,7 +148,7 @@ class BugseePlugin implements Plugin<Project> {
             def manifestFile = getManifestFile(project, output)
 
             if (!manifestFile) {
-                project.logger.warn("Can't get manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
+                project.logger.warn("Can't get manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name")
                 return
             }
 
@@ -156,7 +156,7 @@ class BugseePlugin implements Plugin<Project> {
             if (manifestFile.parentFile.name.equals(variant.buildType.name)) {
                 if (mDebug) project.logger.warn("No split or manifest path is not correct.")
                 if (!addBuildUuidToManifest(project, manifestFile, buildUUID)) {
-                    project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
+                    project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name")
                 }
 
                 // Iterate nested directories.
@@ -170,15 +170,15 @@ class BugseePlugin implements Plugin<Project> {
 
                 for (def manifestDir : manifestDirs) {
                     if (!addBuildUuidToManifest(project, new File(FilenameUtils.concat(manifestDir.path, "AndroidManifest.xml")), buildUUID)) {
-                        project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; manifest dir: $manifestDir");
+                        project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; manifest dir: $manifestDir")
                     }
                 }
-                break;
+                break
             }
 
             // Normal manifest place for projects with split.
             if (!addBuildUuidToManifest(project, manifestFile, buildUUID)) {
-                project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name");
+                project.logger.warn("Application section not found in manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name")
             }
         }
     }
@@ -191,7 +191,7 @@ class BugseePlugin implements Plugin<Project> {
         // Uniquely identify the build so that we can identify the proguard file.
         def application = xml.application[0]
         if (application) {
-            if (mDebug) project.logger.warn("Adding buildUUID: $buildUuid to $manifestFile.parentFile.name");
+            if (mDebug) project.logger.warn("Adding buildUUID: $buildUuid to $manifestFile.parentFile.name")
             def metaDataTags = application['meta-data']
             // remove any old BUILD_UUID tags
             def buildUuidTags = metaDataTags.findAll {
@@ -208,7 +208,7 @@ class BugseePlugin implements Plugin<Project> {
             printer.print(xml)
             return true
         }
-        return false;
+        return false
     }
 
     File getManifestFile(Project project, BaseVariantOutput variantOutput) {
@@ -218,7 +218,7 @@ class BugseePlugin implements Plugin<Project> {
             manifestPath = variantOutput.processManifest.manifestOutputFile
         } catch (Exception ignored) {
             // Android Gradle Plugin >= 3.0.0
-            String outString = getManifestOutputString(project, variantOutput);
+            String outString = getManifestOutputString(project, variantOutput)
             if (outString?.endsWith(".xml"))
                 return new File(outString)
 
@@ -233,7 +233,7 @@ class BugseePlugin implements Plugin<Project> {
                     "AndroidManifest.xml")
             }
         }
-        return manifestPath;
+        return manifestPath
     }
 
     // Can return manifest output file or directory path depending on Android Gradle Plugin version.
@@ -248,7 +248,7 @@ class BugseePlugin implements Plugin<Project> {
 
         // Android Gradle Plugin >= 3.3.0
         FileTree fileTree = outDir.getAsFileTree()
-        File manifestFile = fileTree.filter {File f -> f.name == "AndroidManifest.xml"}.first();
+        File manifestFile = fileTree.filter { File f -> f.name == "AndroidManifest.xml" }.first()
         return manifestFile?.getPath()
     }
 
@@ -256,7 +256,7 @@ class BugseePlugin implements Plugin<Project> {
         // Find the processed manifest for this variant
         def manifestPath = getManifestFile(project, variant.outputs[0])
         if (!manifestPath) {
-            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName);
+            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName)
             return
         }
 
@@ -266,13 +266,13 @@ class BugseePlugin implements Plugin<Project> {
 
         // Get the Bugsee API key
         NodeList metaDataTags = xml.application['meta-data']
-        String appToken = getAppToken(project, variant, ns, metaDataTags);
+        String appToken = getAppToken(project, variant, ns, metaDataTags)
         if (appToken == null) {
-            project.logger.warn("Could not get appToken.");
+            project.logger.warn("Could not get appToken.")
             return
         }
 
-        if (mDebug) project.logger.warn("appToken is " + appToken);
+        if (mDebug) project.logger.warn("appToken is " + appToken)
         // Uniquely identify the build so that we can identify the proguard file.
         def buildUUID
         def buildUUIDTags = metaDataTags.findAll {
@@ -293,28 +293,28 @@ class BugseePlugin implements Plugin<Project> {
             return
         }
 
-        File zipTemp = getZipDataToUpload(project, variant, xml, ns, buildUUID);
+        File zipTemp = getZipDataToUpload(project, variant, xml, ns, buildUUID)
         if (!zipTemp)
             return
 
-        if (mDebug) project.logger.warn("Bugsee Upload task step 1.");
-        String mappingHash = getHash(variant.getMappingFile().text);
+        if (mDebug) project.logger.warn("Bugsee Upload task step 1.")
+        String mappingHash = getHash(variant.getMappingFile().text)
         // Upload the mapping file to Bugsee
-        String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode, hash: mappingHash]);
-        uploadData(project, zipTemp, json, appToken);
+        String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode, hash: mappingHash])
+        uploadData(project, zipTemp, json, appToken)
     }
 
     String getHash(String text) {
-        MessageDigest md = MessageDigest.getInstance("SHA-1");
-        md.update(text.getBytes("UTF-8"));
+        MessageDigest md = MessageDigest.getInstance("SHA-1")
+        md.update(text.getBytes("UTF-8"))
 
-        byte[] result = md.digest();
+        byte[] result = md.digest()
         return String.format("%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
             result[0], result[1], result[2], result[3],
             result[4], result[5], result[6], result[7],
             result[8], result[9], result[10], result[11],
             result[12], result[13], result[14], result[15],
-            result[16], result[17], result[18], result[19]);
+            result[16], result[17], result[18], result[19])
     }
 
     File getZipDataToUpload(Project project, BaseVariant variant, Node manifestXml, Namespace namespace, String buildUUID) {
@@ -327,7 +327,7 @@ class BugseePlugin implements Plugin<Project> {
             return null
         }
 
-        if (mDebug) project.logger.warn("Bugsee Upload task step 0 (found mapping file). buildUUID: " + buildUUID);
+        if (mDebug) project.logger.warn("Bugsee Upload task step 0 (found mapping file). buildUUID: " + buildUUID)
         // Zip the file
         def zipTemp = File.createTempFile(buildUUID, 'zip')
         zipTemp.deleteOnExit()
@@ -339,18 +339,18 @@ class BugseePlugin implements Plugin<Project> {
             mappingFileFis.withStream { Files.copy(mappingFileFis, zos) }
             zos.closeEntry()
             // Add icon file
-            Node application =  manifestXml.application[0]
+            Node application = manifestXml.application[0]
             if (application) {
-                def iconResourceId = application.attribute(namespace.icon);
+                def iconResourceId = application.attribute(namespace.icon)
                 if (iconResourceId) {
                     if (mDebug) project.logger.warn("Icon resource id: " + iconResourceId)
                     File icon = getIcon(project, iconResourceId)
                     if (mDebug) project.logger.warn("Chosen icon file: " + icon?.path)
                     if (icon) {
-                        def iconFileExtension = FilenameUtils.getExtension(icon.getName());
+                        def iconFileExtension = FilenameUtils.getExtension(icon.getName())
                         zos.putNextEntry(new ZipEntry('icon.' + iconFileExtension))
                         def iconFis = new FileInputStream(icon)
-                        iconFis.withStream { Files.copy(iconFis, zos); }
+                        iconFis.withStream { Files.copy(iconFis, zos) }
                         zos.closeEntry()
                     }
                 } else {
@@ -372,12 +372,12 @@ class BugseePlugin implements Plugin<Project> {
         if (mDebug) project.logger.warn("Starting to send data. Body: $json")
         // 1. Create request, get presigned url
         HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
-        StringEntity body = new StringEntity(json);
-        body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"));
-        httpPost.setEntity(body);
+        StringEntity body = new StringEntity(json)
+        body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"))
+        httpPost.setEntity(body)
 
-        HttpClient httpClient = new DefaultHttpClient();
-        HttpResponse response = httpClient.execute(httpPost);
+        HttpClient httpClient = new DefaultHttpClient()
+        HttpResponse response = httpClient.execute(httpPost)
 
         if (response.getStatusLine().getStatusCode() != 200) {
             project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
@@ -391,21 +391,22 @@ class BugseePlugin implements Plugin<Project> {
             return
         }
 
-        String contentText = resEntity.content.text;
-        if (mDebug) project.logger.warn("Bugsee Upload task step 2. Content text: " + contentText);
+        String contentText = resEntity.content.text
+        if (mDebug) project.logger.warn("Bugsee Upload task step 2. Content text: " + contentText)
         def jsonSlurper = new JsonSlurper()
         def responseBody = jsonSlurper.parseText(contentText)
 
-        if (responseBody.code && responseBody.code == 16004) { // This mapping has been already uploaded. Starting from Gradle 3.0 mapping is re-generated only on code changes.
+        if (responseBody.code && responseBody.code == 16004) {
+            // This mapping has been already uploaded. Starting from Gradle 3.0 mapping is re-generated only on code changes.
             if (mDebug) project.logger.warn("Got SymbolAlreadyExistsError from server")
             return
         }
         // Check responseBody.endpoint
         if (!responseBody.endpoint) {
             if (responseBody.error) {
-                String errorType = responseBody.error.type;
+                String errorType = responseBody.error.type
                 if ("ApplicationNotFoundError".equals(errorType)) {
-                    project.logger.warn("App token is invalid: " + appToken);
+                    project.logger.warn("App token is invalid: " + appToken)
                 } else {
                     project.logger.warn("Bugsee upload failed with error: " + responseBody.error)
                 }
@@ -416,10 +417,10 @@ class BugseePlugin implements Plugin<Project> {
         }
 
         // 2. Upload to presigned URL
-        if (mDebug) project.logger.warn("Endpoint: " + responseBody.endpoint);
+        if (mDebug) project.logger.warn("Endpoint: " + responseBody.endpoint)
         HttpPut httpPut = new HttpPut(responseBody.endpoint)
-        httpPut.setEntity(new FileEntity(file));
-        response = httpClient.execute(httpPut);
+        httpPut.setEntity(new FileEntity(file))
+        response = httpClient.execute(httpPut)
 
         if (response.getStatusLine().getStatusCode() != 200) {
             project.logger.warn("Bugsee upload failed: " + EntityUtils.toString(response.getEntity(), "utf-8"))
@@ -427,13 +428,13 @@ class BugseePlugin implements Plugin<Project> {
         }
 
         file.delete()
-        if (mDebug) project.logger.warn("Bugsee Upload task finish.");
+        if (mDebug) project.logger.warn("Bugsee Upload task finish.")
     }
 
     String getAppToken(Project project, BaseVariant variant, Namespace androidNamespace, NodeList appMetaData) {
         // Check closure, which chooses app token for concrete build variant.
         if (project.bugsee.getAppTokenByVariant()) {
-            def variantAppToken = project.bugsee.getAppTokenByVariant()(variant);
+            def variantAppToken = project.bugsee.getAppTokenByVariant()(variant)
             if (variantAppToken) {
                 if (mDebug) project.logger.warn("Use appTokenByVariant: " + variantAppToken)
                 return variantAppToken
@@ -461,41 +462,43 @@ class BugseePlugin implements Plugin<Project> {
             }
             def appToken = appTokenTags[0].attributes()[androidNamespace.value]
             if (!appToken) {
-                project.logger.warn("App token is null.");
-                return null;
+                project.logger.warn("App token is null.")
+                return null
             }
 
             if (appToken.startsWith(STRING_RESOURCE_START))
                 return getStringResource(project, appToken)
 
-            return appToken;
+            return appToken
         }
     }
 
     String getStringResource(Project project, String resourceIdString) {
-        String resourceId = resourceIdString.substring(STRING_RESOURCE_START.length());
+        String resourceId = resourceIdString.substring(STRING_RESOURCE_START.length())
         if (!resourceId) {
-            project.logger.warn("Invalid string resource name specified: " + resourceIdString);
-            return null;
+            project.logger.warn("Invalid string resource name specified: " + resourceIdString)
+            return null
         }
 
-        def stringResourceFiles = project.android.sourceSets.main.res.sourceFiles.findAll { it.name.equals 'strings.xml' }
-        if (mDebug) project.logger.warn("resourceId: " + resourceId);
+        def stringResourceFiles = project.android.sourceSets.main.res.sourceFiles.findAll {
+            it.name.equals 'strings.xml'
+        }
+        if (mDebug) project.logger.warn("resourceId: " + resourceId)
 
         for (int i = 0; i < stringResourceFiles.size(); i++) {
             def currentXml = new XmlSlurper().parse(stringResourceFiles.get(i))
             def value = currentXml.string.find { resourceId.equals(it.attributes()['name']) }
             if (value)
-                return value.text();
+                return value.text()
         }
 
-        project.logger.warn("Could not find " + resourceIdString + " string resource");
-        return null;
+        project.logger.warn("Could not find " + resourceIdString + " string resource")
+        return null
     }
 
     // Tries to get xxhdpi icon, because it has the most suitable size for us (144*144). If xxhdpi icon is not found, get the largest icon.
     File getIcon(Project project, String resourceIdString) {
-        String resourceStart;
+        String resourceStart
         if (resourceIdString.startsWith(MIPMAP_RESOURCE_START)) {
             resourceStart = MIPMAP_RESOURCE_START
         } else if (resourceIdString.startsWith(DRAWABLE_RESOURCE_START)) {
@@ -506,19 +509,20 @@ class BugseePlugin implements Plugin<Project> {
         if (!resourceId)
             return null
 
-        String resourceFolderType = resourceStart.substring(1, resourceStart.length() - 1);
+        String resourceFolderType = resourceStart.substring(1, resourceStart.length() - 1)
         if (mDebug) project.logger.warn("Icon resourceFolderType: " + resourceFolderType)
 
         List<File> iconFiles = project.android.sourceSets.main.res.sourceFiles.findAll {
             // We don't handle case, when specified icon resource has xml type (for example, selector).
             // We get files only from folders of specified type. For example, if specified resource is mipmap, we don't consider drawable with the same name.
-            FilenameUtils.getBaseName(it.name).equals(resourceId) && !FilenameUtils.getExtension(it.name).equals('xml') && it.getParent().toLowerCase(Locale.ENGLISH).contains(resourceFolderType)}
+            FilenameUtils.getBaseName(it.name).equals(resourceId) && !FilenameUtils.getExtension(it.name).equals('xml') && it.getParent().toLowerCase(Locale.ENGLISH).contains(resourceFolderType)
+        }
         if (!iconFiles || iconFiles.size() == 0)
             return null
         // Try to find xxhdpi icon.
-        File xxhdpiFile = iconFiles.find { it.getParent().contains("xxhdpi") };
+        File xxhdpiFile = iconFiles.find { it.getParent().contains("xxhdpi") }
         if (xxhdpiFile)
-            return xxhdpiFile;
+            return xxhdpiFile
         // Get the largest icon.
         iconFiles.sort { left, right -> left.size() <=> right.size() }
         return iconFiles.last()

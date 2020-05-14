@@ -20,17 +20,17 @@ dependencies {
 def buildShaCommand = "git --git-dir=" + projectDir + "/.git rev-parse --short HEAD";
 
 ext {
-  File versionFile = file("${projectDir}/version.txt")
-  versionName = versionFile.readLines()[0].trim()
-  buildSha = buildShaCommand.execute().text.trim()
+    File versionFile = file("${projectDir}/version.txt")
+    versionName = versionFile.readLines()[0].trim()
+    buildSha = buildShaCommand.execute().text.trim()
 
-  Properties properties = new Properties()
-  releaseBuild = System.env.RELEASE ?System.env.RELEASE.toBoolean(): false
+    Properties properties = new Properties()
+    releaseBuild = System.env.RELEASE ? System.env.RELEASE.toBoolean() : false
 
-  if (releaseBuild) {
-  } else {
-    versionName = versionName + "-SNAPSHOT"
-  }
-  println 'Build version ' + versionName
-  println 'Release build:' + releaseBuild
+    if (releaseBuild) {
+    } else {
+        versionName = versionName + "-SNAPSHOT"
+    }
+    println 'Build version ' + versionName
+    println 'Release build:' + releaseBuild
 }
