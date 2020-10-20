@@ -16,7 +16,7 @@ dependencies {
     implementation localGroovy()
     implementation 'org.apache.httpcomponents:httpclient:4.5.8'
     implementation 'org.apache.httpcomponents:httpmime:4.5.6'
-    implementation 'com.android.tools.build:gradle:3.6.3'
+    implementation 'com.android.tools.build:gradle:4.1.0'
 
 }
 
