@@ -4,6 +4,8 @@ import com.android.build.gradle.api.ApkVariant
 import com.android.build.gradle.api.BaseVariant
 import com.android.build.gradle.api.BaseVariantOutput
 import com.android.build.gradle.api.FeatureVariant
+import com.android.build.gradle.tasks.ProcessApplicationManifest
+import com.android.build.gradle.tasks.ProcessMultiApkApplicationManifest
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
@@ -263,31 +265,68 @@ class BugseePlugin implements Plugin<Project> {
     }
 
     File getManifestFile(Project project, BaseVariantOutput variantOutput) {
-        def manifestPath
-        try {
-            // Android Gradle Plugin >= 3.0.0
-            String outString = getManifestOutputString(project, variantOutput)
-            if (outString?.endsWith(".xml"))
-                return new File(outString)
+        try { // Android Gradle Plugin >= 4.1.0
+            def provider = variantOutput.processManifestProvider.get()
 
-            manifestPath = new File(
-                outString,
-                "AndroidManifest.xml")
+            // it can be a ProcessMultiApkApplicationManifest
+            if (provider instanceof ProcessMultiApkApplicationManifest) {
+                def multiProvider = (ProcessMultiApkApplicationManifest) provider
+                return multiProvider.mainMergedManifest.get().asFile
+            }
+
+            // or a ProcessApplicationManifest
+            if (provider instanceof ProcessApplicationManifest) {
+                def processProvider = (ProcessApplicationManifest) provider
+                return processProvider.mergedManifest.get().asFile
+            }
+        } catch (Error ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed. Error: " + ignored.getMessage())
+        } catch (Exception ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed")
+        }
+
+        try {
+            String outString = getManifestOutputString(project, variantOutput)
+            if (outString?.endsWith(".xml")) {
+                return new File(outString)
+            }
+            File manifestPath = new File(outString,"AndroidManifest.xml")
             if (!manifestPath.isFile()) {
                 manifestPath = new File(
-                    new File(
-                        outString,
-                        variantOutput.dirName),
-                    "AndroidManifest.xml")
-                if (!manifestPath.isFile()) {
-                    manifestPath = variantOutput.processManifest.manifestOutputFile
+                    new File(outString, variantOutput.dirName),"AndroidManifest.xml")
+                if (manifestPath.isFile()) {
+                    return manifestPath
                 }
             }
         } catch (Exception ignored) {
-            // Android Gradle Plugin < 3.0.0
-            manifestPath = variantOutput.processManifest.manifestOutputFile
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 2 to locate manifest file failed")
         }
-        return manifestPath
+
+        try {
+            return variantOutput.processManifestProvider.get().manifestOutputFile
+        } catch (Exception ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 3 to locate manifest file failed")
+        }
+
+        try {
+            return variantOutput.processManifest.manifestOutputFile
+        } catch (Exception ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 5 to locate manifest file failed")
+        }
+
+        try {
+            return variantOutput.processResourcesProvider.get().manifestFile
+        } catch (Exception ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 5 to locate manifest file failed")
+        }
+
+        try {
+            return variantOutput.processResources.manifestFile
+        } catch (Exception ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 4 to locate manifest file failed")
+        }
+
+        return null
     }
 
     // Can return manifest output file or directory path depending on Android Gradle Plugin version.
