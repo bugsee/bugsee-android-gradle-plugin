@@ -4,8 +4,6 @@ import com.android.build.gradle.api.ApkVariant
 import com.android.build.gradle.api.BaseVariant
 import com.android.build.gradle.api.BaseVariantOutput
 import com.android.build.gradle.api.FeatureVariant
-import com.android.build.gradle.tasks.ProcessApplicationManifest
-import com.android.build.gradle.tasks.ProcessMultiApkApplicationManifest
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
@@ -300,31 +298,31 @@ class BugseePlugin implements Plugin<Project> {
                 }
             }
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 2 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         try {
             return variantOutput.processManifestProvider.get().manifestOutputFile
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 3 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 2 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         try {
             return variantOutput.processManifest.manifestOutputFile
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 5 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 3 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         try {
             return variantOutput.processResourcesProvider.get().manifestFile
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 5 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 4 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         try {
             return variantOutput.processResources.manifestFile
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 4 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 5 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         return null
