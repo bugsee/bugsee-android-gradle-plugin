@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-apply plugin: 'maven'
+apply plugin: 'maven-publish'
 apply plugin: 'signing'
 
 def isReleaseBuild() {
@@ -39,35 +39,46 @@ def getRepositoryPassword() {
     return hasProperty('NEXUS_PASSWORD') ? NEXUS_PASSWORD : ""
 }
 
-afterEvaluate { project ->
-    uploadArchives {
-        repositories {
-            mavenDeployer {
-                beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
-
-                pom.groupId = GROUP
-                pom.artifactId = POM_ARTIFACT_ID
-                pom.version = rootProject.ext.versionName
-
-                repository(url: getReleaseRepositoryUrl()) {
-                    authentication(userName: getRepositoryUsername(), password: getRepositoryPassword())
-                }
-                snapshotRepository(url: getSnapshotRepositoryUrl()) {
-                    authentication(userName: getRepositoryUsername(), password: getRepositoryPassword())
-                }
-
-                pom.project {
-                    name POM_NAME
-                    packaging POM_PACKAGING
-                    description POM_DESCRIPTION
-                    url POM_URL
-                }
+publishing {
+    repositories {
+        maven {
+            def releasesRepoUrl = getReleaseRepositoryUrl()
+            def snapshotsRepoUrl = getSnapshotRepositoryUrl()
+            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+            credentials {
+                username = getRepositoryUsername()
+                password = getRepositoryPassword()
             }
         }
     }
 
-    signing {
-        required { isReleaseBuild() && gradle.taskGraph.hasTask("uploadArchives") }
-        sign configurations.archives
+    publications {
+        mavenJava(MavenPublication) {
+            afterEvaluate {
+                artifactId = POM_ARTIFACT_ID
+                groupId = GROUP
+                version = rootProject.ext.versionName
+                from components.java
+//                versionMapping {
+//                    usage('java-api') {
+//                        fromResolutionOf('runtimeClasspath')
+//                    }
+//                    usage('java-runtime') {
+//                        fromResolutionResult()
+//                    }
+//                }
+                pom {
+                    name = POM_NAME
+                    description = POM_DESCRIPTION
+                    url = POM_URL
+                    version = rootProject.ext.versionName
+                }
+            }
+        }
     }
+}
+
+signing {
+    // sign publishing.publications.mavenJava
+    sign configurations.archives
 }

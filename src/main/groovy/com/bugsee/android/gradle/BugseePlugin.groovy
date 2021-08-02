@@ -7,6 +7,8 @@ import com.android.build.gradle.api.FeatureVariant
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
+import groovy.xml.XmlNodePrinter
+import groovy.xml.XmlParser
 import org.apache.commons.io.FilenameUtils
 import org.apache.http.HttpEntity
 import org.apache.http.HttpResponse
@@ -251,7 +253,7 @@ class BugseePlugin implements Plugin<Project> {
                 it.parent().remove(it)
             }
 
-            application.appendNode('meta-data', [(ns.name): BUILD_UUID_TAG, (ns.value): buildUuid])
+            application.appendNode('meta-data', [(ns.name.getQualifiedName()): BUILD_UUID_TAG, (ns.value.getQualifiedName()): buildUuid])
 
             def writer = new FileWriter(manifestFile)
             def printer = new XmlNodePrinter(new PrintWriter(writer))

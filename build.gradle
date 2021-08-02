@@ -1,14 +1,30 @@
 apply plugin: 'groovy'
-apply plugin: 'maven'
+apply plugin: 'maven-publish'
 apply from: 'maven-push.gradle'
 
 group = 'com.bugsee.android'
 version = '1.0.0'
 
 repositories {
-    jcenter()
+    mavenCentral()
     google()
 }
+
+//publishing {
+//    publications {
+//        BugseePlugin(MavenPublication) {
+//            from components.java
+//        }
+//    }
+//
+//    // Publish to local directory
+//    repositories {
+//        maven {
+//            name = 'localRepo'
+//            url = layout.buildDirectory.dir("repo")
+//        }
+//    }
+//}
 
 dependencies {
 
@@ -16,7 +32,7 @@ dependencies {
     implementation localGroovy()
     implementation 'org.apache.httpcomponents:httpclient:4.5.8'
     implementation 'org.apache.httpcomponents:httpmime:4.5.6'
-    implementation 'com.android.tools.build:gradle:4.1.0'
+    implementation 'com.android.tools.build:gradle:4.2.2'
 
 }
 
