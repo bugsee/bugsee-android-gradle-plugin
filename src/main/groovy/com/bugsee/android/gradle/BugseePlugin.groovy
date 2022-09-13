@@ -143,37 +143,26 @@ class BugseePlugin implements Plugin<Project> {
         if (mDebug) project.logger.warn("Bugsee configureBugseeManifestTask")
         def variantOutput = variant.outputs.first()
         // Make bugseeManifestTask a part of build.
-        try {
-            // Android Gradle Plugin >= 3.3.0
-            variantOutput.processManifestProvider.configure { Task processManifest ->
-                bugseeManifestTask.mustRunAfter processManifest
-            }
-            variantOutput.processResourcesProvider.configure {
-                dependsOn bugseeManifestTask
-            }
-            if (mDebug) project.logger.warn("Bugsee configured BugseeManifestTask new")
-        } catch (Exception ignored) {
-            // Android Gradle Plugin < 3.3.0
-            bugseeManifestTask.mustRunAfter variantOutput.processManifest
-            variantOutput.processResources.dependsOn bugseeManifestTask
-            if (mDebug) project.logger.warn("Bugsee configured BugseeManifestTask old")
+
+        // Android Gradle Plugin >= 3.3.0
+        variantOutput.processManifestProvider.configure { Task processManifest ->
+            bugseeManifestTask.mustRunAfter processManifest
         }
+        variantOutput.processResourcesProvider.configure {
+            dependsOn bugseeManifestTask
+        }
+        if (mDebug) project.logger.warn("Bugsee configured BugseeManifestTask")
     }
 
     private void configureBugseeUploadTask(ApkVariant variant, Task bugseeUploadTask) {
         // Make bugseeUploadTask a part of build.
-        try {
-            // Android Gradle Plugin >= 3.3.0
-            variant.packageApplicationProvider.configure { Task packageApplication ->
-                bugseeUploadTask.mustRunAfter packageApplication
-            }
-            variant.assembleProvider.configure {
-                dependsOn bugseeUploadTask
-            }
-        } catch (Exception ignored) {
-            // Android Gradle Plugin < 3.3.0
-            bugseeUploadTask.mustRunAfter variant.outputs.first().packageApplication
-            variant.assemble.dependsOn bugseeUploadTask
+
+        // Android Gradle Plugin >= 3.3.0
+        variant.packageApplicationProvider.configure { Task packageApplication ->
+            bugseeUploadTask.mustRunAfter packageApplication
+        }
+        variant.assembleProvider.configure {
+            dependsOn bugseeUploadTask
         }
     }
 
@@ -182,8 +171,7 @@ class BugseePlugin implements Plugin<Project> {
             // Android Gradle Plugin >= 3.6.0
             return variant.mappingFileProvider.map { it.empty }.getOrElse(true)
         } catch (Exception ignored) {
-            // Android Gradle Plugin < 3.6.0
-            return variant.mappingFile == null && variant.obfuscation == null
+            return true
         }
     }
 
@@ -309,38 +297,13 @@ class BugseePlugin implements Plugin<Project> {
             if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 2 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
-        try {
-            return variantOutput.processManifest.manifestOutputFile
-        } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 3 to locate manifest file failed: ${ignored.getMessage()}")
-        }
-
-        try {
-            return variantOutput.processResourcesProvider.get().manifestFile
-        } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 4 to locate manifest file failed: ${ignored.getMessage()}")
-        }
-
-        try {
-            return variantOutput.processResources.manifestFile
-        } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 5 to locate manifest file failed: ${ignored.getMessage()}")
-        }
-
         return null
     }
 
     // Can return manifest output file or directory path depending on Android Gradle Plugin version.
     static String getManifestOutputString(Project project, BaseVariantOutput variantOutput) {
-        // 3.3.3 > Android Gradle Plugin >= 3.0.0
-        def outDir
-        try {
-            // Android Gradle Plugin >= 3.3.0
-            outDir = variantOutput.processManifestProvider.get().manifestOutputDirectory
-        } catch (Throwable ignored) {
-            // Android Gradle Plugin < 3.3.0
-            outDir = variantOutput.processManifest.manifestOutputDirectory
-        }
+        // Android Gradle Plugin >= 3.3.0
+        def outDir = variantOutput.processManifestProvider.get().manifestOutputDirectory
 
         if (outDir instanceof String)
             return outDir
@@ -467,13 +430,8 @@ class BugseePlugin implements Plugin<Project> {
     }
 
     private File getMappingFile(BaseVariant variant) {
-        try {
-            // Android Gradle Plugin >= 3.6.0
-            return variant.mappingFileProvider.get().first()
-        } catch (Exception ignored) {
-            // Android Gradle Plugin < 3.6.0
-            return variant.mappingFile
-        }
+        // Android Gradle Plugin >= 3.6.0
+        return variant.mappingFileProvider.get().first()
     }
 
     /**
