@@ -1,9 +1,12 @@
 package com.bugsee.android.gradle
 
+import com.android.SdkConstants
 import com.android.build.gradle.api.ApkVariant
 import com.android.build.gradle.api.BaseVariant
 import com.android.build.gradle.api.BaseVariantOutput
 import com.android.build.gradle.api.FeatureVariant
+import com.android.build.gradle.tasks.ProcessApplicationManifest
+import com.android.build.gradle.tasks.ProcessMultiApkApplicationManifest
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.xml.Namespace
@@ -188,7 +191,7 @@ class BugseePlugin implements Plugin<Project> {
             // Find the processed manifest for this output
             def manifestFile = getManifestFile(project, output)
 
-            if (!manifestFile) {
+            if (!manifestFile || !manifestFile.isFile()) {
                 project.logger.warn("Can't get manifest for variant flavor: $variant.flavorName; build type: $variant.buildType.name; output: $output.name")
                 return
             }
@@ -254,25 +257,29 @@ class BugseePlugin implements Plugin<Project> {
 
     File getManifestFile(Project project, BaseVariantOutput variantOutput) {
         // Looks like this block below gets wrong manifest
-//        try { // Android Gradle Plugin >= 4.1.0
-//            def provider = variantOutput.processManifestProvider.get()
-//
-//            // it can be a ProcessMultiApkApplicationManifest
-//            if (provider instanceof ProcessMultiApkApplicationManifest) {
-//                def multiProvider = (ProcessMultiApkApplicationManifest) provider
-//                return multiProvider.mainMergedManifest.get().asFile
-//            }
-//
-//            // or a ProcessApplicationManifest
-//            if (provider instanceof ProcessApplicationManifest) {
-//                def processProvider = (ProcessApplicationManifest) provider
-//                return processProvider.mergedManifest.get().asFile
-//            }
-//        } catch (Error ignored) {
-//            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed. Error: " + ignored.getMessage())
-//        } catch (Exception ignored) {
-//            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed")
-//        }
+        try { // Android Gradle Plugin >= 4.1.0
+            def provider = variantOutput.processManifestProvider.get()
+
+            // it can be a ProcessMultiApkApplicationManifest
+            if (provider instanceof ProcessMultiApkApplicationManifest) {
+                def multiProvider = (ProcessMultiApkApplicationManifest) provider
+                def manifestPathString = com.android.utils.FileUtils.join(variantOutput.dirName, SdkConstants.ANDROID_MANIFEST_XML)
+                def mergedManifestOutputFile = new File(multiProvider.multiApkManifestOutputDirectory.get().asFile, manifestPathString)
+                if (mDebug) project.logger.warn("[Bugsee getManifestFile] ProcessMultiApkApplicationManifest")
+                return mergedManifestOutputFile
+            }
+
+            // or a ProcessApplicationManifest
+            if (provider instanceof ProcessApplicationManifest) {
+                def processProvider = (ProcessApplicationManifest) provider
+                if (mDebug) project.logger.warn("[Bugsee getManifestFile] ProcessApplicationManifest")
+                return processProvider.mergedManifest.get().asFile
+            }
+        } catch (Error ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed. Error: " + ignored.getMessage())
+        } catch (Exception ignored) {
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed")
+        }
 
         try {
             String outString = getManifestOutputString(project, variantOutput)
@@ -288,13 +295,13 @@ class BugseePlugin implements Plugin<Project> {
                 }
             }
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 1 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 2 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         try {
             return variantOutput.processManifestProvider.get().manifestOutputFile
         } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 2 to locate manifest file failed: ${ignored.getMessage()}")
+            if (mDebug) project.logger.warn("[Bugsee getManifestFile] Attempt 3 to locate manifest file failed: ${ignored.getMessage()}")
         }
 
         return null
