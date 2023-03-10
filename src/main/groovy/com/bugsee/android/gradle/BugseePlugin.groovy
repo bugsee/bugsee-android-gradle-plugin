@@ -15,13 +15,14 @@ import groovy.xml.XmlParser
 import org.apache.commons.io.FilenameUtils
 import org.apache.http.HttpEntity
 import org.apache.http.HttpResponse
-import org.apache.http.client.HttpClient
 import org.apache.http.client.methods.HttpPost
 import org.apache.http.client.methods.HttpPut
+import org.apache.http.conn.ssl.DefaultHostnameVerifier
 import org.apache.http.entity.FileEntity
 import org.apache.http.entity.StringEntity
-import org.apache.http.impl.client.DefaultHttpClient
-import org.apache.http.impl.client.HttpClientBuilder
+import org.apache.http.impl.client.CloseableHttpClient
+import org.apache.http.impl.client.HttpClients
+import org.apache.http.impl.client.StandardHttpRequestRetryHandler
 import org.apache.http.message.BasicHeader
 import org.apache.http.protocol.HTTP
 import org.apache.http.util.EntityUtils
@@ -471,13 +472,11 @@ class BugseePlugin implements Plugin<Project> {
         body.setContentType(new BasicHeader(HTTP.CONTENT_TYPE, "application/json"))
         httpPost.setEntity(body)
 
-        HttpClient httpClient
-        try {
-            httpClient = HttpClientBuilder.create().build()
-        } catch (Throwable ignored) {
-            if (mDebug) project.logger.warn("Can not use HttpClientBuilder, switching to DefaultHttpClient")
-            httpClient = new DefaultHttpClient()
-        }
+        CloseableHttpClient httpClient = HttpClients.custom()
+            .setSSLHostnameVerifier(new DefaultHostnameVerifier(null))
+            .setRetryHandler(new StandardHttpRequestRetryHandler())
+            .build()
+
         HttpResponse response = httpClient.execute(httpPost)
 
         if (response.getStatusLine().getStatusCode() != 200) {
