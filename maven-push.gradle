@@ -60,6 +60,9 @@ publishing {
 }
 
 signing {
-    sign publishing.publications.pluginMaven
+    // sign publishing.publications.pluginMaven
+
+    sign publishing.publications
+
     // sign configurations.archives
 }
