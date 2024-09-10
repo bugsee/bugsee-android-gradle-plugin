@@ -53,32 +53,13 @@ publishing {
     }
 
     publications {
-        mavenJava(MavenPublication) {
-            afterEvaluate {
-                artifactId = POM_ARTIFACT_ID
-                groupId = GROUP
-                version = rootProject.ext.versionName
-                from components.java
-//                versionMapping {
-//                    usage('java-api') {
-//                        fromResolutionOf('runtimeClasspath')
-//                    }
-//                    usage('java-runtime') {
-//                        fromResolutionResult()
-//                    }
-//                }
-                pom {
-                    name = POM_NAME
-                    description = POM_DESCRIPTION
-                    url = POM_URL
-                    version = rootProject.ext.versionName
-                }
-            }
+        pluginMaven(MavenPublication) {
+            artifactId = POM_ARTIFACT_ID
         }
     }
 }
 
 signing {
-    sign publishing.publications.mavenJava
+    sign publishing.publications.pluginMaven
     // sign configurations.archives
 }
