@@ -37,6 +37,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class BugseePlugin implements Plugin<Project> {
+    private static final String PLUGIN_NAME = 'bugsee'
     private static final String APP_TOKEN_TAG = 'com.bugsee.android.APP_TOKEN'
     private static final String BUILD_UUID_TAG = 'com.bugsee.android.BUILD_UUID'
 
@@ -49,7 +50,7 @@ class BugseePlugin implements Plugin<Project> {
     private mMarkerFactory = new BasicMarkerFactory()
 
     void apply(Project project) {
-        project.extensions.create("bugsee", BugseePluginExtension)
+        project.extensions.create(PLUGIN_NAME, BugseePluginExtension)
 
         def debug = project.extensions.bugsee.debug
         mDebug = debug
