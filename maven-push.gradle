@@ -59,10 +59,16 @@ publishing {
     }
 }
 
+
+// If you want to publish into local maven for testing purposes,
+// then comment below block
+// and use next command:
+//  ./gradlew publishToMavenLocal
+
 signing {
-    // sign publishing.publications.pluginMaven
+   // sign publishing.publications.pluginMaven
 
-    sign publishing.publications
+   sign publishing.publications
 
-    // sign configurations.archives
+   // sign configurations.archives
 }
