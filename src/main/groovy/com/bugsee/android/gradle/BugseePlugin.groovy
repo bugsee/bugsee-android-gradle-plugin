@@ -70,7 +70,7 @@ class BugseePlugin implements Plugin<Project> {
                     try {
                         if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
-                        if (isMappingFileAbsent(variant)) {
+                        if (isMappingFileAbsent(project, variant)) {
                             return
                         }
 
@@ -82,7 +82,7 @@ class BugseePlugin implements Plugin<Project> {
                         // Older versions of build plugin do not support nested closures to access owner's owner methods
                         // e.g. doLast has no access to BugseePlugin.this and find its methods
                         def executeBugseeManifestActionClosure = { executeBugseeManifestAction(project, variant) }
-                        project.task("createBugsee${variantName}ProguardConfig") { Task bugseeManifestTask ->
+                        project.task("createBugseeAppVar${variantName}ProguardConfig") { Task bugseeManifestTask ->
                             doLast {
                                 executeBugseeManifestActionClosure()
                             }
@@ -91,11 +91,11 @@ class BugseePlugin implements Plugin<Project> {
 
                         // Create Bugsee post-proguard task
                         def executeBugseeUploadTaskClosure = { executeBugseeUploadTask(project, variant) }
-                        project.task("uploadBugsee${variantName}Mapping") { Task bugseeUploadTask ->
+                        project.task("uploadBugseeAppVar${variantName}Mapping") { Task bugseeUploadTask ->
                             doLast {
                                 executeBugseeUploadTaskClosure()
                             }
-                            configureBugseeUploadTask(variant, bugseeUploadTask)
+                            configureBugseeUploadTask(project, variant, bugseeUploadTask)
                         }
 
                     } catch (Exception ex) {
@@ -108,7 +108,7 @@ class BugseePlugin implements Plugin<Project> {
                     try {
                         if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
                         // Only create Bugsee tasks for proguard-enabled variants
-                        if (isMappingFileAbsent(variant)) {
+                        if (isMappingFileAbsent(project, variant)) {
                             return
                         }
 
@@ -118,7 +118,7 @@ class BugseePlugin implements Plugin<Project> {
 
                         // Create Bugsee pre-proguard task
                         def executeBugseeManifestActionClosure = { executeBugseeManifestAction(project, variant) }
-                        project.task("createBugsee${variantName}ProguardConfig") { Task bugseeManifestTask ->
+                        project.task("createBugseeFeatVar${variantName}ProguardConfig") { Task bugseeManifestTask ->
                             doLast {
                                 executeBugseeManifestActionClosure()
                             }
@@ -127,7 +127,7 @@ class BugseePlugin implements Plugin<Project> {
 
                         // Create Bugsee post-proguard task
                         def executeBugseeUploadTaskClosure = { executeBugseeUploadTask(project, variant) }
-                        project.task("uploadBugsee${variantName}Mapping") { Task bugseeUploadTask ->
+                        project.task("uploadBugseeFeatVar${variantName}Mapping") { Task bugseeUploadTask ->
                             doLast {
                                 executeBugseeUploadTaskClosure()
                             }
@@ -153,27 +153,62 @@ class BugseePlugin implements Plugin<Project> {
         variantOutput.processManifestProvider.configure { Task processManifest ->
             bugseeManifestTask.mustRunAfter processManifest
         }
+
         variantOutput.processResourcesProvider.configure {
-            dependsOn bugseeManifestTask
+            it.dependsOn bugseeManifestTask
         }
+
+        def resourceTasks = project.tasks.findAll {
+            def name = it.name.toLowerCase()
+            name.startsWith("bundle") && name.endsWith("resources")
+        }
+
+        resourceTasks.forEach {
+            it.dependsOn bugseeManifestTask
+        }
+
         if (mDebug) project.logger.warn("Bugsee configured BugseeManifestTask")
     }
 
-    private void configureBugseeUploadTask(ApkVariant variant, Task bugseeUploadTask) {
+    private void configureBugseeUploadTask(Project project, ApkVariant variant, Task bugseeUploadTask) {
         // Make bugseeUploadTask a part of build.
 
         // Android Gradle Plugin >= 3.3.0
-        variant.packageApplicationProvider.configure { Task packageApplication ->
-            bugseeUploadTask.mustRunAfter packageApplication
+        if (variant.packageApplicationProvider.isPresent()) {
+            variant.packageApplicationProvider.configure { Task packageApplication ->
+                bugseeUploadTask.mustRunAfter packageApplication
+            }
         }
-        variant.assembleProvider.configure {
-            dependsOn bugseeUploadTask
+
+        // If gradle is building APK,
+        // then we must upload mapping and other files after assembleXXX tasks
+        if (variant.assembleProvider.isPresent()) {
+            variant.assembleProvider.configure {
+                bugseeUploadTask.mustRunAfter it
+                // We do bugseeUploadTask as a final task in task graph
+                it.finalizedBy bugseeUploadTask
+            }
+        }
+
+        // If gradle is building AAB,
+        // then we must upload mapping and other files after bundleXXX tasks
+        def variantName = variant.name.capitalize()
+        def bundleName = "bundle" + variantName
+        def bundleProvider = project.tasks.named(bundleName)
+        if (bundleProvider != null) {
+            bundleProvider.configure {
+                bugseeUploadTask.mustRunAfter it
+                // We do bugseeUploadTask as a final task in task graph
+                it.finalizedBy bugseeUploadTask
+            }
         }
     }
 
-    private boolean isMappingFileAbsent(BaseVariant variant) {
+    private boolean isMappingFileAbsent(Project project, BaseVariant variant) {
         try {
             // Android Gradle Plugin >= 3.6.0
+            File mappingFile =  variant.mappingFileProvider.get().first()
+            if (mDebug) project.logger.warn("Mapping file " + mappingFile.toPath() + " , for variant " + variant.name)
             return variant.mappingFileProvider.map { it.empty }.getOrElse(true)
         } catch (Exception ignored) {
             return true
@@ -237,7 +272,7 @@ class BugseePlugin implements Plugin<Project> {
         // Uniquely identify the build so that we can identify the proguard file.
         def application = xml.application[0]
         if (application) {
-            if (mDebug) project.logger.warn("Adding buildUUID: $buildUuid to $manifestFile.parentFile.name")
+            if (mDebug) project.logger.warn("Adding buildUUID: $buildUuid to " + manifestFile.toPath())
             def metaDataTags = application['meta-data']
             // remove any old BUILD_UUID tags
             def buildUuidTags = metaDataTags.findAll {
@@ -369,8 +404,10 @@ class BugseePlugin implements Plugin<Project> {
         }
 
         File zipTemp = getZipDataToUpload(project, variant, xml, ns, buildUUID)
-        if (!zipTemp)
+        if (!zipTemp) {
+            if (mDebug) project.logger.warn("Bugsee Upload task getZipDataToUpload failed.")
             return
+        }
 
         if (mDebug) project.logger.warn("Bugsee Upload task step 1.")
         String mappingHash = getHash(getMappingFile(variant).text)
@@ -399,6 +436,7 @@ class BugseePlugin implements Plugin<Project> {
         // If proguard configuration includes -dontobfuscate, the mapping file
         // will not exist (but we also won't need it).
         if (!mappingFile.exists()) {
+            if (mDebug) project.logger.warn("Bugsee getZipDataToUpload " + mappingFile.toString() + "doesn't exist")
             return null
         }
 
