@@ -11,6 +11,7 @@ class BugseePluginExtension {
     AppTokenProvider appTokenProvider
 
     def boolean debug = false;
+    def boolean ndk = false;
 
     def appToken(String token) {
         defaultAppToken = token;
@@ -22,6 +23,10 @@ class BugseePluginExtension {
 
     def appToken(AppTokenProvider appTokenProvider) {
         this.appTokenProvider = appTokenProvider
+    }
+
+    def ndk(boolean ndk) {
+        this.ndk = ndk
     }
 
     AppTokenProvider getAppTokenProvider() {

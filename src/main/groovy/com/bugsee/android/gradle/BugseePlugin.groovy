@@ -32,6 +32,9 @@ import org.gradle.api.Task
 import org.gradle.api.file.FileTree
 import org.slf4j.helpers.BasicMarkerFactory
 
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -46,6 +49,7 @@ class BugseePlugin implements Plugin<Project> {
     private static final String DRAWABLE_RESOURCE_START = "@drawable/"
 
     private boolean mDebug
+    private boolean mNdk
 
     private mMarkerFactory = new BasicMarkerFactory()
 
@@ -53,11 +57,16 @@ class BugseePlugin implements Plugin<Project> {
         project.extensions.create(PLUGIN_NAME, BugseePluginExtension)
 
         def debug = project.extensions.bugsee.debug
+        def ndk = project.extensions.bugsee.ndk
+
         mDebug = debug
+        mNdk = ndk
+
         if (debug) project.logger.warn("Started Bugsee script")
         project.afterEvaluate {
             // "debug" setting should be initialized here, because client settings are not applied earlier.
             mDebug = project.bugsee.debug
+            mNdk = project.bugsee.ndk
 
             if (mDebug) project.logger.warn("Bugsee script afterEvaluate")
             // Make sure there's an android configuration
@@ -69,33 +78,46 @@ class BugseePlugin implements Plugin<Project> {
 
                     try {
                         if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
-                        // Only create Bugsee tasks for proguard-enabled variants
-                        if (isMappingFileAbsent(project, variant)) {
-                            return
-                        }
-
-                        if (mDebug) project.logger.warn("Bugsee variant has obfuscation or mapping")
 
                         def variantName = variant.name.capitalize()
 
-                        // Create Bugsee pre-proguard task
-                        // Older versions of build plugin do not support nested closures to access owner's owner methods
-                        // e.g. doLast has no access to BugseePlugin.this and find its methods
-                        def executeBugseeManifestActionClosure = { executeBugseeManifestAction(project, variant) }
-                        project.task("createBugseeAppVar${variantName}ProguardConfig") { Task bugseeManifestTask ->
-                            doLast {
-                                executeBugseeManifestActionClosure()
+                        if (!isMappingFileAbsent(project, variant)) {
+                            // Ensure that we have a mapping file and create Bugsee tasks for proguard-enabled variants
+                            if (mDebug) project.logger.warn("Bugsee: variant has obfuscation or mapping")
+
+                            // Create Bugsee pre-proguard task
+                            // Older versions of build plugin do not support nested closures to access owner's owner methods
+                            // e.g. doLast has no access to BugseePlugin.this and find its methods
+                            def executeBugseeManifestActionClosure = { executeBugseeManifestAction(project, variant) }
+                            project.task("createBugseeAppVar${variantName}ProguardConfig") { Task bugseeManifestTask ->
+                                doLast {
+                                    executeBugseeManifestActionClosure()
+                                }
+                                configureBugseeManifestTask(project, variant, bugseeManifestTask)
                             }
-                            configureBugseeManifestTask(project, variant, bugseeManifestTask)
+
+                            // Create Bugsee post-proguard task
+                            def executeBugseeUploadTaskClosure = { executeBugseeUploadTask(project, variant, false) }
+                            project.task("uploadBugseeAppVar${variantName}Mapping") { Task bugseeUploadTask ->
+                                doLast {
+                                    executeBugseeUploadTaskClosure()
+                                }
+                                configureBugseeUploadTask(project, variant, bugseeUploadTask)
+                            }
                         }
 
-                        // Create Bugsee post-proguard task
-                        def executeBugseeUploadTaskClosure = { executeBugseeUploadTask(project, variant) }
-                        project.task("uploadBugseeAppVar${variantName}Mapping") { Task bugseeUploadTask ->
-                            doLast {
-                                executeBugseeUploadTaskClosure()
+                        if (mDebug) project.logger.warn("Bugsee: NDK flag is " + mNdk)
+
+                        if (mNdk) {
+                            if (mDebug) project.logger.warn("Bugsee: configuring native symbols upload")
+
+                            def executeBugseeUploadNativeTaskClosure = { executeBugseeUploadTask(project, variant, true) }
+                            project.task("uploadBugseeAppVar${variantName}Native") { Task bugseeUploadNativeTask ->
+                                doLast {
+                                    executeBugseeUploadNativeTaskClosure()
+                                }
+                                configureBugseeUploadTask(project, variant, bugseeUploadNativeTask)
                             }
-                            configureBugseeUploadTask(project, variant, bugseeUploadTask)
                         }
 
                     } catch (Exception ex) {
@@ -105,35 +127,46 @@ class BugseePlugin implements Plugin<Project> {
             } else if (project.android.hasProperty('featureVariants') && project.android.featureVariants) {
                 project.android.featureVariants.all { FeatureVariant variant ->
 
+                    def variantName = variant.name.capitalize()
+
                     try {
                         if (mDebug) project.logger.warn("Bugsee start for variant " + variant.name)
+
                         // Only create Bugsee tasks for proguard-enabled variants
-                        if (isMappingFileAbsent(project, variant)) {
-                            return
+                        if (!isMappingFileAbsent(project, variant)) {
+                            if (mDebug) project.logger.warn("Bugsee variant has obfuscation or mapping")
+
+                            // Create Bugsee pre-proguard task
+                            def executeBugseeManifestActionClosure = { executeBugseeManifestAction(project, variant) }
+                            project.task("createBugseeFeatVar${variantName}ProguardConfig") { Task bugseeManifestTask ->
+                                doLast {
+                                    executeBugseeManifestActionClosure()
+                                }
+                                configureBugseeManifestTask(project, variant, bugseeManifestTask)
+                            }
+
+                            // Create Bugsee post-proguard task
+                            def executeBugseeUploadTaskClosure = { executeBugseeUploadTask(project, variant, false) }
+                            project.task("uploadBugseeFeatVar${variantName}Mapping") { Task bugseeUploadTask ->
+                                doLast {
+                                    executeBugseeUploadTaskClosure()
+                                }
+                                // Make bugseeUploadTask a part of build.
+                                bugseeUploadTask.mustRunAfter "transformClassesAndResourcesWithProguardFor${variantName}"
+                                project.tasks.findByPath("package${variantName}").dependsOn bugseeUploadTask
+                            }
                         }
 
-                        if (mDebug) project.logger.warn("Bugsee variant has obfuscation or mapping")
+                        if (mNdk) {
+                            if (mDebug) project.logger.warn("Bugsee: configuring native symbols upload")
 
-                        def variantName = variant.name.capitalize()
-
-                        // Create Bugsee pre-proguard task
-                        def executeBugseeManifestActionClosure = { executeBugseeManifestAction(project, variant) }
-                        project.task("createBugseeFeatVar${variantName}ProguardConfig") { Task bugseeManifestTask ->
-                            doLast {
-                                executeBugseeManifestActionClosure()
+                            def executeBugseeUploadNativeTaskClosure = { executeBugseeUploadTask(project, variant, true) }
+                            project.task("uploadBugseeFeatVar${variantName}Native") { Task bugseeUploadNativeTask ->
+                                doLast {
+                                    executeBugseeUploadNativeTaskClosure()
+                                }
+                                configureBugseeUploadTask(project, variant, bugseeUploadNativeTask)
                             }
-                            configureBugseeManifestTask(project, variant, bugseeManifestTask)
-                        }
-
-                        // Create Bugsee post-proguard task
-                        def executeBugseeUploadTaskClosure = { executeBugseeUploadTask(project, variant) }
-                        project.task("uploadBugseeFeatVar${variantName}Mapping") { Task bugseeUploadTask ->
-                            doLast {
-                                executeBugseeUploadTaskClosure()
-                            }
-                            // Make bugseeUploadTask a part of build.
-                            bugseeUploadTask.mustRunAfter "transformClassesAndResourcesWithProguardFor${variantName}"
-                            project.tasks.findByPath("package${variantName}").dependsOn bugseeUploadTask
                         }
 
                     } catch (Exception ex) {
@@ -361,21 +394,14 @@ class BugseePlugin implements Plugin<Project> {
         return manifestFile?.getPath()
     }
 
-    void executeBugseeUploadTask(Project project, BaseVariant variant) {
+    void executeBugseeUploadMapping(Project project, BaseVariant variant, Node manifestXml) {
         // Find the processed manifest for this variant
-        if (mDebug) project.logger.warn("Bugsee upload task. Processing project: $project; variant flavor: $variant.flavorName; build type: $variant.buildType.name")
-        def manifestPath = getManifestFile(project, variant.outputs[0])
-        if (!manifestPath) {
-            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName)
-            return
-        }
+        if (mDebug) project.logger.warn("Bugsee upload mapping task. Processing project: $project; variant flavor: $variant.flavorName; build type: $variant.buildType.name")
 
-        // Parse the AndroidManifest.xml
         def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
-        def xml = new XmlParser().parse(manifestPath)
 
         // Get the Bugsee API key
-        NodeList metaDataTags = xml.application['meta-data']
+        NodeList metaDataTags = manifestXml.application['meta-data']
         String appToken = getAppToken(project, variant, ns, metaDataTags)
         if (appToken == null) {
             project.logger.warn("Could not get appToken.")
@@ -396,14 +422,14 @@ class BugseePlugin implements Plugin<Project> {
         }
 
         // Get the build version
-        def versionName = xml.attributes()[ns.versionName]
-        def versionCode = xml.attributes()[ns.versionCode]
+        def versionName = manifestXml.attributes()[ns.versionName]
+        def versionCode = manifestXml.attributes()[ns.versionCode]
         if (versionCode == null) {
             project.logger.warn("Could not find 'android:versionCode' value in your AndroidManifest.xml")
             return
         }
 
-        File zipTemp = getZipDataToUpload(project, variant, xml, ns, buildUUID)
+        File zipTemp = getZipDataToUpload(project, variant, manifestXml, ns, buildUUID)
         if (!zipTemp) {
             if (mDebug) project.logger.warn("Bugsee Upload task getZipDataToUpload failed.")
             return
@@ -413,7 +439,111 @@ class BugseePlugin implements Plugin<Project> {
         String mappingHash = getHash(getMappingFile(variant).text)
         // Upload the mapping file to Bugsee
         String json = JsonOutput.toJson([uuid: buildUUID, version: versionName, build: versionCode, hash: mappingHash])
-        uploadData(project, zipTemp, json, appToken)
+        uploadData(project, zipTemp, json, appToken, true)
+    }
+
+    void executeBugseeUploadNative(Project project, BaseVariant variant, Node manifestXml) {
+        if (mDebug) project.logger.warn("Bugsee Upload native symbols task")
+        if (!mNdk) {
+            if (mDebug) project.logger.warn("Skipping native symbols upload because ndk is not enabled. Set ndk: true in your build.gradle to enable it.")
+            return
+        }
+
+        def ns = new Namespace("http://schemas.android.com/apk/res/android", "android")
+
+        // Get the Bugsee API key
+        NodeList metaDataTags = manifestXml.application['meta-data']
+        String appToken = getAppToken(project, variant, ns, metaDataTags)
+        if (appToken == null) {
+            project.logger.warn("Could not get appToken.")
+            return
+        }
+
+        // Get the build version
+        def versionName = manifestXml.attributes()[ns.versionName]
+        def versionCode = manifestXml.attributes()[ns.versionCode]
+        if (versionCode == null) {
+            project.logger.warn("Could not find 'android:versionCode' value in your AndroidManifest.xml")
+            return
+        }
+
+        if (mDebug) project.logger.warn("Checking variant folder: " + variant.dirName)
+
+        String basePath = project.buildDir.absolutePath
+
+        String nativeSymbolsPathSegment = com.android.utils.FileUtils.join("outputs", "native-debug-symbols")
+        String nativeSymbolsBasePath = com.android.utils.FileUtils.join(basePath, nativeSymbolsPathSegment)
+
+        for (def output : variant.outputs) {
+            // Check for intermediate symbols folder. If it exists, use it.
+            File intermediateSymbolsDir = new File("${project.buildDir.absolutePath}/intermediates/native_debug_metadata/${variant.name}/out")
+            if (intermediateSymbolsDir.exists()) {
+                if (mDebug) project.logger.warn("Intermediate symbols folder found: " + intermediateSymbolsDir.path)
+
+                String uuid = UUID.randomUUID().toString()
+
+                def zipTemp = File.createTempFile(uuid, 'zip')
+                zipTemp.deleteOnExit()
+
+                // Pack debug symbols into a ZIP file
+                zipDirectory(intermediateSymbolsDir.absolutePath, zipTemp.absolutePath)
+
+                // Actual UUIDs will be extracted from the symbols themselves, so
+                // here random one can be specified to comply with the symbol creation
+                // endpoint requirements.
+                String json = JsonOutput.toJson([uuid: uuid, version: versionName, build: versionCode, transform: "breakpad"])
+
+                // Upload the native symbols file to Bugsee. Do not delete the symbols ZIP
+                // package as it's picked from the output directory (it can be used for
+                // further processing and/or other tasks).
+                uploadData(project, zipTemp, json, appToken, true)
+
+                continue
+            }
+
+            // If intermediate symbols folder is not found, check for native symbols ZIP package.
+            File nativeSymbolsFolder = new File(nativeSymbolsBasePath, output.name)
+            if (nativeSymbolsFolder.exists()) {
+                if (mDebug) project.logger.warn("Native symbols folder found: " + nativeSymbolsFolder.path)
+
+                File originalSymbolsFile = new File(nativeSymbolsFolder.path, "native-debug-symbols.zip")
+                if (originalSymbolsFile.exists()) {
+                    if (mDebug) project.logger.warn("Native symbols file found. Sending for upload")
+
+                    // Actual UUIDs will be extracted from the symbols themselves, so
+                    // here random one can be specified to comply with the symbol creation
+                    // endpoint requirements.
+                    String uuid = UUID.randomUUID().toString()
+                    String json = JsonOutput.toJson([uuid: uuid, version: versionName, build: versionCode, transform: "breakpad"])
+
+                    // Upload the native symbols file to Bugsee. Do not delete the symbols ZIP
+                    // package as it's picked from the output directory (it can be used for
+                    // further processing and/or other tasks).
+                    uploadData(project, originalSymbolsFile, json, appToken, false)
+                } else {
+                    if (mDebug) project.logger.warn("Native symbols file was not found at: " + originalSymbolsFIle.absolutePath)
+                }
+            }
+        }
+    }
+
+    void executeBugseeUploadTask(Project project, BaseVariant variant, boolean isNative) {
+        if (mDebug) project.logger.warn("Bugsee upload task. Processing project: $project; variant flavor: $variant.flavorName; build type: $variant.buildType.name")
+
+        def manifestPath = getManifestFile(project, variant.outputs[0])
+        if (!manifestPath) {
+            project.logger.warn("Can't get manifest for variant flavor: " + variant.flavorName)
+            return
+        }
+
+        // Parse the AndroidManifest.xml
+        def xml = new XmlParser().parse(manifestPath)
+
+        if (!isNative) {
+            executeBugseeUploadMapping(project, variant, xml)
+        } else {
+            executeBugseeUploadNative(project, variant, xml)
+        }
     }
 
     String getHash(String text) {
@@ -427,6 +557,29 @@ class BugseePlugin implements Plugin<Project> {
             result[8], result[9], result[10], result[11],
             result[12], result[13], result[14], result[15],
             result[16], result[17], result[18], result[19])
+    }
+
+    void zipDirectory(String sourceDirPath, String zipFilePath) {
+        Path sourcePath = Paths.get(sourceDirPath)
+        ZipOutputStream zipOutputStream = new ZipOutputStream(new FileOutputStream(zipFilePath))
+
+        try {
+            Files.walk(sourcePath).forEach { path ->
+                def zipEntryName = sourcePath.relativize(path).toString().replace("\\", "/") // Ensure Unix-style paths
+                if (Files.isDirectory(path)) {
+                    if (!zipEntryName.isEmpty()) {
+                        zipOutputStream.putNextEntry(new ZipEntry(zipEntryName + "/"))
+                        zipOutputStream.closeEntry()
+                    }
+                } else {
+                    zipOutputStream.putNextEntry(new ZipEntry(zipEntryName))
+                    Files.copy(path, zipOutputStream)
+                    zipOutputStream.closeEntry()
+                }
+            }
+        } finally {
+            zipOutputStream.close()
+        }
     }
 
     File getZipDataToUpload(Project project, BaseVariant variant, Node manifestXml, Namespace namespace, String buildUUID) {
@@ -503,7 +656,7 @@ class BugseePlugin implements Plugin<Project> {
      * @param json
      * @param appToken
      */
-    void uploadData(Project project, File file, String json, String appToken) {
+    void uploadData(Project project, File file, String json, String appToken, boolean deleteFile = true) {
         if (mDebug) project.logger.warn("Starting to send data. Body: $json")
         // 1. Create request, get presigned url
         HttpPost httpPost = new HttpPost(project.bugsee.endpoint + '/apps/' + appToken + '/symbols')
@@ -566,7 +719,10 @@ class BugseePlugin implements Plugin<Project> {
             return
         }
 
-        file.delete()
+        if (deleteFile) {
+            file.delete()
+        }
+
         if (mDebug) project.logger.warn("Bugsee Upload task finish.")
     }
 
