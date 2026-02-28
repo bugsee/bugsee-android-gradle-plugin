@@ -1,9 +1,5 @@
-# Comment the block
-sed -i '' '/^signing {/,/^}/ s/^/\/\//g' maven-push.gradle   
+#!/bin/bash
 
 ./gradlew clean
 ./gradlew build
-./gradlew publishToMavenLocal
-
-# Uncomment the block
-sed -i '' '/^\/\/signing {/,/^\/\/}/ s/^\/\///' maven-push.gradle 
+./gradlew publishToMavenLocal -x signPluginMavenPublication
