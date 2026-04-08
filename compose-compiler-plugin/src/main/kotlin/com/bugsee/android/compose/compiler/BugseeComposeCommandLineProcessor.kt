@@ -17,6 +17,12 @@ class BugseeComposeCommandLineProcessor : CommandLineProcessor {
             valueDescription = "<true|false>",
             description = "Enable Bugsee Compose tag injection",
             required = false
+        ),
+        CliOption(
+            optionName = OPTION_SECURE,
+            valueDescription = "<true|false>",
+            description = "Enable Bugsee Compose secure-field auto-detection",
+            required = false
         )
     )
 
@@ -27,7 +33,11 @@ class BugseeComposeCommandLineProcessor : CommandLineProcessor {
     ) {
         when (option.optionName) {
             OPTION_ENABLED -> configuration.put(
-                BugseeComposeConfigKeys.ENABLED,
+                BugseeComposeConfigKeys.TAG_INJECTION_ENABLED,
+                value.toBooleanStrictOrNull() ?: true
+            )
+            OPTION_SECURE -> configuration.put(
+                BugseeComposeConfigKeys.SECURE_INJECTION_ENABLED,
                 value.toBooleanStrictOrNull() ?: true
             )
         }
@@ -36,5 +46,6 @@ class BugseeComposeCommandLineProcessor : CommandLineProcessor {
     companion object {
         const val PLUGIN_ID = "com.bugsee.compose.compiler"
         const val OPTION_ENABLED = "enabled"
+        const val OPTION_SECURE = "secure"
     }
 }

@@ -51,6 +51,26 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
     /** Compose tag injection via Kotlin compiler plugin. */
     val compose: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
+    /**
+     * Compose secure-field auto-detection via Kotlin compiler plugin.
+     *
+     * When enabled (default), the Bugsee compose-compiler-plugin scans
+     * user-code call sites of `TextField`, `OutlinedTextField`, and
+     * `BasicTextField` from `androidx.compose.material`,
+     * `androidx.compose.material3`, and `androidx.compose.foundation.text`,
+     * and injects `Modifier.bugseeSecure()` into calls whose
+     * `visualTransformation` argument is statically detectable as
+     * `PasswordVisualTransformation`. The marked composables' bounds are
+     * then redacted in captured screenshots and video.
+     *
+     * Disable this flag if you prefer to mark sensitive composables
+     * exclusively via manual `Modifier.bugseeSecure()`.
+     *
+     * Independent of [compose] (tag injection): each subfeature can be
+     * enabled or disabled in isolation.
+     */
+    val composeSecure: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
+
     /** Compose touch input capture via AndroidComposeView instrumentation. */
     val composeInput: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
@@ -72,6 +92,7 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
         "mainThreadMisuse" -> mainThreadMisuse
         "operationDispatch" -> operationDispatch
         "compose" -> compose
+        "composeSecure" -> composeSecure
         "composeInput" -> composeInput
         else -> null
     }

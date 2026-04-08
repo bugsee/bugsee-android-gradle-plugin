@@ -36,6 +36,30 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
                     val isDebug = extension.debug.getOrElse(false)
                     val inst = extension.instrumentation
 
+                    // Skip auto-add when the project IS one of the Bugsee
+                    // modules itself — these are the modules other apps
+                    // would depend on, not consumers of them. Without this
+                    // skip, applying the bugsee plugin to e.g. :library
+                    // causes the plugin to auto-add `bugsee-okhttp` as a
+                    // dependency of :library, creating a circular setup
+                    // and failing because the SNAPSHOT artifact for the
+                    // auto-added module rarely exists in the local maven
+                    // repo at the same coordinate as the plugin itself.
+                    //
+                    // Two-layer detection:
+                    // 1. Group ID — covers any future Bugsee subproject
+                    //    that publishes under `com.bugsee` even if its
+                    //    name is not in the hardcoded set below.
+                    // 2. Hardcoded module-name allowlist — covers
+                    //    subprojects that have not yet had their `group`
+                    //    set during `withDependencies` evaluation (group
+                    //    can be assigned after the plugin is applied).
+                    val projectGroup = project.group?.toString().orEmpty()
+                    if (projectGroup.startsWith("com.bugsee")
+                            || project.name in BUGSEE_INTERNAL_MODULE_NAMES) {
+                        return@withDependencies
+                    }
+
                     if (hasComposeDependency(project) && isFeatureEnabled(inst.compose)) {
                         autoAddModule(project, deps, "bugsee-compose", "compose", isDebug)
                     }
@@ -220,14 +244,38 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>): Boolean {
         val project = kotlinCompilation.target.project
         val extension = pluginExtension ?: return false
-        return hasComposeDependency(project) && isFeatureEnabled(extension.instrumentation.compose)
+        if (!hasComposeDependency(project)) {
+            return false
+        }
+        // Apply the compiler plugin if EITHER subfeature is enabled. Each
+        // subfeature is gated independently inside the compiler plugin via
+        // its own SubpluginOption, so the user can keep one on while
+        // turning the other off.
+        val tagEnabled = isFeatureEnabled(extension.instrumentation.compose)
+        val secureEnabled = isFeatureEnabled(extension.instrumentation.composeSecure)
+        return tagEnabled || secureEnabled
     }
 
     override fun applyToCompilation(
         kotlinCompilation: KotlinCompilation<*>
     ): Provider<List<SubpluginOption>> {
         return kotlinCompilation.target.project.provider {
-            listOf(SubpluginOption("enabled", "true"))
+            // Re-read pluginExtension inside the lambda. The lambda is
+            // evaluated at task configuration time, after apply() has run,
+            // so this is safer than capturing the field reference at
+            // applyToCompilation() entry (which could in principle race
+            // with apply() on plugin reconfiguration).
+            val extension = pluginExtension
+            val tagEnabled = extension != null
+                    && isFeatureEnabled(extension.instrumentation.compose)
+            val secureEnabled = extension != null
+                    && isFeatureEnabled(extension.instrumentation.composeSecure)
+            listOf(
+                // Backward-compatible name: existing CLI option "enabled"
+                // continues to control tag injection.
+                SubpluginOption("enabled", tagEnabled.toString()),
+                SubpluginOption("secure", secureEnabled.toString())
+            )
         }
     }
 
@@ -302,5 +350,29 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
                 ?.bufferedReader()?.readText()?.trim()
                 ?: "4.99.118-SNAPSHOT"
         }
+
+        /**
+         * Names of Gradle subprojects that are themselves Bugsee modules.
+         * The plugin's auto-add behavior is suppressed when applied to any
+         * of these so the plugin does not try to add e.g. `bugsee-okhttp`
+         * as a dependency of `:library` (which is the project that
+         * `bugsee-okhttp` itself depends on).
+         *
+         * The list mirrors the project names declared in the SDK's
+         * `settings.gradle.kts`. Adding a new Bugsee subproject in the
+         * future requires extending this set.
+         */
+        private val BUGSEE_INTERNAL_MODULE_NAMES = setOf(
+            "library",
+            "stub",
+            "compose",
+            "feedback",
+            "remoting",
+            "okhttp",
+            "ktor-2",
+            "ktor-3",
+            "cronet",
+            "interoperation"
+        )
     }
 }

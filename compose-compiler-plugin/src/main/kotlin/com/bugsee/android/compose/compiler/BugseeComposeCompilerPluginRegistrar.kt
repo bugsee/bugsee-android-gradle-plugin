@@ -11,10 +11,22 @@ class BugseeComposeCompilerPluginRegistrar : CompilerPluginRegistrar() {
     override val supportsK2: Boolean = true
 
     override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
-        val enabled = configuration.get(BugseeComposeConfigKeys.ENABLED, true)
-        if (!enabled) {
+        // Both subfeatures default to true when the option is not set —
+        // matches the gradle plugin's "default to enabled when not
+        // explicitly disabled" semantics.
+        val tagEnabled = configuration.get(BugseeComposeConfigKeys.TAG_INJECTION_ENABLED, true)
+        val secureEnabled = configuration.get(BugseeComposeConfigKeys.SECURE_INJECTION_ENABLED, true)
+
+        if (!tagEnabled && !secureEnabled) {
+            // Nothing to do — both passes disabled.
             return
         }
-        IrGenerationExtension.registerExtension(BugseeComposeIrExtension())
+
+        IrGenerationExtension.registerExtension(
+            BugseeComposeIrExtension(
+                tagInjectionEnabled = tagEnabled,
+                secureInjectionEnabled = secureEnabled
+            )
+        )
     }
 }
