@@ -11,7 +11,7 @@ import org.gradle.api.Project
  * OkHttp instrumentation that injects BugseeOkHttpInterceptor into every
  * OkHttpClient.Builder.build() call site.
  *
- * Gated on the presence of `com.bugsee:bugsee-okhttp` dependency.
+ * Gated on the presence of `com.bugsee:bugsee-android-okhttp` dependency.
  */
 internal class OkHttpInstrumentation : Instrumentation {
 
@@ -19,7 +19,7 @@ internal class OkHttpInstrumentation : Instrumentation {
     override val key: String = "okhttp"
 
     override fun shouldApply(project: Project): Boolean {
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-okhttp", "okhttp")
+        return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")
     }
 
     override fun apply(variant: Variant) {

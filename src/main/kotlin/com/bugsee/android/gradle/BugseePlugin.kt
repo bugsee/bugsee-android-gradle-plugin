@@ -61,19 +61,19 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
                     }
 
                     if (hasComposeDependency(project) && isFeatureEnabled(inst.compose)) {
-                        autoAddModule(project, deps, "bugsee-compose", "compose", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-compose", "compose", isDebug)
                     }
                     if (hasOkHttpDependency(project) && isFeatureEnabled(inst.okhttp)) {
-                        autoAddModule(project, deps, "bugsee-okhttp", "okhttp", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-okhttp", "okhttp", isDebug)
                     }
                     if (hasKtorDependency(project, 2) && isFeatureEnabled(inst.ktor)) {
-                        autoAddModule(project, deps, "bugsee-ktor-2", "ktor-2", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-ktor-2", "ktor-2", isDebug)
                     }
                     if (hasKtorDependency(project, 3) && isFeatureEnabled(inst.ktor)) {
-                        autoAddModule(project, deps, "bugsee-ktor-3", "ktor-3", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-ktor-3", "ktor-3", isDebug)
                     }
                     if (hasCronetDependency(project) && isFeatureEnabled(inst.cronet)) {
-                        autoAddModule(project, deps, "bugsee-cronet", "cronet", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-cronet", "cronet", isDebug)
                     }
                 }
             }
