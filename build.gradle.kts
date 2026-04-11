@@ -3,6 +3,7 @@ plugins {
     `maven-publish`
     signing
     kotlin("jvm") version "2.1.0"
+    id("io.github.gradle-nexus.publish-plugin") version "2.0.0"
 }
 
 group = property("GROUP") as String
@@ -58,17 +59,7 @@ gradlePlugin {
     }
 }
 
-// Publishing configuration (ported from maven-push.gradle)
-
-fun isReleaseBuild(): Boolean = !version.toString().contains("SNAPSHOT")
-
-fun getReleaseRepositoryUrl(): String =
-    if (hasProperty("RELEASE_REPOSITORY_URL")) property("RELEASE_REPOSITORY_URL") as String
-    else "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
-
-fun getSnapshotRepositoryUrl(): String =
-    if (hasProperty("SNAPSHOT_REPOSITORY_URL")) property("SNAPSHOT_REPOSITORY_URL") as String
-    else "https://central.sonatype.com/repository/maven-snapshots/"
+// Publishing configuration
 
 fun getRepositoryUsername(): String =
     if (hasProperty("NEXUS_USERNAME")) property("NEXUS_USERNAME") as String else ""
@@ -77,18 +68,20 @@ fun getRepositoryPassword(): String =
     if (hasProperty("NEXUS_PASSWORD")) property("NEXUS_PASSWORD") as String else ""
 
 publishing {
-    repositories {
-        maven {
-            url = uri(if (isReleaseBuild()) getReleaseRepositoryUrl() else getSnapshotRepositoryUrl())
-            credentials {
-                username = getRepositoryUsername()
-                password = getRepositoryPassword()
-            }
-        }
-    }
     publications.withType<MavenPublication>().configureEach {
         if (name == "pluginMaven") {
             artifactId = property("POM_ARTIFACT_ID") as String
+        }
+    }
+}
+
+nexusPublishing {
+    repositories {
+        sonatype {
+            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
+            username = getRepositoryUsername()
+            password = getRepositoryPassword()
         }
     }
 }
@@ -102,6 +95,6 @@ signing {
 tasks.withType<Sign>().configureEach {
     onlyIf {
         // Only run signing tasks for release builds when signing keys are present
-        isReleaseBuild() && project.hasProperty("signing.keyId")
+        !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
     }
 }

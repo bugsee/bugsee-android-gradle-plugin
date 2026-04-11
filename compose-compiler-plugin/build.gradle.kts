@@ -28,37 +28,15 @@ dependencies {
 }
 
 // --- Publishing ---
-
-fun isReleaseBuild(): Boolean = !version.toString().contains("SNAPSHOT")
-
-fun getReleaseRepositoryUrl(): String =
-    if (project.hasProperty("RELEASE_REPOSITORY_URL")) project.property("RELEASE_REPOSITORY_URL") as String
-    else "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
-
-fun getSnapshotRepositoryUrl(): String =
-    if (project.hasProperty("SNAPSHOT_REPOSITORY_URL")) project.property("SNAPSHOT_REPOSITORY_URL") as String
-    else "https://central.sonatype.com/repository/maven-snapshots/"
-
-fun getRepositoryUsername(): String =
-    if (project.hasProperty("NEXUS_USERNAME")) project.property("NEXUS_USERNAME") as String else ""
-
-fun getRepositoryPassword(): String =
-    if (project.hasProperty("NEXUS_PASSWORD")) project.property("NEXUS_PASSWORD") as String else ""
+// The nexus publish plugin is applied at the root project. This subproject
+// only needs to define its publication — publishToSonatype from the root
+// will aggregate it into the same staging repository as the main plugin.
 
 publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
             artifactId = "bugsee-compose-compiler-plugin"
-        }
-    }
-    repositories {
-        maven {
-            url = uri(if (isReleaseBuild()) getReleaseRepositoryUrl() else getSnapshotRepositoryUrl())
-            credentials {
-                username = getRepositoryUsername()
-                password = getRepositoryPassword()
-            }
         }
     }
 }
@@ -70,6 +48,6 @@ signing {
 
 tasks.withType<Sign>().configureEach {
     onlyIf {
-        isReleaseBuild() && project.hasProperty("signing.keyId")
+        !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
     }
 }

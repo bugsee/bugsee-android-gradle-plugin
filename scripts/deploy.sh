@@ -1,15 +1,40 @@
-export PATH=$PATH:/usr/local/bin
-export ANDROID_HOME=$ANDROID_SDK_ROOT
-JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk1.8.0_25.jdk/Contents/Home/
-export PATH=$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$PATH
+#!/usr/bin/env bash
+#
+# Publish the Bugsee Gradle plugin and Compose compiler plugin to Maven Central.
+#
+# Both artifacts are published to a single Sonatype staging repository via
+# the io.github.gradle-nexus.publish-plugin. After upload, the staging repo
+# is closed but NOT released — review and release manually from
+# https://central.sonatype.com (Deployments tab).
+#
+# Artifacts published:
+#   com.bugsee:bugsee-android-gradle-plugin:<version>
+#   com.bugsee.android.gradle:com.bugsee.android.gradle.gradle.plugin:<version>  (marker)
+#   com.bugsee:bugsee-compose-compiler-plugin:<version>
+#
+# Required gradle properties (typically in ~/.gradle/gradle.properties):
+#   NEXUS_USERNAME, NEXUS_PASSWORD
+#   signing.keyId, signing.password, signing.secretKeyRingFile
 
-set -e
+set -euo pipefail
 
-# 1. Compose Kotlin compiler plugin (separate Gradle build under
-#    compose-compiler-plugin/). MUST be published before the main
-#    gradle plugin so that the main plugin's `getPluginArtifact()` can
-#    resolve the matching version when consumers apply the plugin.
-(cd compose-compiler-plugin && ../gradlew publish)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$ROOT_DIR"
 
-# 2. Main gradle plugin.
-./gradlew publish
+export RELEASE="${RELEASE:-true}"
+
+VERSION="$(head -n 1 version.txt | tr -d '[:space:]')"
+echo "Publishing Bugsee Gradle Plugin version: $VERSION (RELEASE=$RELEASE)"
+
+./gradlew clean
+
+# publishToSonatype aggregates all subproject publications (main plugin +
+# compose-compiler-plugin) into a single staging repository.
+# closeSonatypeStagingRepository closes it for validation.
+# Release is done manually from the Central dashboard.
+./gradlew \
+    publishToSonatype \
+    closeSonatypeStagingRepository
+
+echo "Staging repository closed. Review and release at https://central.sonatype.com"
