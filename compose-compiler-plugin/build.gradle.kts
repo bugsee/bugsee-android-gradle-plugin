@@ -14,6 +14,14 @@ java {
     targetCompatibility = JavaVersion.VERSION_11
 }
 
+// Empty sources/javadoc JARs — Maven Central requires them but this is proprietary.
+val emptySourcesJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("sources")
+}
+val emptyJavadocJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("javadoc")
+}
+
 kotlin {
     jvmToolchain(11)
 }
@@ -37,6 +45,31 @@ publishing {
         create<MavenPublication>("maven") {
             from(components["java"])
             artifactId = "bugsee-compose-compiler-plugin"
+            artifact(emptySourcesJar)
+            artifact(emptyJavadocJar)
+
+            pom {
+                name.set("Bugsee Compose Compiler Plugin")
+                description.set("Kotlin compiler plugin for Bugsee Compose tag injection and secure modifier auto-insertion.")
+                url.set("https://www.bugsee.com")
+
+                licenses {
+                    license {
+                        name.set("Proprietary")
+                        url.set("https://bugsee.com/tos/")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("bugsee")
+                        name.set("Bugsee, Inc")
+                        email.set("support@bugsee.com")
+                    }
+                }
+                scm {
+                    url.set("https://bugsee.com/")
+                }
+            }
         }
     }
 }
