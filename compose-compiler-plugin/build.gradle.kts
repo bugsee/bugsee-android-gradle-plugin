@@ -33,11 +33,11 @@ fun isReleaseBuild(): Boolean = !version.toString().contains("SNAPSHOT")
 
 fun getReleaseRepositoryUrl(): String =
     if (project.hasProperty("RELEASE_REPOSITORY_URL")) project.property("RELEASE_REPOSITORY_URL") as String
-    else "https://oss.sonatype.org/service/local/staging/deploy/maven2/"
+    else "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
 
 fun getSnapshotRepositoryUrl(): String =
     if (project.hasProperty("SNAPSHOT_REPOSITORY_URL")) project.property("SNAPSHOT_REPOSITORY_URL") as String
-    else "https://oss.sonatype.org/content/repositories/snapshots/"
+    else "https://central.sonatype.com/repository/maven-snapshots/"
 
 fun getRepositoryUsername(): String =
     if (project.hasProperty("NEXUS_USERNAME")) project.property("NEXUS_USERNAME") as String else ""
