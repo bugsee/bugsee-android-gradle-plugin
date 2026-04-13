@@ -68,6 +68,7 @@ gradlePlugin {
             id = "com.bugsee.android.gradle"
             implementationClass = "com.bugsee.android.gradle.BugseePlugin"
             displayName = property("POM_NAME") as String
+            description = property("POM_DESCRIPTION") as String
         }
     }
 }
