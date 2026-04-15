@@ -103,8 +103,12 @@ abstract class NativeUploadTask : DefaultTask() {
         // Check for native symbols ZIP package in outputs
         val nativeSymbolsBasePath = File(basePath, "outputs/native-debug-symbols")
         if (nativeSymbolsBasePath.exists()) {
-            // Look through output folders
-            nativeSymbolsBasePath.listFiles()?.filter { it.isDirectory }?.forEach { outputDir ->
+            // Look through output folders, restricted to the current variant so that
+            // stale artifacts from other variants (e.g. release dir present during a
+            // debug build) are not re-uploaded under this task.
+            nativeSymbolsBasePath.listFiles()
+                ?.filter { it.isDirectory && it.name == variantName.get() }
+                ?.forEach { outputDir ->
                 val symbolsZip = File(outputDir, "native-debug-symbols.zip")
                 if (symbolsZip.exists()) {
                     if (isDebug) logger.warn("Bugsee: Native symbols file found: ${symbolsZip.path}")
