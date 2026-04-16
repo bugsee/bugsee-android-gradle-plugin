@@ -87,6 +87,14 @@ internal object ManifestModifier {
     /**
      * Reads the android:versionName from the manifest root element.
      */
+    /**
+     * Reads the package attribute from the manifest root element.
+     */
+    fun getPackageName(manifestFile: File): String? {
+        val doc = parseManifest(manifestFile)
+        return doc.documentElement.getAttribute("package").ifEmpty { null }
+    }
+
     fun getVersionName(manifestFile: File): String? {
         val doc = parseManifest(manifestFile)
         return doc.documentElement.getAttributeNS(ANDROID_NS, "versionName").ifEmpty { null }

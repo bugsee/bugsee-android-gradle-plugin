@@ -5,6 +5,22 @@ import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import javax.inject.Inject
 
+/**
+ * Main DSL extension for the Bugsee Gradle plugin.
+ *
+ * ```kotlin
+ * bugsee {
+ *     endpoint.set("https://api.bugsee.com")
+ *     debug.set(false)
+ *     ndk.set(false)
+ *     sizeAnalysis {
+ *         enabled.set(true)
+ *         buildConfiguration.set("release")
+ *     }
+ * }
+ * ```
+ */
+
 abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory) {
 
     /** Bugsee API endpoint URL. */
@@ -15,6 +31,23 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
 
     /** Enable NDK symbol upload. */
     val ndk: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
+     * Use the chunked upload protocol (Phase 6) instead of a single PUT.
+     * Chunks are deduplicated across builds, so CI runs that only change
+     * a small fraction of the bundle upload much faster on repeat runs.
+     * Disabled by default while the endpoint rolls out; flip to `true`
+     * to opt in.
+     */
+    val chunkedUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /** Size analysis configuration. Disabled by default (opt-in). */
+    val sizeAnalysis: BugseeSizeAnalysisExtension = objects.newInstance(BugseeSizeAnalysisExtension::class.java)
+
+    /** Configure size analysis via a DSL block. */
+    fun sizeAnalysis(action: Action<BugseeSizeAnalysisExtension>) {
+        action.execute(sizeAnalysis)
+    }
 
     /** Per-feature instrumentation configuration. */
     val instrumentation: BugseeInstrumentationExtension = objects.newInstance(BugseeInstrumentationExtension::class.java)

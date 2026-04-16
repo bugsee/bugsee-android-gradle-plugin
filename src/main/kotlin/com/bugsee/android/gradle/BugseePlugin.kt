@@ -6,6 +6,7 @@ import com.android.build.api.variant.ApplicationVariant
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
+import com.bugsee.android.gradle.upload.BundleUploadTask
 import com.bugsee.android.gradle.upload.MappingUploadTask
 import com.bugsee.android.gradle.upload.NativeUploadTask
 import org.gradle.api.Plugin
@@ -107,12 +108,16 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
             // --- Manifest UUID injection ---
             registerManifestTask(project, variant, extension, capitalizedVariant)
 
-            // --- Application variant specific tasks (upload mapping, NDK symbols) ---
+            // --- Application variant specific tasks (upload mapping, NDK symbols, bundle) ---
             if (variant is ApplicationVariant) {
                 registerMappingUploadTask(project, variant, extension, capitalizedVariant)
 
                 if (extension.ndk.get()) {
                     registerNativeUploadTask(project, variant, extension, capitalizedVariant)
+                }
+
+                if (extension.sizeAnalysis.enabled.getOrElse(false)) {
+                    registerBundleUploadTask(project, variant, extension, capitalizedVariant)
                 }
             }
 
@@ -227,6 +232,76 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
         project.tasks.configureEach { t ->
             if (t.name == "assemble$capitalizedVariant" || t.name == "bundle$capitalizedVariant") {
                 t.finalizedBy(nativeUploadTaskProvider)
+            }
+        }
+    }
+
+    private fun registerBundleUploadTask(
+        project: Project,
+        variant: ApplicationVariant,
+        extension: BugseePluginExtension,
+        capitalizedVariant: String
+    ) {
+        val buildConfig = extension.sizeAnalysis.buildConfiguration
+            .orElse(project.provider { variant.name })
+
+        // AAB upload task — wired to bundle output
+        val bundleUploadTaskProvider = project.tasks.register(
+            "uploadBugsee${capitalizedVariant}Bundle",
+            BundleUploadTask::class.java
+        ) { task ->
+            task.debug.set(extension.debug)
+            task.variantName.set(variant.name)
+            task.buildConfiguration.set(buildConfig)
+            task.endpoint.set(extension.endpoint)
+            task.format.set("aab")
+            task.group = "bugsee"
+            task.description = "Uploads AAB for size analysis for $capitalizedVariant"
+
+            task.bundleFile.set(
+                variant.artifacts.get(SingleArtifact.BUNDLE)
+            )
+            task.manifestFile.set(
+                variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
+            )
+            task.mappingFile.set(
+                variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+            )
+        }
+
+        project.tasks.configureEach { t ->
+            if (t.name == "bundle$capitalizedVariant") {
+                t.finalizedBy(bundleUploadTaskProvider)
+            }
+        }
+
+        // APK upload task — wired to APK output
+        val apkUploadTaskProvider = project.tasks.register(
+            "uploadBugsee${capitalizedVariant}Apk",
+            BundleUploadTask::class.java
+        ) { task ->
+            task.debug.set(extension.debug)
+            task.variantName.set(variant.name)
+            task.buildConfiguration.set(buildConfig)
+            task.endpoint.set(extension.endpoint)
+            task.format.set("apk")
+            task.group = "bugsee"
+            task.description = "Uploads APK for size analysis for $capitalizedVariant"
+
+            task.apkDirectory.set(
+                variant.artifacts.get(SingleArtifact.APK)
+            )
+            task.manifestFile.set(
+                variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
+            )
+            task.mappingFile.set(
+                variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+            )
+        }
+
+        project.tasks.configureEach { t ->
+            if (t.name == "assemble$capitalizedVariant") {
+                t.finalizedBy(apkUploadTaskProvider)
             }
         }
     }
