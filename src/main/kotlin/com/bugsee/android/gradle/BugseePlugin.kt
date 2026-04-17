@@ -211,6 +211,7 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
             task.debug.set(extension.debug)
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
+            task.forceUpload.set(extension.ndkForceUpload)
             task.group = "bugsee"
             task.description = "Uploads NDK native debug symbols for $capitalizedVariant"
 

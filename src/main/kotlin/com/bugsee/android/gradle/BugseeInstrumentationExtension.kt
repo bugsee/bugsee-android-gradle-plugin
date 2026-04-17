@@ -27,28 +27,67 @@ import javax.inject.Inject
  */
 abstract class BugseeInstrumentationExtension @Inject constructor(objects: ObjectFactory) {
 
-    /** Global switch for all bytecode instrumentation. */
+    /**
+     * Global switch for all bytecode instrumentation.
+     *
+     * Set to `false` to disable every instrumentation in one shot.
+     * When unset, defaults to `true` (falls back through Gradle properties
+     * and manifest meta-data).
+     */
     val enabled: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** OkHttp interceptor injection. */
+    /**
+     * Inject `BugseeOkHttpInterceptor` into every `OkHttpClient.Builder.build()` call.
+     *
+     * Requires the `com.bugsee:bugsee-okhttp` dependency to be present.
+     * When unset, defaults to `true`.
+     */
     val okhttp: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** HttpEngine (Cronet) network request instrumentation. */
+    /**
+     * Instrument `HttpEngine` (Cronet) network requests for automatic network event capture.
+     *
+     * When unset, defaults to `true`.
+     */
     val httpEngine: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** android.util.Log redirection to BugseeLogAdapter. */
+    /**
+     * Redirect `android.util.Log` calls to `BugseeLogAdapter` for automatic log capture.
+     *
+     * Covers all 14 overloads of `Log.v/d/i/w/e/wtf`.
+     * When unset, defaults to `true`.
+     */
     val log: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Thread/Runnable run() registration. */
+    /**
+     * Inject `BugseeThreadAdapter.registerThread()` at the start of `Runnable.run()`
+     * and `Thread.run()` to build Java-to-native thread ID mappings for native crash reporting.
+     *
+     * When unset, defaults to `true`.
+     */
     val thread: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Main-thread misuse detection (disk I/O, network, DB, SharedPreferences). */
+    /**
+     * Detect main-thread misuse: disk I/O, network calls, database operations,
+     * and `SharedPreferences` commits on the UI thread.
+     *
+     * When unset, defaults to `true`.
+     */
     val mainThreadMisuse: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Operation dispatch (start/end tracking for disk I/O, network, DB, SharedPreferences). */
+    /**
+     * Track start/end of operations (disk I/O, network, DB, SharedPreferences)
+     * for timeline visualization in the Bugsee dashboard.
+     *
+     * When unset, defaults to `true`.
+     */
     val operationDispatch: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Compose tag injection via Kotlin compiler plugin. */
+    /**
+     * Inject Bugsee tag metadata into Compose composables via the Kotlin compiler plugin.
+     *
+     * When unset, defaults to `true`.
+     */
     val compose: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
     /**
@@ -71,13 +110,25 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      */
     val composeSecure: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Compose touch input capture via AndroidComposeView instrumentation. */
+    /**
+     * Capture Compose touch input events via `AndroidComposeView` instrumentation.
+     *
+     * When unset, defaults to `true`.
+     */
     val composeInput: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Ktor HTTP client plugin auto-loading. */
+    /**
+     * Auto-load the Bugsee Ktor HTTP client plugin when a Ktor dependency is detected.
+     *
+     * When unset, defaults to `true`.
+     */
     val ktor: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
-    /** Cronet HTTP client plugin auto-loading. */
+    /**
+     * Auto-load the Bugsee Cronet HTTP client plugin when a Cronet dependency is detected.
+     *
+     * When unset, defaults to `true`.
+     */
     val cronet: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
     /**

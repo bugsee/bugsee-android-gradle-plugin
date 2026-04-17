@@ -31,6 +31,7 @@ internal object SymbolUploader {
      * @param endpoint The Bugsee API endpoint
      * @param logger Gradle logger
      * @param debug Whether debug logging is enabled
+     * @return `true` if the upload succeeded or the symbol already exists on the server
      */
     fun uploadData(
         file: File,
@@ -39,7 +40,7 @@ internal object SymbolUploader {
         endpoint: String,
         logger: Logger,
         debug: Boolean
-    ) {
+    ): Boolean {
         if (debug) logger.warn("Bugsee: Starting upload. Body: $json")
 
         // 1. Create request, get presigned URL
@@ -60,19 +61,19 @@ internal object SymbolUploader {
             .setRetryHandler(StandardHttpRequestRetryHandler())
             .build()
 
-        httpClient.use { client ->
+        return httpClient.use { client ->
             val response = client.execute(httpPost)
             val statusCode = response.statusLine.statusCode
 
             if (statusCode != 200) {
                 logger.warn("Bugsee upload failed: ${EntityUtils.toString(response.entity, "utf-8")}")
-                return
+                return@use false
             }
 
             val resEntity = response.entity
             if (resEntity == null) {
                 logger.warn("Bugsee upload failed: no response from server")
-                return
+                return@use false
             }
 
             val contentText = EntityUtils.toString(resEntity, "utf-8")
@@ -83,7 +84,7 @@ internal object SymbolUploader {
             // Check for SymbolAlreadyExistsError
             if (responseBody.optInt("code") == 16004) {
                 if (debug) logger.warn("Bugsee: Got SymbolAlreadyExistsError from server")
-                return
+                return@use true
             }
 
             // Check for presigned endpoint URL
@@ -100,7 +101,7 @@ internal object SymbolUploader {
                 } else {
                     logger.warn("Bugsee upload failed: null endpoint")
                 }
-                return
+                return@use false
             }
 
             // 2. Upload to presigned URL
@@ -111,10 +112,11 @@ internal object SymbolUploader {
 
             if (putResponse.statusLine.statusCode != 200) {
                 logger.warn("Bugsee upload failed: ${EntityUtils.toString(putResponse.entity, "utf-8")}")
-                return
+                return@use false
             }
 
             if (debug) logger.warn("Bugsee: Upload complete.")
+            true
         }
     }
 }

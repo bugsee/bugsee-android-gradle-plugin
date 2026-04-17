@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.upload
 import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import com.bugsee.android.gradle.util.HashUtils
+import com.bugsee.android.gradle.util.SymbolHashCache
 import com.bugsee.android.gradle.util.ZipUtils
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
@@ -30,6 +31,9 @@ abstract class NativeUploadTask : DefaultTask() {
 
     @get:Input
     abstract val endpoint: Property<String>
+
+    @get:Input
+    abstract val forceUpload: Property<Boolean>
 
     @get:InputFile
     abstract val manifestFile: RegularFileProperty
@@ -67,6 +71,9 @@ abstract class NativeUploadTask : DefaultTask() {
         }
 
         val basePath = project.layout.buildDirectory.get().asFile.absolutePath
+        val skipCache = forceUpload.get()
+        val cacheFile = File(project.rootDir, ".gradle/bugsee/native-symbol-cache.json")
+        val cacheKey = "${HashUtils.sha1Hex(appToken)}:${variantName.get()}"
 
         // Check for intermediate symbols folder first
         val intermediateSymbolsDir = File("$basePath/intermediates/native_debug_metadata/${variantName.get()}/out")
@@ -78,6 +85,12 @@ abstract class NativeUploadTask : DefaultTask() {
                 ZipUtils.zipDirectory(intermediateSymbolsDir.absolutePath, zipTemp.absolutePath)
 
                 val hash = HashUtils.sha1Hex(zipTemp)
+
+                if (!skipCache && SymbolHashCache.isCached(cacheFile, cacheKey, hash)) {
+                    if (isDebug) logger.warn("Bugsee: Native symbols unchanged (hash=$hash). Skipping upload.")
+                    return
+                }
+
                 val json = JSONObject().apply {
                     put("uuid", buildUUID)
                     put("version", versionName)
@@ -86,7 +99,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     put("transform", "breakpad")
                 }.toString()
 
-                SymbolUploader.uploadData(
+                val success = SymbolUploader.uploadData(
                     file = zipTemp,
                     json = json,
                     appToken = appToken,
@@ -94,6 +107,9 @@ abstract class NativeUploadTask : DefaultTask() {
                     logger = logger,
                     debug = isDebug
                 )
+                if (success) {
+                    SymbolHashCache.put(cacheFile, cacheKey, hash)
+                }
             } finally {
                 zipTemp.delete()
             }
@@ -114,6 +130,12 @@ abstract class NativeUploadTask : DefaultTask() {
                     if (isDebug) logger.warn("Bugsee: Native symbols file found: ${symbolsZip.path}")
 
                     val hash = HashUtils.sha1Hex(symbolsZip)
+
+                    if (!skipCache && SymbolHashCache.isCached(cacheFile, cacheKey, hash)) {
+                        if (isDebug) logger.warn("Bugsee: Native symbols unchanged (hash=$hash). Skipping upload.")
+                        return@forEach
+                    }
+
                     val json = JSONObject().apply {
                         put("uuid", buildUUID)
                         put("version", versionName)
@@ -122,7 +144,7 @@ abstract class NativeUploadTask : DefaultTask() {
                         put("transform", "breakpad")
                     }.toString()
 
-                    SymbolUploader.uploadData(
+                    val success = SymbolUploader.uploadData(
                         file = symbolsZip,
                         json = json,
                         appToken = appToken,
@@ -130,6 +152,9 @@ abstract class NativeUploadTask : DefaultTask() {
                         logger = logger,
                         debug = isDebug
                     )
+                    if (success) {
+                        SymbolHashCache.put(cacheFile, cacheKey, hash)
+                    }
                 } else {
                     if (isDebug) logger.warn("Bugsee: Native symbols file not found at: ${symbolsZip.absolutePath}")
                 }
