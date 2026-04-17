@@ -69,37 +69,42 @@ internal object BundleUploader {
             val response = client.execute(httpPost)
             val statusCode = response.statusLine.statusCode
 
-            if (statusCode != 200) {
-                logger.warn("Bugsee bundle upload failed: ${EntityUtils.toString(response.entity, "utf-8")}")
-                return
+            // 2xx is success; some reverse proxies normalise to 201/204.
+            // Anything outside that is a hard failure — surface it rather
+            // than quietly returning and letting the Gradle task report
+            // green while the backend never saw the build.
+            if (statusCode !in 200..299) {
+                val body = EntityUtils.toString(response.entity, "utf-8")
+                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): $body")
             }
 
             val resEntity = response.entity
-            if (resEntity == null) {
-                logger.warn("Bugsee bundle upload failed: no response from server")
-                return
-            }
+                ?: throw RuntimeException("Bugsee bundle upload step 1: no response body")
 
             val contentText = EntityUtils.toString(resEntity, "utf-8")
             if (debug) logger.warn("Bugsee: Bundle upload step 2. Response: $contentText")
 
-            val responseBody = JSONObject(contentText)
+            // Server may reply with XML (S3 or CDN) or HTML error page —
+            // catch the parse failure so the user sees a meaningful
+            // message instead of a stack trace.
+            val responseBody = try {
+                JSONObject(contentText)
+            } catch (e: Exception) {
+                throw RuntimeException("Bugsee bundle upload step 1: non-JSON response: ${contentText.take(200)}")
+            }
             val payload = ApiEndpoint.unwrapResult(responseBody)
 
             val presignedEndpoint = payload.optString("endpoint", "")
             if (presignedEndpoint.isEmpty()) {
-                val error = responseBody.optJSONObject("error")
+                val error = responseBody.optJSONObject("error") ?: payload.optJSONObject("error")
                 if (error != null) {
                     val errorType = error.optString("type", "")
                     if (errorType == "ApplicationNotFoundError") {
-                        logger.warn("App token is invalid: $appToken")
-                    } else {
-                        logger.warn("Bugsee bundle upload failed with error: $error")
+                        throw RuntimeException("Bugsee: App token is invalid: $appToken")
                     }
-                } else {
-                    logger.warn("Bugsee bundle upload failed: null endpoint")
+                    throw RuntimeException("Bugsee bundle upload failed: $error")
                 }
-                return
+                throw RuntimeException("Bugsee bundle upload failed: server returned no endpoint")
             }
 
             // Upload to presigned URL
@@ -108,9 +113,11 @@ internal object BundleUploader {
             httpPut.entity = FileEntity(file)
             val putResponse = client.execute(httpPut)
 
-            if (putResponse.statusLine.statusCode != 200) {
-                logger.warn("Bugsee bundle upload failed: ${EntityUtils.toString(putResponse.entity, "utf-8")}")
-                return
+            if (putResponse.statusLine.statusCode !in 200..299) {
+                val body = EntityUtils.toString(putResponse.entity, "utf-8")
+                throw RuntimeException(
+                    "Bugsee bundle upload step 2 failed (status=${putResponse.statusLine.statusCode}): $body"
+                )
             }
 
             if (debug) logger.warn("Bugsee: Bundle upload complete.")

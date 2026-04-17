@@ -14,6 +14,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.security.MessageDigest
 
@@ -37,6 +38,17 @@ internal object ChunkedBundleUploader {
     private const val CONNECT_TIMEOUT_MS = 30_000
     private const val SOCKET_TIMEOUT_MS  = 300_000
     private const val USER_AGENT         = "bugsee-gradle-plugin/chunked-upload"
+
+    // S3 multipart requires every non-terminal part to be ≥ 5 MiB. We
+    // surface a misconfigured server early rather than uploading chunks
+    // the stitch phase will reject.
+    private const val S3_MIN_PART_BYTES = 5 * 1024 * 1024
+
+    // Per-chunk retry parameters. Transient S3 5xx or IO hiccups should
+    // not kill the whole chunked path — especially once we've already
+    // uploaded several MiB of a multi-GiB archive.
+    private const val CHUNK_PUT_MAX_ATTEMPTS = 3
+    private const val CHUNK_PUT_BACKOFF_MS = 500L
 
     private fun newHttpClient(): CloseableHttpClient {
         val cfg = RequestConfig.custom()
@@ -71,6 +83,17 @@ internal object ChunkedBundleUploader {
             val options = fetchChunkOptions(http, endpoint, appToken)
             val chunkSize = options.getInt("chunk_size")
             val maxChunks = options.getInt("max_chunks")
+            // Guard against a misconfigured server that hands back
+            // nonsense. `chunk_size=0` would spin forever writing
+            // zero-byte chunks; a `max_chunks` of zero or negative is
+            // absurd. S3 multipart additionally requires ≥ 5 MiB for
+            // non-terminal parts — surface that early.
+            require(chunkSize >= S3_MIN_PART_BYTES && chunkSize <= Int.MAX_VALUE / 2) {
+                "invalid chunk_size from server: $chunkSize (must be in [$S3_MIN_PART_BYTES, ${Int.MAX_VALUE / 2}])"
+            }
+            require(maxChunks in 1..100_000) {
+                "invalid max_chunks from server: $maxChunks (must be in [1, 100000])"
+            }
             if (debug) logger.warn("Bugsee: chunked upload — chunk_size=$chunkSize max_chunks=$maxChunks")
 
             val chunkHashes = computeChunkHashes(uploadZip, chunkSize)
@@ -94,9 +117,27 @@ internal object ChunkedBundleUploader {
                 // keep GC pressure low on large archives. ByteArrayEntity
                 // (buf, 0, len) copies internally so reuse is safe.
                 val reusable = ByteArray(chunkSize)
-                for (sha1 in missing) {
+                // Iterate positions, not hashes. An archive with
+                // duplicate-content chunks (zero-padded regions,
+                // repeated blocks) has the same SHA-1 at multiple
+                // indices; `missing` lists each unique hash once and
+                // the server's UploadPartCopy stitches by hash, so
+                // one PUT per unique missing hash is enough — but
+                // we must key on the FIRST index for each hash, which
+                // `indexOf` gave us previously. The bug was that we
+                // iterated `missing` without deduping the iteration
+                // side, which ran the PUT once per `missing` entry
+                // but never visited later positions that share the
+                // hash. Now we iterate by index, only PUT the first
+                // occurrence of each hash, and skip positions whose
+                // hash is already uploaded.
+                val missingSet = missing.toHashSet()
+                val uploaded = hashSetOf<String>()
+                for (index in chunkHashes.indices) {
+                    val sha1 = chunkHashes[index]
+                    if (sha1 !in missingSet) continue
+                    if (!uploaded.add(sha1)) continue
                     val url = uploadUrls.getString(sha1)
-                    val index = chunkHashes.indexOf(sha1)
                     uploadChunk(http, uploadZip, index, chunkSize, url, reusable)
                 }
             }
@@ -202,21 +243,41 @@ internal object ChunkedBundleUploader {
                             file: File, index: Int, chunkSize: Int,
                             presignedUrl: String, reusable: ByteArray) {
         val offset = index.toLong() * chunkSize.toLong()
+        // Read once, retry the PUT. Bounded retry on transient
+        // network/5xx so a single flaky chunk doesn't force the
+        // caller to fall back to single-PUT and re-upload the whole
+        // multi-GiB archive.
+        val wanted: Int
         RandomAccessFile(file, "r").use { raf ->
             raf.seek(offset)
             val remaining = file.length() - offset
-            val wanted = minOf(chunkSize.toLong(), remaining).toInt()
+            wanted = minOf(chunkSize.toLong(), remaining).toInt()
             raf.readFully(reusable, 0, wanted)
-            val put = HttpPut(presignedUrl)
-            put.entity = ByteArrayEntity(reusable, 0, wanted)
-            http.execute(put).use { response ->
-                val status = response.statusLine.statusCode
-                if (status !in 200..299) {
+        }
+        var lastError: Exception? = null
+        for (attempt in 1..CHUNK_PUT_MAX_ATTEMPTS) {
+            try {
+                val put = HttpPut(presignedUrl)
+                put.entity = ByteArrayEntity(reusable, 0, wanted)
+                http.execute(put).use { response ->
+                    val status = response.statusLine.statusCode
+                    if (status in 200..299) return
                     val body = response.entity?.let { EntityUtils.toString(it) } ?: ""
-                    throw RuntimeException("chunk PUT failed (status=$status): $body")
+                    // 4xx is permanent (auth, expired URL, bad signature);
+                    // retrying won't help and just wastes bytes.
+                    if (status in 400..499) {
+                        throw RuntimeException("chunk PUT failed (status=$status): $body")
+                    }
+                    throw IOException("chunk PUT status=$status: $body")
+                }
+            } catch (e: IOException) {
+                lastError = e
+                if (attempt < CHUNK_PUT_MAX_ATTEMPTS) {
+                    Thread.sleep(CHUNK_PUT_BACKOFF_MS * attempt)
                 }
             }
         }
+        throw RuntimeException("chunk PUT failed after $CHUNK_PUT_MAX_ATTEMPTS attempts", lastError)
     }
 
     private fun submitChunked(http: CloseableHttpClient,
@@ -224,10 +285,15 @@ internal object ChunkedBundleUploader {
                               metadata: JSONObject, hashes: List<String>): String {
         val post = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken, "/chunked"))
         post.setHeader("Content-Type", "application/json")
-        // Mutate the caller's JSONObject rather than round-tripping
-        // through string — saves a full-document parse+serialise.
-        metadata.put("chunks", JSONArray(hashes))
-        post.entity = StringEntity(metadata.toString(), "UTF-8")
+        // Clone so we don't mutate the caller's object. The doc on
+        // `upload()` promises the caller can reuse the metadata; an
+        // inlined `put("chunks", ...)` would silently stash the hash
+        // list in their object and surface later as a stale field on
+        // a fallback / retry.
+        val body = JSONObject(metadata.toString()).apply {
+            put("chunks", JSONArray(hashes))
+        }
+        post.entity = StringEntity(body.toString(), "UTF-8")
         http.execute(post).use { response ->
             val responseBody = response.entity?.let { EntityUtils.toString(it) } ?: ""
             if (response.statusLine.statusCode !in 200..299) {

@@ -175,15 +175,23 @@ abstract class BundleUploadTask : DefaultTask() {
             }
 
             if (!chunkedSucceeded) {
-                // Upload: POST metadata → presigned URL → PUT file
-                BundleUploader.uploadData(
-                    file = uploadZip,
-                    json = json,
-                    appToken = appToken,
-                    endpoint = endpoint.get(),
-                    logger = logger,
-                    debug = isDebug
-                )
+                // Upload: POST metadata → presigned URL → PUT file.
+                // BundleUploader throws on any failure so the cause is
+                // observable, but size-analysis is best-effort — log at
+                // error level and swallow so a flaky upload doesn't
+                // kill an otherwise-green CI build.
+                try {
+                    BundleUploader.uploadData(
+                        file = uploadZip,
+                        json = json,
+                        appToken = appToken,
+                        endpoint = endpoint.get(),
+                        logger = logger,
+                        debug = isDebug
+                    )
+                } catch (e: Exception) {
+                    logger.error("Bugsee: bundle upload failed (size analysis unavailable for this build): ${e.message}")
+                }
             }
         } finally {
             uploadZip.delete()
