@@ -134,10 +134,14 @@ signing {
     sign(publishing.publications)
 }
 
+// `enabled = …` (not `onlyIf`) so Gradle skips the task wholesale —
+// including its built-in `onlyIf("Signing is required, or signatory is
+// set", …)` spec whose lazy `getSignatory()` call throws under certain
+// Gradle 8.7+ no-credentials shapes instead of returning null. With
+// `onlyIf` alone we'd still reach that throwing spec on every local
+// publish.
 tasks.withType<Sign>().configureEach {
-    onlyIf {
-        !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
-    }
+    enabled = !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
 }
 
 // Fix task dependency: marker publication must depend on the signing task

@@ -79,8 +79,11 @@ signing {
     sign(publishing.publications)
 }
 
+// See root build.gradle.kts for rationale — `enabled` beats `onlyIf`
+// here because Gradle still evaluates the Sign task's built-in
+// "Signing is required, or signatory is set" spec under `onlyIf`
+// alone, and that spec's lazy `getSignatory()` call throws on some
+// no-credentials Gradle 8.7+ shapes rather than returning null.
 tasks.withType<Sign>().configureEach {
-    onlyIf {
-        !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
-    }
+    enabled = !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
 }
