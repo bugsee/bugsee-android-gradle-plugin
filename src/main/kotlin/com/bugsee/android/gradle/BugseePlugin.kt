@@ -6,6 +6,7 @@ import com.android.build.api.variant.ApplicationVariant
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
+import com.bugsee.android.gradle.upload.BuildTimingService
 import com.bugsee.android.gradle.upload.BundleUploadTask
 import com.bugsee.android.gradle.upload.MappingUploadTask
 import com.bugsee.android.gradle.upload.NativeUploadTask
@@ -13,18 +14,41 @@ import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
+import org.gradle.build.event.BuildEventsListenerRegistry
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
 import org.jetbrains.kotlin.gradle.plugin.SubpluginOption
+import javax.inject.Inject
 
-class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
+abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
 
     private var pluginExtension: BugseePluginExtension? = null
+
+    // Injected by Gradle at plugin apply time — the service registry
+    // we need to hook the BuildTimingService into the task-completion
+    // event stream. Gradle provides this via abstract @Inject on the
+    // plugin class.
+    @get:Inject
+    abstract val listenerRegistry: BuildEventsListenerRegistry
 
     override fun apply(project: Project) {
         val extension = project.extensions.create(PLUGIN_NAME, BugseePluginExtension::class.java)
         pluginExtension = extension
+
+        // Register the per-build timing service once per Gradle build.
+        // The shared-services container deduplicates across subprojects
+        // that each apply the bugsee plugin, so a multi-module build
+        // still sees a single service and one rollup. Consumers (the
+        // upload task) wire to this provider declaratively via
+        // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no explicit
+        // `task.usesService(...)` call is needed.
+        val timingService: Provider<BuildTimingService> =
+            project.gradle.sharedServices.registerIfAbsent(
+                BUILD_TIMING_SERVICE_NAME,
+                BuildTimingService::class.java
+            ) { }
+        listenerRegistry.onTaskCompletion(timingService)
 
         // Auto-install Bugsee extension modules when matching third-party
         // dependencies are detected. Uses withDependencies to inject before
@@ -268,6 +292,9 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
             task.mappingFile.set(
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
+            // The timing service is auto-wired on the task via
+            // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no
+            // explicit `set`/`usesService` call needed.
         }
 
         project.tasks.configureEach { t ->
@@ -298,6 +325,7 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
             task.mappingFile.set(
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
+            // Timing service auto-wired via @ServiceReference (see above).
         }
 
         project.tasks.configureEach { t ->
@@ -421,7 +449,12 @@ class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
 
     companion object {
         private const val PLUGIN_NAME = "bugsee"
-        private val PLUGIN_VERSION: String by lazy {
+        // Shared-services key for the per-build timing collector.
+        // Referenced by both the plugin's apply() registration and
+        // the per-variant task wiring so both land on the same
+        // service instance per build.
+        internal const val BUILD_TIMING_SERVICE_NAME = "bugseeBuildTimingService"
+        internal val PLUGIN_VERSION: String by lazy {
             BugseePlugin::class.java.getResourceAsStream("/bugsee-plugin-version.txt")
                 ?.bufferedReader()?.readText()?.trim()
                 ?: "4.99.118-SNAPSHOT"

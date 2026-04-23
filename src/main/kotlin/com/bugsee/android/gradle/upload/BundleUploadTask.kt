@@ -1,16 +1,19 @@
 package com.bugsee.android.gradle.upload
 
+import com.bugsee.android.gradle.BugseePlugin
 import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.services.ServiceReference
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
+import org.gradle.util.GradleVersion
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
@@ -63,6 +66,14 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:InputFile
     @get:Optional
     abstract val mappingFile: RegularFileProperty
+
+    // Shared BuildService that collects per-task timings across the
+    // whole build. `@ServiceReference(name)` declaratively auto-wires
+    // the task to the service registered under that name in
+    // `BugseePlugin.apply()` — no explicit `task.set(...)` or
+    // `task.usesService(...)` call required on the registration site.
+    @get:ServiceReference(BugseePlugin.BUILD_TIMING_SERVICE_NAME)
+    abstract val timingService: Property<BuildTimingService>
 
     @TaskAction
     fun execute() {
@@ -132,6 +143,17 @@ abstract class BundleUploadTask : DefaultTask() {
             )
         }
 
+        // Build-process provenance — best-effort. Caught wide so a
+        // misbehaving resolver or a missing BuildService never turns
+        // into a failed upload: size analysis is strictly auxiliary
+        // and must not kill an otherwise-green CI build.
+        val buildMetadata = try {
+            resolveBuildMetadataJson()
+        } catch (e: Exception) {
+            if (isDebug) logger.warn("Bugsee: build_metadata resolution failed: ${e.message}")
+            null
+        }
+
         try {
             // Build JSON metadata
             val json = JSONObject().apply {
@@ -151,6 +173,9 @@ abstract class BundleUploadTask : DefaultTask() {
                 vcs.prNumber?.let    { put("pr_number", it) }
                 vcs.vcsProvider?.let { put("vcs_provider", it) }
                 vcs.vcsRepo?.let     { put("vcs_repo", it) }
+                // Machine + plugin/Gradle versions + per-category
+                // Gradle task timings (see resolveBuildMetadataJson).
+                buildMetadata?.let { put("build_metadata", it) }
             }.toString()
 
             // Chunked upload path (Phase 6, feature-flagged). Falls back
@@ -196,6 +221,42 @@ abstract class BundleUploadTask : DefaultTask() {
         } finally {
             uploadZip.delete()
         }
+    }
+
+    /**
+     * Assembles the `build_metadata` sub-object sent alongside the
+     * existing upload metadata: machine/CI-runner label, plugin and
+     * Gradle versions, and the per-category rollup of Gradle task
+     * timings.
+     *
+     * Returns `null` when nothing useful was captured — the caller
+     * then omits the field entirely so the server-side sanitizer
+     * sees a clean absence rather than an empty object.
+     */
+    private fun resolveBuildMetadataJson(): JSONObject? {
+        val obj = JSONObject()
+
+        BuildMachineResolver.resolve()?.takeIf { it.isNotBlank() }?.let {
+            obj.put("machine", it)
+        }
+
+        obj.put("plugin_version", BugseePlugin.PLUGIN_VERSION)
+        obj.put("gradle_version", GradleVersion.current().version)
+
+        // Timing service is wired from the plugin's `apply()` so it's
+        // always present in normal operation. Guard defensively so a
+        // Gradle edge case that skips the listener registration (very
+        // short builds, replay-from-cache) doesn't throw here.
+        val service = timingService.orNull
+        if (service != null) {
+            val timings = service.snapshot()
+            val timingsJson = timings.toJson()
+            if (timingsJson.length() > 0) {
+                obj.put("timings", timingsJson)
+            }
+        }
+
+        return if (obj.length() == 0) null else obj
     }
 
     private fun resolveArtifactFile(): File? {
