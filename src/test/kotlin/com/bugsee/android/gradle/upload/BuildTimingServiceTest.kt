@@ -43,7 +43,7 @@ class BuildTimingServiceTest {
         svc.record(":app:bundleRelease",        5_000, 5_800)
 
         val rollup = svc.snapshot()
-        assertEquals(4_000L, rollup.javaMs)
+        assertEquals(4_000L, rollup.managedCodeMs)
         assertEquals(800L,   rollup.packagingMs)
         assertEquals(4_800L, rollup.totalMs)
         assertEquals(2, rollup.topTasks.size)

@@ -24,7 +24,7 @@ class BuildTimingsTest {
             t(":app:lintVitalRelease",         1_200, 1_900)   // OTHER: 700
         )
         val rollup = buildTimings(timings)
-        assertEquals(8_000L, rollup.javaMs)
+        assertEquals(8_000L, rollup.managedCodeMs)
         assertEquals(5_000L, rollup.nativeMs)
         assertEquals(2_200L, rollup.resourcesMs)  // 1500 + 700
         assertEquals(1_200L, rollup.packagingMs)
@@ -70,12 +70,12 @@ class BuildTimingsTest {
 
     @Test fun `toJson emits only non-zero counters`() {
         val rollup = BuildTimings(
-            javaMs = 1000, nativeMs = 0, resourcesMs = 500,
+            managedCodeMs = 1000, nativeMs = 0, resourcesMs = 500,
             packagingMs = 0, otherMs = 0, totalMs = 2000,
             topTasks = listOf(TopTaskEntry(":app:compileReleaseKotlin", 1000))
         )
         val json = rollup.toJson()
-        assertEquals(1000L, json.getLong("java_ms"))
+        assertEquals(1000L, json.getLong("managed_code_ms"))
         assertEquals(500L,  json.getLong("resources_ms"))
         assertEquals(2000L, json.getLong("total_ms"))
         // Zero buckets are omitted so the server sees a clean shape.

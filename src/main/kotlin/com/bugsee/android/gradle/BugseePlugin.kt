@@ -269,6 +269,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     ) {
         val buildConfig = extension.sizeAnalysis.buildConfiguration
             .orElse(project.provider { variant.name })
+        // Resolve `android.compileSdk` at configuration time so the
+        // task input is a plain string, not a project-scoped lookup
+        // executed lazily (which would be a configuration-cache leak).
+        // `ApplicationExtension` is the AGP DSL type for `android { }`
+        // in app modules; reading `.compileSdk` is a plain property
+        // access and CC-safe. Sub-configurations that set
+        // `compileSdkPreview` instead are rare and surface as null
+        // here — we emit nothing rather than guess.
+        val compileSdkValue = project.extensions.findByType(
+            com.android.build.api.dsl.ApplicationExtension::class.java
+        )?.compileSdk?.toString()
 
         // AAB upload task — wired to bundle output
         val bundleUploadTaskProvider = project.tasks.register(
@@ -292,6 +303,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.mappingFile.set(
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
+            compileSdkValue?.let { task.buildSdkVersion.set(it) }
             // The timing service is auto-wired on the task via
             // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no
             // explicit `set`/`usesService` call needed.
@@ -325,6 +337,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.mappingFile.set(
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
+            compileSdkValue?.let { task.buildSdkVersion.set(it) }
             // Timing service auto-wired via @ServiceReference (see above).
         }
 

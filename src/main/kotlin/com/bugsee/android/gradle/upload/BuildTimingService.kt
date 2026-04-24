@@ -40,7 +40,12 @@ internal data class TopTaskEntry(
  * counters are omitted from the emitted JSON.
  */
 internal data class BuildTimings(
-    val javaMs: Long,
+    // JVM-bytecode compilation — maps to the appserver's
+    // `managed_code_ms` wire field. Field renamed from the earlier
+    // `javaMs` as part of cross-platform schema harmonisation (iOS
+    // emits `native_ms` instead since Swift + Obj-C + C++ all land
+    // in that bucket there).
+    val managedCodeMs: Long,
     val nativeMs: Long,
     val resourcesMs: Long,
     val packagingMs: Long,
@@ -49,12 +54,12 @@ internal data class BuildTimings(
     val topTasks: List<TopTaskEntry>
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
-        if (javaMs      > 0) put("java_ms",      javaMs)
-        if (nativeMs    > 0) put("native_ms",    nativeMs)
-        if (resourcesMs > 0) put("resources_ms", resourcesMs)
-        if (packagingMs > 0) put("packaging_ms", packagingMs)
-        if (otherMs     > 0) put("other_ms",     otherMs)
-        if (totalMs     > 0) put("total_ms",     totalMs)
+        if (managedCodeMs > 0) put("managed_code_ms", managedCodeMs)
+        if (nativeMs      > 0) put("native_ms",       nativeMs)
+        if (resourcesMs   > 0) put("resources_ms",    resourcesMs)
+        if (packagingMs   > 0) put("packaging_ms",    packagingMs)
+        if (otherMs       > 0) put("other_ms",        otherMs)
+        if (totalMs       > 0) put("total_ms",        totalMs)
         if (topTasks.isNotEmpty()) {
             val arr = JSONArray()
             for (t in topTasks) {
@@ -93,7 +98,7 @@ internal fun buildTimings(
 ): BuildTimings {
     if (timings.isEmpty()) return BuildTimings.EMPTY
 
-    var java = 0L
+    var managedCode = 0L
     var native = 0L
     var resources = 0L
     var packaging = 0L
@@ -104,11 +109,11 @@ internal fun buildTimings(
     for (t in timings) {
         val d = t.durationMs
         when (TaskCategoryClassifier.classify(t.path)) {
-            TaskCategory.JAVA      -> java += d
-            TaskCategory.NATIVE    -> native += d
-            TaskCategory.RESOURCES -> resources += d
-            TaskCategory.PACKAGING -> packaging += d
-            TaskCategory.OTHER     -> other += d
+            TaskCategory.MANAGED_CODE -> managedCode += d
+            TaskCategory.NATIVE       -> native += d
+            TaskCategory.RESOURCES    -> resources += d
+            TaskCategory.PACKAGING    -> packaging += d
+            TaskCategory.OTHER        -> other += d
         }
         if (t.startTime < earliestStart) earliestStart = t.startTime
         if (t.endTime > latestEnd)       latestEnd = t.endTime
@@ -121,7 +126,7 @@ internal fun buildTimings(
         .map { TopTaskEntry(it.path, it.durationMs) }
         .toList()
 
-    return BuildTimings(java, native, resources, packaging, other, total, top)
+    return BuildTimings(managedCode, native, resources, packaging, other, total, top)
 }
 
 

@@ -75,6 +75,17 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:ServiceReference(BugseePlugin.BUILD_TIMING_SERVICE_NAME)
     abstract val timingService: Property<BuildTimingService>
 
+    // Android `compileSdk` rendered as a string — wired from the
+    // `android { compileSdk = N }` DSL at task registration. Sent as
+    // `build_sdk_version` in the upload payload so the server can
+    // distinguish builds compiled against different SDK levels. The
+    // property is optional because `compileSdk` can be unset in
+    // exotic configurations (the plugin also allows
+    // `compileSdkPreview` or `compileSdkExtension`).
+    @get:Input
+    @get:Optional
+    abstract val buildSdkVersion: Property<String>
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -241,7 +252,13 @@ abstract class BundleUploadTask : DefaultTask() {
         }
 
         obj.put("plugin_version", BugseePlugin.PLUGIN_VERSION)
-        obj.put("gradle_version", GradleVersion.current().version)
+        // Renamed from the earlier `gradle_version` as part of cross-
+        // platform schema harmonisation — the same slot carries the
+        // Xcode version on iOS builds.
+        obj.put("build_system_version", GradleVersion.current().version)
+        buildSdkVersion.orNull?.takeIf { it.isNotBlank() }?.let {
+            obj.put("build_sdk_version", it)
+        }
 
         // Timing service is wired from the plugin's `apply()` so it's
         // always present in normal operation. Guard defensively so a

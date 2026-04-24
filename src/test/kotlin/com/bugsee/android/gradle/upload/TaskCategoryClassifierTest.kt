@@ -6,24 +6,24 @@ import org.junit.Test
 class TaskCategoryClassifierTest {
 
     @Test fun `java-kotlin compile classifies as JAVA`() {
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:compileReleaseKotlin"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:compileReleaseJavaWithJavac"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":lib:kaptReleaseKotlin"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":lib:kspReleaseKotlin"))
     }
 
     @Test fun `desugar and dex tasks classify as JAVA`() {
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:desugarReleaseFileDependencies"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:dexBuilderRelease"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:mergeDexRelease"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:minifyReleaseWithR8"))
     }
 
@@ -33,9 +33,9 @@ class TaskCategoryClassifierTest {
         // META-INF/ inside the jar. Attributed to JAVA to avoid
         // confusing users with a RESOURCES bucket inflated by jar
         // resources.
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:mergeReleaseJavaResource"))
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":app:packageReleaseJavaResource"))
     }
 
@@ -137,7 +137,7 @@ class TaskCategoryClassifierTest {
     }
 
     @Test fun `multi-module nested path uses basename`() {
-        assertEquals(TaskCategory.JAVA,
+        assertEquals(TaskCategory.MANAGED_CODE,
             TaskCategoryClassifier.classify(":feature:payment:compileReleaseKotlin"))
     }
 }

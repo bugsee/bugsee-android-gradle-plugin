@@ -17,7 +17,17 @@ package com.bugsee.android.gradle.upload
  * composes naturally with tests.
  */
 internal enum class TaskCategory {
-    JAVA, NATIVE, RESOURCES, PACKAGING, OTHER
+    // JVM-bytecode compilation (kotlinc / javac / R8 / desugar) —
+    // renamed from the earlier `JAVA` as part of cross-platform
+    // schema harmonisation. The wire-format field on the
+    // appserver is `managed_code_ms`; iOS omits it entirely since
+    // Swift / Obj-C / C++ all compile into the Mach-O and land
+    // in `NATIVE` on that platform.
+    MANAGED_CODE,
+    NATIVE,
+    RESOURCES,
+    PACKAGING,
+    OTHER,
 }
 
 
@@ -62,12 +72,12 @@ internal object TaskCategoryClassifier {
         Regex("^strip[A-Z].*?(Symbols|DebugSymbols)$", RegexOption.IGNORE_CASE) to TaskCategory.NATIVE,
 
         // --- Java / Kotlin bytecode pipeline --------------------------
-        Regex("^(compile|kapt|ksp)[A-Z].*(Java|Kotlin|JavaWithJavac|JavaResources)$", RegexOption.IGNORE_CASE) to TaskCategory.JAVA,
-        Regex("^compile[A-Z].*(Aidl|Renderscript)$", RegexOption.IGNORE_CASE) to TaskCategory.JAVA,
-        Regex("^(merge|package)[A-Z].*JavaResource$", RegexOption.IGNORE_CASE) to TaskCategory.JAVA,
-        Regex("^desugar[A-Z].*", RegexOption.IGNORE_CASE) to TaskCategory.JAVA,
-        Regex("^(dex|mergeDex|minify).*", RegexOption.IGNORE_CASE) to TaskCategory.JAVA,
-        Regex("^(r8|proguard).*", RegexOption.IGNORE_CASE) to TaskCategory.JAVA,
+        Regex("^(compile|kapt|ksp)[A-Z].*(Java|Kotlin|JavaWithJavac|JavaResources)$", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
+        Regex("^compile[A-Z].*(Aidl|Renderscript)$", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
+        Regex("^(merge|package)[A-Z].*JavaResource$", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
+        Regex("^desugar[A-Z].*", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
+        Regex("^(dex|mergeDex|minify).*", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
+        Regex("^(r8|proguard).*", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
 
         // --- Packaging / signing -------------------------------------
         // Catch-all for packaging verbs. Placed last so the resources
