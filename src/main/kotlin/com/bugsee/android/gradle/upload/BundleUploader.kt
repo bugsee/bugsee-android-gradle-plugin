@@ -27,6 +27,14 @@ internal object BundleUploader {
     private const val SOCKET_TIMEOUT_MS = 300_000
 
     /**
+     * Log-safe rendering of the app token. Full tokens grant write
+     * access to a project's builds so they must not land verbatim in
+     * CI logs / exception messages / bug reports.
+     */
+    private fun maskAppToken(token: String): String =
+        if (token.length <= 8) "****" else "${token.take(4)}…${token.takeLast(4)}"
+
+    /**
      * Two-stage upload:
      * 1. POST JSON metadata to get a presigned URL
      * 2. PUT the file to the presigned URL
@@ -100,7 +108,9 @@ internal object BundleUploader {
                 if (error != null) {
                     val errorType = error.optString("type", "")
                     if (errorType == "ApplicationNotFoundError") {
-                        throw RuntimeException("Bugsee: App token is invalid: $appToken")
+                        throw RuntimeException(
+                            "Bugsee: App token is invalid: ${maskAppToken(appToken)}"
+                        )
                     }
                     throw RuntimeException("Bugsee bundle upload failed: $error")
                 }

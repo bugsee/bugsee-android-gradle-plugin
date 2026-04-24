@@ -125,7 +125,13 @@ abstract class BundleUploadTask : DefaultTask() {
     // Wired from `project.layout.projectDirectory` at registration;
     // the task action reads `projectDirectory.get().asFile` instead
     // of `project.projectDir` (the latter being a CC violation).
-    @get:InputDirectory
+    //
+    // Declared `@Internal`, NOT `@InputDirectory` — `@InputDirectory`
+    // would make Gradle snapshot the entire project tree (including
+    // `.gradle/`, `build/`, IDE files) on every up-to-date check,
+    // which is wildly expensive for what is effectively a runtime
+    // lookup surface used only to exec `git`.
+    @get:Internal
     abstract val projectDirectory: DirectoryProperty
 
     @TaskAction
