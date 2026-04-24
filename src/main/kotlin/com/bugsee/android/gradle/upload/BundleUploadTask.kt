@@ -1,9 +1,9 @@
 package com.bugsee.android.gradle.upload
 
 import com.bugsee.android.gradle.BugseePlugin
-import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
@@ -11,6 +11,7 @@ import org.gradle.api.services.ServiceReference
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
 import org.gradle.util.GradleVersion
@@ -86,18 +87,65 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Optional
     abstract val buildSdkVersion: Property<String>
 
+    // Pre-resolved app token from the plugin's extension (closures /
+    // provider / defaultAppToken). Populated at task registration
+    // via `AppTokenResolver.resolveFromExtension(...)` so the
+    // `@TaskAction` can avoid `project.extensions.getByType(...)` —
+    // a configuration-cache violation. Empty / unset means the
+    // extension provided nothing and the task must fall back to the
+    // manifest meta-data lookup.
+    @get:Input
+    @get:Optional
+    abstract val preResolvedAppToken: Property<String>
+
+    // `res/` source files from the app's main source set — used by
+    // `AppTokenResolver.resolveFromManifest` only when the manifest
+    // meta-data tag resolves to an `@string/foo` reference. Wired
+    // from `android.sourceSets.main.res.getSourceFiles()` at
+    // registration, so the resolver walks a plain file list at
+    // execution without touching the Android DSL (which would be a
+    // CC leak).
+    //
+    // Declared `@Internal` — this is a runtime lookup surface, not
+    // a real build input. Including it as `@InputFiles` would pull
+    // the entire `res/` tree into task-up-to-date snapshotting for
+    // a fallback path almost nobody hits.
+    @get:Internal
+    abstract val stringResourceFiles: ConfigurableFileCollection
+
+    // Feature-flag for the chunked upload path. Wired from
+    // `extension.chunkedUpload` at task registration — reading it
+    // here (rather than at `@TaskAction` time via `project.extensions`)
+    // keeps the task CC-clean.
+    @get:Input
+    abstract val chunkedUpload: Property<Boolean>
+
+    // Project root — handed to `VcsMetadataResolver.resolve(...)` so
+    // it can shell out to `git` when no CI provider env matches.
+    // Wired from `project.layout.projectDirectory` at registration;
+    // the task action reads `projectDirectory.get().asFile` instead
+    // of `project.projectDir` (the latter being a CC violation).
+    @get:InputDirectory
+    abstract val projectDirectory: DirectoryProperty
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
         val manifest = manifestFile.get().asFile
-        val extension = project.extensions.getByType(BugseePluginExtension::class.java)
 
         if (isDebug) logger.warn("Bugsee: Upload bundle task for variant ${variantName.get()} (${format.get()})")
 
-        // Resolve app token
-        val appToken = AppTokenResolver.resolve(
-            project, extension, variantName.get(), manifest, logger, isDebug
-        )
+        // Resolve app token — plugin-side first (pre-resolved into
+        // `preResolvedAppToken` at registration), manifest fallback
+        // second. Never touches `project` at execution time.
+        val preResolved = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
+        val appToken = preResolved
+            ?: AppTokenResolver.resolveFromManifest(
+                manifestFile = manifest,
+                stringResourceFiles = stringResourceFiles,
+                logger = logger,
+                debug = isDebug,
+            )
         if (appToken == null) {
             logger.warn("Bugsee: Could not resolve appToken. Skipping bundle upload.")
             return
@@ -140,8 +188,12 @@ abstract class BundleUploadTask : DefaultTask() {
         val uploadZip = createUploadZip(artifactFile, mapping, buildUUID)
 
         // Best-effort VCS metadata — never fails the build.
+        // `projectDirectory` is wired from `project.layout
+        // .projectDirectory` at task registration, so we read it as
+        // a plain File here without touching `project` at execution
+        // time (CC-safe).
         val vcs = try {
-            VcsMetadataResolver.resolve(project.projectDir)
+            VcsMetadataResolver.resolve(projectDirectory.get().asFile)
         } catch (e: Exception) {
             if (isDebug) logger.warn("Bugsee: VCS metadata resolution failed: ${e.message}")
             com.bugsee.android.gradle.upload.VcsMetadata()
@@ -192,7 +244,7 @@ abstract class BundleUploadTask : DefaultTask() {
             // Chunked upload path (Phase 6, feature-flagged). Falls back
             // to the single-PUT path on any failure so CI never breaks
             // just because the chunked endpoints aren't deployed yet.
-            val chunked = extension.chunkedUpload.get()
+            val chunked = chunkedUpload.get()
             var chunkedSucceeded = false
             if (chunked) {
                 try {

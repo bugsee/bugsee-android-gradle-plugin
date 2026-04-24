@@ -1,6 +1,5 @@
 package com.bugsee.android.gradle.util
 
-import org.gradle.api.Project
 import org.gradle.api.logging.Logger
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -12,9 +11,22 @@ internal object StringResourceResolver {
     fun isStringResource(value: String): Boolean = value.startsWith(STRING_RESOURCE_START)
 
     /**
-     * Resolves a @string/ resource reference from the project's strings.xml files.
+     * Resolves a `@string/foo` resource reference against a
+     * pre-resolved list of `res/` source files.
+     *
+     * The caller is expected to hand us the `res/` source files list
+     * (pulled from `android.sourceSets.main.res.getSourceFiles()` at
+     * task-configuration time). Reading it at task-execution time
+     * via `project.extensions.findByName("android")` would be a
+     * configuration-cache violation — `project` is explicitly not
+     * available when a task replays from the CC-stored graph.
      */
-    fun resolve(project: Project, resourceIdString: String, logger: Logger, debug: Boolean): String? {
+    fun resolve(
+        sourceFiles: Iterable<File>,
+        resourceIdString: String,
+        logger: Logger,
+        debug: Boolean,
+    ): String? {
         val resourceId = resourceIdString.substring(STRING_RESOURCE_START.length)
         if (resourceId.isEmpty()) {
             logger.warn("Invalid string resource name specified: $resourceIdString")
@@ -22,13 +34,6 @@ internal object StringResourceResolver {
         }
 
         if (debug) logger.warn("resourceId: $resourceId")
-
-        val android = project.extensions.findByName("android") ?: return null
-        val sourceSets = android.javaClass.getMethod("getSourceSets").invoke(android)
-        val mainSourceSet = sourceSets.javaClass.getMethod("getByName", String::class.java).invoke(sourceSets, "main")
-        val res = mainSourceSet.javaClass.getMethod("getRes").invoke(mainSourceSet)
-        @Suppress("UNCHECKED_CAST")
-        val sourceFiles = res.javaClass.getMethod("getSourceFiles").invoke(res) as Iterable<File>
 
         val stringResourceFiles = sourceFiles.filter { it.name == "strings.xml" }
 

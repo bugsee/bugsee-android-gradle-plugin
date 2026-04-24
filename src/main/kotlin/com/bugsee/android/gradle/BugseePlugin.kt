@@ -6,6 +6,7 @@ import com.android.build.api.variant.ApplicationVariant
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
+import com.bugsee.android.gradle.upload.AppTokenResolver
 import com.bugsee.android.gradle.upload.BuildTimingService
 import com.bugsee.android.gradle.upload.BundleUploadTask
 import com.bugsee.android.gradle.upload.MappingUploadTask
@@ -19,6 +20,7 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
 import org.jetbrains.kotlin.gradle.plugin.SubpluginOption
+import java.io.File
 import javax.inject.Inject
 
 abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
@@ -269,6 +271,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     ) {
         val buildConfig = extension.sizeAnalysis.buildConfiguration
             .orElse(project.provider { variant.name })
+        val isDebug = extension.debug.getOrElse(false)
+
         // Resolve `android.compileSdk` at configuration time so the
         // task input is a plain string, not a project-scoped lookup
         // executed lazily (which would be a configuration-cache leak).
@@ -280,6 +284,42 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         val compileSdkValue = project.extensions.findByType(
             com.android.build.api.dsl.ApplicationExtension::class.java
         )?.compileSdk?.toString()
+
+        // Configuration-time app-token resolution. Invokes the three
+        // extension-level sources (closure, provider, defaultAppToken)
+        // here so the task can receive a plain `@Input String` instead
+        // of reaching into `project.extensions.getByType(...)` at
+        // execution — a configuration-cache violation.
+        val preResolvedToken: String? = AppTokenResolver.resolveFromExtension(
+            extension, variant.name, project.logger, isDebug,
+        )
+
+        // Pre-resolve the `res/` source files for the
+        // `@string/foo`-fallback path inside
+        // `AppTokenResolver.resolveFromManifest`. Passing the files
+        // via a `ConfigurableFileCollection` task input lets the
+        // resolver walk them at execution time without needing to
+        // reach back into the Android DSL (a CC leak).
+        val stringResFiles: List<File> = try {
+            val android = project.extensions.findByName("android")
+            if (android != null) {
+                val sourceSets = android.javaClass.getMethod("getSourceSets").invoke(android)
+                val mainSourceSet = sourceSets.javaClass
+                    .getMethod("getByName", String::class.java)
+                    .invoke(sourceSets, "main")
+                val res = mainSourceSet.javaClass.getMethod("getRes").invoke(mainSourceSet)
+                @Suppress("UNCHECKED_CAST")
+                (res.javaClass.getMethod("getSourceFiles").invoke(res) as Iterable<File>).toList()
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            project.logger.warn(
+                "Bugsee: could not enumerate string-resource source files — " +
+                    "`@string/foo` tokens in AndroidManifest meta-data will not resolve: ${e.message}"
+            )
+            emptyList()
+        }
 
         // AAB upload task — wired to bundle output
         val bundleUploadTaskProvider = project.tasks.register(
@@ -304,6 +344,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
+            preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            task.stringResourceFiles.from(stringResFiles)
+            task.chunkedUpload.set(extension.chunkedUpload)
+            task.projectDirectory.set(project.layout.projectDirectory)
             // The timing service is auto-wired on the task via
             // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no
             // explicit `set`/`usesService` call needed.
@@ -338,6 +382,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
+            preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            task.stringResourceFiles.from(stringResFiles)
+            task.chunkedUpload.set(extension.chunkedUpload)
+            task.projectDirectory.set(project.layout.projectDirectory)
             // Timing service auto-wired via @ServiceReference (see above).
         }
 
