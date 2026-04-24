@@ -224,6 +224,21 @@ abstract class BundleUploadTask : DefaultTask() {
         }
 
         try {
+            // VCS sub-object — nested to match the appserver's
+            // `VcsMetadataSchema`. Each field only lands if we
+            // actually resolved it, so the server distinguishes
+            // "unknown" from "known empty". The whole sub-object is
+            // omitted when no VCS fields resolved at all.
+            val vcsJson = JSONObject().apply {
+                vcs.commitSha?.let   { put("commit_sha", it) }
+                vcs.baseSha?.let     { put("base_sha", it) }
+                vcs.branch?.let      { put("branch", it) }
+                vcs.baseBranch?.let  { put("base_branch", it) }
+                vcs.prNumber?.let    { put("pr_number", it) }
+                vcs.vcsProvider?.let { put("provider", it) }
+                vcs.vcsRepo?.let     { put("repo", it) }
+            }
+
             // Build JSON metadata
             val json = JSONObject().apply {
                 put("uuid", buildUUID)
@@ -233,15 +248,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 put("build_configuration", buildConfiguration.get())
                 put("format", format.get())
                 put("has_mapping", mapping != null)
-                // VCS fields — only emit keys for values we actually learned,
-                // so the backend distinguishes "unknown" from "known empty".
-                vcs.commitSha?.let   { put("commit_sha", it) }
-                vcs.baseSha?.let     { put("base_sha", it) }
-                vcs.branch?.let      { put("branch", it) }
-                vcs.baseBranch?.let  { put("base_branch", it) }
-                vcs.prNumber?.let    { put("pr_number", it) }
-                vcs.vcsProvider?.let { put("vcs_provider", it) }
-                vcs.vcsRepo?.let     { put("vcs_repo", it) }
+                if (vcsJson.length() > 0) put("vcs", vcsJson)
                 // Machine + plugin/Gradle versions + per-category
                 // Gradle task timings (see resolveBuildMetadataJson).
                 buildMetadata?.let { put("build_metadata", it) }
