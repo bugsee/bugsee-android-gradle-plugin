@@ -35,7 +35,7 @@ abstract class ComposeInputClassVisitorFactory :
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
-        return classData.className == ANDROID_COMPOSE_VIEW_CLASS
+        return classData.className.startsWith(COMPOSE_PLATFORM_PACKAGE)
     }
 
     companion object {
