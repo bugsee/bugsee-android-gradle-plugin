@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle
 
+import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import javax.inject.Inject
@@ -36,4 +37,33 @@ abstract class BugseeSizeAnalysisExtension @Inject constructor(objects: ObjectFa
      * (e.g. `"release"`, `"freeRelease"`) when not set.
      */
     val buildConfiguration: Property<String> = objects.property(String::class.java)
+
+    /**
+     * In-build size-check configuration. See [BugseeSizeCheckExtension]
+     * for thresholds and the env-var fallback contract. The check
+     * piggybacks on the size-analysis upload so it's only available
+     * when [enabled] is `true`.
+     */
+    val sizeCheck: BugseeSizeCheckExtension =
+        objects.newInstance(BugseeSizeCheckExtension::class.java)
+
+    /**
+     * Configure the in-build size-check via a DSL block.
+     *
+     * ```kotlin
+     * bugsee {
+     *     sizeAnalysis {
+     *         enabled.set(true)
+     *         sizeCheck {
+     *             enabled.set(true)
+     *             warningPercent.set(5.0)
+     *             failPercent.set(10.0)
+     *         }
+     *     }
+     * }
+     * ```
+     */
+    fun sizeCheck(action: Action<BugseeSizeCheckExtension>) {
+        action.execute(sizeCheck)
+    }
 }

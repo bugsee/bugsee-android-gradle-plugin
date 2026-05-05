@@ -383,6 +383,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.chunkedUpload)
             task.projectDirectory.set(project.layout.projectDirectory)
+            wireSizeCheckInputs(task, project, extension.sizeAnalysis.sizeCheck)
             // The timing service is auto-wired on the task via
             // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no
             // explicit `set`/`usesService` call needed.
@@ -421,6 +422,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.chunkedUpload)
             task.projectDirectory.set(project.layout.projectDirectory)
+            wireSizeCheckInputs(task, project, extension.sizeAnalysis.sizeCheck)
             // Timing service auto-wired via @ServiceReference (see above).
         }
 
@@ -518,6 +520,82 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      */
     private fun isFeatureEnabled(property: Property<Boolean>): Boolean {
         return !property.isPresent || property.get()
+    }
+
+    /**
+     * Wires the size-check task inputs to the merged DSL + env-var
+     * source. The DSL property wins when set; otherwise the matching
+     * `BUGSEE_SIZE_CHECK_*` environment variable is consulted; when
+     * both are absent the property stays unset so the task's
+     * `@Optional` declaration takes effect.
+     *
+     * Reads the env vars via `project.providers.environmentVariable`
+     * — that registers them as configuration-cache inputs, so a
+     * changed env var on a re-run busts the cached task graph and
+     * the new threshold takes effect without a manual `--rerun`.
+     *
+     * `0` and unparseable values normalise to `0.0` / `0L` here; the
+     * task itself enforces "0 == disabled" downstream so a single
+     * place owns the rule.
+     */
+    private fun wireSizeCheckInputs(
+        task: BundleUploadTask,
+        project: Project,
+        sizeCheck: BugseeSizeCheckExtension,
+    ) {
+        val providers = project.providers
+        val logger = project.logger
+
+        fun envBool(name: String): Provider<Boolean> =
+            providers.environmentVariable(name).map {
+                it.equals("true", ignoreCase = true) || it == "1"
+            }
+
+        // For numeric env vars, malformed input collapses to "disabled"
+        // (the task's resolveSizeCheckThresholds() drops zero/negative
+        // values). A silent collapse is a real footgun — a typo like
+        // `BUGSEE_SIZE_CHECK_FAIL_PCT=10..0` becomes "no fail gate"
+        // with zero feedback. Surface a logger.warn so the user sees
+        // the misconfiguration in the build output.
+        fun envDouble(name: String): Provider<Double> =
+            providers.environmentVariable(name).map { raw ->
+                val parsed = raw.toDoubleOrNull()
+                if (parsed == null || !parsed.isFinite()) {
+                    logger.warn(
+                        "Bugsee: ignoring $name=$raw — not a finite number; " +
+                            "size-check threshold disabled"
+                    )
+                    0.0
+                } else parsed
+            }
+
+        fun envLong(name: String): Provider<Long> =
+            providers.environmentVariable(name).map { raw ->
+                val parsed = raw.toLongOrNull()
+                if (parsed == null) {
+                    logger.warn(
+                        "Bugsee: ignoring $name=$raw — not an integer; " +
+                            "size-check threshold disabled"
+                    )
+                    0L
+                } else parsed
+            }
+
+        task.sizeCheckEnabled.set(
+            sizeCheck.enabled.orElse(envBool("BUGSEE_SIZE_CHECK_ENABLED")).orElse(false)
+        )
+        task.sizeCheckWarningPercent.set(
+            sizeCheck.warningPercent.orElse(envDouble("BUGSEE_SIZE_CHECK_WARNING_PCT"))
+        )
+        task.sizeCheckFailPercent.set(
+            sizeCheck.failPercent.orElse(envDouble("BUGSEE_SIZE_CHECK_FAIL_PCT"))
+        )
+        task.sizeCheckWarningBytes.set(
+            sizeCheck.warningBytes.orElse(envLong("BUGSEE_SIZE_CHECK_WARNING_BYTES"))
+        )
+        task.sizeCheckFailBytes.set(
+            sizeCheck.failBytes.orElse(envLong("BUGSEE_SIZE_CHECK_FAIL_BYTES"))
+        )
     }
 
     /**

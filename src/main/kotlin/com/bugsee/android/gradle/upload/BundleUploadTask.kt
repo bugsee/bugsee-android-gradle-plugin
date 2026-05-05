@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.upload
 import com.bugsee.android.gradle.BugseePlugin
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
@@ -134,6 +135,36 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Internal
     abstract val projectDirectory: DirectoryProperty
 
+    // ── In-build size-check inputs ─────────────────────────────────
+    //
+    // Resolved at task registration via DSL → env-var fallback in
+    // `BugseePlugin.registerBundleUploadTask`. A `0` in any threshold
+    // is treated as "disabled" (the resolver normalises to absent),
+    // so users can leave a single gate active without having to spell
+    // out the others.
+    //
+    // All five are optional. The check is a no-op when `enabled` is
+    // unset/false or when no threshold is active.
+    @get:Input
+    @get:Optional
+    abstract val sizeCheckEnabled: Property<Boolean>
+
+    @get:Input
+    @get:Optional
+    abstract val sizeCheckWarningPercent: Property<Double>
+
+    @get:Input
+    @get:Optional
+    abstract val sizeCheckFailPercent: Property<Double>
+
+    @get:Input
+    @get:Optional
+    abstract val sizeCheckWarningBytes: Property<Long>
+
+    @get:Input
+    @get:Optional
+    abstract val sizeCheckFailBytes: Property<Long>
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -239,6 +270,15 @@ abstract class BundleUploadTask : DefaultTask() {
                 vcs.vcsRepo?.let     { put("repo", it) }
             }
 
+            // Raw artifact byte count — captured up-front (synchronous,
+            // O(1) `length()` on a File) and sent in the upload payload
+            // so the next build's size-check has a baseline to query.
+            // Distinct from the wrapper-zip's size which the upload
+            // pipeline assembles further down: the server stores the
+            // actual artifact size, not whatever the transport-layer
+            // wrapper happens to be.
+            val artifactSize = artifactFile.length()
+
             // Build JSON metadata
             val json = JSONObject().apply {
                 put("uuid", buildUUID)
@@ -248,11 +288,35 @@ abstract class BundleUploadTask : DefaultTask() {
                 put("build_configuration", buildConfiguration.get())
                 put("format", format.get())
                 put("has_mapping", mapping != null)
+                put("artifact_size", artifactSize)
                 if (vcsJson.length() > 0) put("vcs", vcsJson)
                 // Machine + plugin/Gradle versions + per-category
                 // Gradle task timings (see resolveBuildMetadataJson).
                 buildMetadata?.let { put("build_metadata", it) }
             }.toString()
+
+            // In-build size-check: resolve thresholds + fetch the
+            // baseline BEFORE upload so the lookup naturally excludes
+            // the build we are about to create. The actual evaluation
+            // (and possible throw) happens AFTER the upload so a
+            // FAIL still leaves the new build in the system for
+            // diagnosis. `null` means "not configured / no eligible
+            // baseline / lookup failed" — all of which collapse to
+            // PASS-skip.
+            val sizeCheckThresholds = resolveSizeCheckThresholds()
+            val baseline: BaselineClient.Baseline? = if (
+                sizeCheckEnabled.getOrElse(false) && sizeCheckThresholds.anyActive
+            ) {
+                BaselineClient.fetchBaseline(
+                    endpoint = endpoint.get(),
+                    appToken = appToken,
+                    packageId = packageName ?: "",
+                    format = format.get(),
+                    buildConfiguration = buildConfiguration.get(),
+                    logger = logger,
+                    debug = isDebug,
+                )
+            } else null
 
             // Chunked upload path (Phase 6, feature-flagged). Falls back
             // to the single-PUT path on any failure so CI never breaks
@@ -294,10 +358,62 @@ abstract class BundleUploadTask : DefaultTask() {
                     logger.error("Bugsee: bundle upload failed (size analysis unavailable for this build): ${e.message}")
                 }
             }
+
+            // Evaluate size-check thresholds AFTER the upload so a
+            // failing build is still recorded server-side (the user
+            // wants the failed artifact in the dashboard for
+            // diagnosis). When the lookup yielded no baseline (first
+            // build / network hiccup / lookup disabled), there's
+            // nothing to compare against — log an info breadcrumb
+            // and skip.
+            if (baseline != null) {
+                val result = SizeCheckEvaluator.evaluate(
+                    localSize = artifactSize,
+                    baselineSize = baseline.artifactSize,
+                    thresholds = sizeCheckThresholds,
+                )
+                val message = SizeCheckEvaluator.formatMessage(
+                    localSize = artifactSize,
+                    baselineSize = baseline.artifactSize,
+                    baselineVersion = baseline.version,
+                    baselineBuild = baseline.build,
+                    result = result,
+                )
+                when (result.outcome) {
+                    SizeCheckEvaluator.Outcome.PASS -> {
+                        if (isDebug) logger.warn(message)
+                    }
+                    SizeCheckEvaluator.Outcome.WARN -> logger.warn(message)
+                    SizeCheckEvaluator.Outcome.FAIL -> throw GradleException(message)
+                }
+            } else if (sizeCheckEnabled.getOrElse(false) && sizeCheckThresholds.anyActive) {
+                logger.info("Bugsee: size-check skipped — no baseline available")
+            }
         } finally {
             uploadZip.delete()
         }
     }
+
+    /**
+     * Collapse the configured threshold properties into the evaluator's
+     * shape, dropping any value that is unset, non-finite, or `<= 0`.
+     * The "0 == disabled" rule lives here so every code path downstream
+     * sees a uniform `null` for "not active".
+     *
+     * Non-finite (`NaN` / `±Infinity`) values are dropped explicitly:
+     * `NaN > 0.0` is already `false` so it would land as `null` either
+     * way, but `Double.POSITIVE_INFINITY > 0.0` is `true` and would
+     * survive — producing a gate that can never trigger. Treat both as
+     * "disabled" so a misconfigured DSL value behaves the same as an
+     * unset one.
+     */
+    private fun resolveSizeCheckThresholds(): SizeCheckEvaluator.Thresholds =
+        SizeCheckEvaluator.Thresholds(
+            warningPercent = sizeCheckWarningPercent.orNull?.takeIf { it.isFinite() && it > 0.0 },
+            failPercent    = sizeCheckFailPercent.orNull?.takeIf { it.isFinite() && it > 0.0 },
+            warningBytes   = sizeCheckWarningBytes.orNull?.takeIf { it > 0L },
+            failBytes      = sizeCheckFailBytes.orNull?.takeIf { it > 0L },
+        )
 
     /**
      * Assembles the `build_metadata` sub-object sent alongside the
