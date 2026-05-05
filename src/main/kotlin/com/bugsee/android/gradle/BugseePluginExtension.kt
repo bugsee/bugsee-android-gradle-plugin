@@ -10,9 +10,11 @@ import javax.inject.Inject
  *
  * ```kotlin
  * bugsee {
+ *     appToken("your-app-token")
  *     endpoint.set("https://api.bugsee.com")
  *     debug.set(false)
  *     ndk.set(false)
+ *     feedback.set(false)
  *     sizeAnalysis {
  *         enabled.set(true)
  *         buildConfiguration.set("release")
@@ -64,6 +66,17 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * Default: `false`
      */
     val ndkForceUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
+     * Include the Bugsee in-app feedback module.
+     *
+     * When `true`, the plugin auto-adds `com.bugsee:bugsee-android-feedback` to the
+     * consuming app's `implementation` configuration, enabling the in-app feedback /
+     * report-submission UI. Skipped if the app already declares the artifact.
+     *
+     * Default: `false`
+     */
+    val feedback: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
      * Use the chunked upload protocol instead of a single PUT for size-analysis bundles.
@@ -183,5 +196,16 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      */
     fun ndk(enabled: Boolean) {
         ndk.set(enabled)
+    }
+
+    /**
+     * Convenience method to enable or disable the in-app feedback module.
+     *
+     * Equivalent to `feedback.set(enabled)`.
+     *
+     * @param enabled `true` to pull in the Bugsee feedback module.
+     */
+    fun feedback(enabled: Boolean) {
+        feedback.set(enabled)
     }
 }

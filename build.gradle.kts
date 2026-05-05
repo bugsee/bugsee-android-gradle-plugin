@@ -60,6 +60,12 @@ tasks.named<Copy>("processResources") {
         rename { "bugsee-plugin-version.txt" }
         filter { fullVersion }
     }
+    // Minimum compatible Bugsee Android SDK version. Used by the plugin's
+    // dependency auto-add logic to pull in the core SDK when the consuming
+    // app does not declare it. Plain pass-through; no filtering.
+    from("sdk-min-version.txt") {
+        rename { "bugsee-sdk-min-version.txt" }
+    }
 }
 
 gradlePlugin {

@@ -13,6 +13,9 @@ import com.bugsee.android.gradle.upload.MappingUploadTask
 import com.bugsee.android.gradle.upload.NativeUploadTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.artifacts.Dependency
+import org.gradle.api.artifacts.DependencySet
+import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.build.event.BuildEventsListenerRegistry
@@ -85,6 +88,38 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     if (projectGroup.startsWith("com.bugsee")
                             || project.name in BUGSEE_INTERNAL_MODULE_NAMES) {
                         return@withDependencies
+                    }
+
+                    // Auto-add the core Bugsee SDK if the consuming app has
+                    // not declared one. Dynamic version range with the
+                    // plugin's MIN_SDK_VERSION as a floor — the consumer
+                    // automatically picks up newer compatible SDK releases
+                    // without bumping the plugin. If the user has declared
+                    // their own version on any configuration (`api`,
+                    // `compileOnly`, variant configs, …), defer to it
+                    // rather than layering a dynamic dep on top.
+                    if (!isCoreSdkPresent(project)) {
+                        if (isDebug) {
+                            project.logger.warn(
+                                "Bugsee: Auto-adding bugsee-android runtime dependency >= $MIN_SDK_VERSION"
+                            )
+                        }
+                        deps.add(
+                            project.dependencies.create(
+                                "com.bugsee:bugsee-android:[$MIN_SDK_VERSION,)"
+                            )
+                        )
+                    }
+
+                    // Optional SDK modules driven by user opt-in via the
+                    // `bugsee { ndk(true); feedback(true) }` DSL. Same
+                    // already-declared check as the auto-instrumented
+                    // modules below.
+                    if (extension.ndk.get()) {
+                        autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug)
+                    }
+                    if (extension.feedback.get()) {
+                        autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug)
                     }
 
                     if (hasComposeDependency(project) && isFeatureEnabled(inst.compose)) {
@@ -486,21 +521,64 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     /**
+     * Returns `true` when the consuming project already declares the Bugsee
+     * core SDK on **any** configuration (`implementation`, `api`,
+     * `compileOnly`, variant- or flavor-specific configs, …) — either as a
+     * Maven coordinate (`com.bugsee:bugsee-android`) or as a project
+     * dependency on the SDK's `:library` / `:stub` modules during local
+     * development.
+     *
+     * Used to suppress the core-SDK auto-add when the user has pinned
+     * their own version. Scanning across all configurations matters because
+     * a dep declared on `api` is what feeds `implementation`'s resolved
+     * graph, and adding a duplicate dynamic-version dep on top would let
+     * Gradle's conflict resolver silently override the user's pin.
+     */
+    private fun isCoreSdkPresent(project: Project): Boolean {
+        return project.configurations.any { config ->
+            config.dependencies.any { dep ->
+                isCoreSdkExternal(dep) || isCoreSdkProjectDep(dep)
+            }
+        }
+    }
+
+    private fun isCoreSdkExternal(dep: Dependency): Boolean {
+        return dep.group == BUGSEE_GROUP && dep.name == "bugsee-android"
+    }
+
+    /**
+     * Project-dep match for the SDK's `:library` / `:stub` modules.
+     * Requires the dependency project to declare `GROUP=com.bugsee` (set
+     * via the SDK repo's `gradle.properties`) so that an unrelated consumer
+     * submodule named `library` does not false-match.
+     */
+    private fun isCoreSdkProjectDep(dep: Dependency): Boolean {
+        if (dep !is ProjectDependency) return false
+        val depProject = dep.dependencyProject
+        if (depProject.findProperty("GROUP") != BUGSEE_GROUP) return false
+        return depProject.name == "library" || depProject.name == "stub"
+    }
+
+    /**
      * Adds a Bugsee extension module dependency if not already present.
      * Checks both Maven coordinates (`com.bugsee:{artifactName}`) and
-     * project dependencies (`:${projectName}`) to avoid duplicates.
+     * project dependencies (`:${projectName}`) to avoid duplicates. Scans
+     * all configurations on the consuming project, not just `implementation`.
      */
     private fun autoAddModule(
         project: Project,
-        deps: org.gradle.api.artifacts.DependencySet,
+        deps: DependencySet,
         artifactName: String,
         projectName: String,
         isDebug: Boolean
     ) {
-        val alreadyPresent = deps.any { dep ->
-            (dep.group == "com.bugsee" && dep.name == artifactName) ||
-                (dep is org.gradle.api.artifacts.ProjectDependency &&
-                    dep.dependencyProject.name == projectName)
+        val alreadyPresent = project.configurations.any { config ->
+            config.dependencies.any { dep ->
+                (dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
+                    (dep is ProjectDependency &&
+                        dep.dependencyProject.findProperty("GROUP") == BUGSEE_GROUP &&
+                        dep.dependencyProject.name == projectName)
+            }
         }
         if (!alreadyPresent) {
             if (isDebug) project.logger.warn("Bugsee: Auto-adding $artifactName runtime dependency")
@@ -510,6 +588,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     companion object {
         private const val PLUGIN_NAME = "bugsee"
+        // Maven group of all Bugsee artifacts. Centralised so dependency
+        // detection and auto-add logic agree.
+        private const val BUGSEE_GROUP = "com.bugsee"
         // Shared-services key for the per-build timing collector.
         // Referenced by both the plugin's apply() registration and
         // the per-variant task wiring so both land on the same
@@ -519,6 +600,23 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             BugseePlugin::class.java.getResourceAsStream("/bugsee-plugin-version.txt")
                 ?.bufferedReader()?.readText()?.trim()
                 ?: "4.99.118-SNAPSHOT"
+        }
+
+        // Minimum compatible Bugsee Android SDK version. Used when the plugin
+        // auto-adds the core SDK to a consuming app that hasn't declared it.
+        // Read from a resource at the same time as PLUGIN_VERSION so a single
+        // plugin release pins both numbers via files in the plugin source.
+        // Hard-fails on missing resource: a stale fallback would silently
+        // let the plugin pull in an old SDK that lacks APIs the plugin
+        // assumes after a future bump, and the resource is always packaged
+        // by `processResources` — its absence indicates a broken build.
+        internal val MIN_SDK_VERSION: String by lazy {
+            BugseePlugin::class.java.getResourceAsStream("/bugsee-sdk-min-version.txt")
+                ?.bufferedReader()?.readText()?.trim()
+                ?: error(
+                    "bugsee-sdk-min-version.txt missing from plugin classpath — " +
+                        "broken plugin JAR or partial install."
+                )
         }
 
         /**
@@ -535,14 +633,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         private val BUGSEE_INTERNAL_MODULE_NAMES = setOf(
             "library",
             "stub",
+            "ndk",
+            "ai",
             "compose",
             "feedback",
             "remoting",
             "okhttp",
             "ktor-2",
             "ktor-3",
-            "cronet",
-            "interoperation"
+            "cronet"
         )
     }
 }
