@@ -10,7 +10,7 @@ gradle-app.setting
 local.properties
 
 
-# Various auxiliary directories
+# Various auxiliary directories and files
 bin
 .idea
 .vscode
@@ -18,3 +18,4 @@ bin
 .project
 .settings/
 node-compile-cache/
+.DS_Store
