@@ -320,13 +320,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             com.android.build.api.dsl.ApplicationExtension::class.java
         )?.compileSdk?.toString()
 
-        // Configuration-time app-token resolution. Invokes the three
+        // Configuration-time app-token resolution. Invokes the
         // extension-level sources (closure, provider, defaultAppToken)
-        // here so the task can receive a plain `@Input String` instead
-        // of reaching into `project.extensions.getByType(...)` at
-        // execution — a configuration-cache violation.
+        // and falls through to the dedicated `bugsee.properties` file at
+        // the project root. Both run here so the task can receive a
+        // plain `@Input String` instead of reaching into
+        // `project.extensions.getByType(...)` at execution — a
+        // configuration-cache violation.
         val preResolvedToken: String? = AppTokenResolver.resolveFromExtension(
             extension, variant.name, project.logger, isDebug,
+        ) ?: AppTokenResolver.resolveFromPropertiesFile(
+            project.rootProject.projectDir, project.logger, isDebug,
         )
 
         // Pre-resolve the `res/` source files for the

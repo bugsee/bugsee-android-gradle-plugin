@@ -9,6 +9,8 @@ import java.io.File
 internal object AppTokenResolver {
 
     private const val APP_TOKEN_TAG = "com.bugsee.android.APP_TOKEN"
+    private const val PROPERTIES_FILE_NAME = "bugsee.properties"
+    private const val PROPERTIES_TOKEN_KEY = "app_token"
 
     private fun maskToken(token: String): String {
         if (token.length <= 8) return "****"
@@ -59,6 +61,57 @@ internal object AppTokenResolver {
             }
         }
         return null
+    }
+
+    /**
+     * Read the app token from `<rootProject>/bugsee.properties`. The
+     * dedicated properties file is the wizard's storage of choice — kept
+     * out of source control via `.gitignore` so secrets don't get
+     * committed alongside build configuration.
+     *
+     * Slots into the resolver chain *between* the DSL forms (closure /
+     * provider / `defaultAppToken`) and the manifest fallback. DSL beats
+     * properties because it's prominent and explicit; properties beats
+     * manifest because the manifest is a runtime-config surface, not a
+     * build-time secrets source.
+     *
+     * Takes a plain `File` rather than `Project` so callers can wire the
+     * `rootProject.projectDir` into a configuration-cache-friendly task
+     * input at registration time.
+     */
+    fun resolveFromPropertiesFile(
+        rootProjectDir: File,
+        logger: Logger,
+        debug: Boolean,
+    ): String? {
+        val file = File(rootProjectDir, PROPERTIES_FILE_NAME)
+        if (!file.isFile) return null
+        val props = java.util.Properties()
+        try {
+            file.inputStream().use { props.load(it) }
+        } catch (e: Exception) {
+            logger.warn("Bugsee: Failed to read ${file.path}: ${e.message}")
+            return null
+        }
+        val rawValue = props.getProperty(PROPERTIES_TOKEN_KEY)
+        val token = rawValue?.trim().orEmpty()
+        if (token.isEmpty()) {
+            // Differentiate "key absent" from "key present but empty" so
+            // a user with `app_token=` (cleared during editing) gets a
+            // visible diagnostic instead of silent fallback to manifest.
+            if (rawValue != null) {
+                logger.warn(
+                    "Bugsee: ${file.name} declares ${PROPERTIES_TOKEN_KEY} with an empty value — falling through to next resolver source.",
+                )
+            }
+            return null
+        }
+        if (debug) {
+            logger.warn(
+                "Bugsee: Using ${file.name}:${PROPERTIES_TOKEN_KEY}: ${maskToken(token)}",
+            )
+        }
+        return token
     }
 
     /**
@@ -125,6 +178,8 @@ internal object AppTokenResolver {
         debug: Boolean,
     ): String? {
         resolveFromExtension(extension, variantName, logger, debug)?.let { return it }
+        resolveFromPropertiesFile(project.rootProject.projectDir, logger, debug)
+            ?.let { return it }
 
         val sourceFiles: Iterable<File> = try {
             val android = project.extensions.findByName("android")
