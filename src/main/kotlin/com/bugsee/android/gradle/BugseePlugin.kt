@@ -177,7 +177,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     registerNativeUploadTask(project, variant, extension, capitalizedVariant)
                 }
 
-                if (extension.sizeAnalysis.enabled.getOrElse(false)) {
+                // Build-info registration runs by default for every
+                // matching variant. Size analysis is a sub-feature
+                // that piggybacks on the same task — when both are
+                // active, the task additionally requests a presigned
+                // PUT URL and ships the artefact bytes.
+                if (shouldRegisterBuildInfoFor(project, variant, extension, isDebug)) {
                     registerBundleUploadTask(project, variant, extension, capitalizedVariant)
                 }
             }
@@ -386,8 +391,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.chunkedUpload)
+            task.requestArtifactUpload.set(extension.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
-            wireSizeCheckInputs(task, project, extension.sizeAnalysis.sizeCheck)
+            wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
             // The timing service is auto-wired on the task via
             // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no
             // explicit `set`/`usesService` call needed.
@@ -425,8 +431,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.chunkedUpload)
+            task.requestArtifactUpload.set(extension.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
-            wireSizeCheckInputs(task, project, extension.sizeAnalysis.sizeCheck)
+            wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
             // Timing service auto-wired via @ServiceReference (see above).
         }
 
@@ -524,6 +531,114 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      */
     private fun isFeatureEnabled(property: Property<Boolean>): Boolean {
         return !property.isPresent || property.get()
+    }
+
+    /**
+     * Per-variant decision on whether to register the build-info
+     * upload task. Centralises three concerns:
+     *
+     *   1. `buildInfo.enabled` — the master gate (default `true`).
+     *   2. Validation: if `sizeAnalysis.enabled = true` is set while
+     *      `buildInfo.enabled = false`, log a warning and skip both.
+     *      Size analysis on its own would have nothing to attach to.
+     *   3. Release-only filter: by default only non-debuggable build
+     *      types register, since users typically don't want every
+     *      debug rebuild flooding the dashboard. Override via
+     *      `buildInfo.allBuildTypes.set(true)`.
+     *
+     * Returns `false` for any variant that fails any of the three.
+     * Logs decisions at `info` level when debug mode is on so users
+     * troubleshooting "why didn't my build register" have a
+     * breadcrumb in the build log.
+     */
+    private fun shouldRegisterBuildInfoFor(
+        project: Project,
+        variant: ApplicationVariant,
+        extension: BugseePluginExtension,
+        isDebug: Boolean,
+    ): Boolean {
+        val buildInfoEnabled = extension.buildInfo.enabled.getOrElse(true)
+        val sizeAnalysisEnabled = extension.sizeAnalysis.enabled.getOrElse(false)
+
+        if (!buildInfoEnabled) {
+            // Configuration error: sizeAnalysis is meaningless without
+            // build-info. The warning is hoisted to a project-level
+            // one-shot guard (see logSizeAnalysisMisconfigOnce below)
+            // so an app with N variants doesn't print N copies of the
+            // same diagnostic.
+            if (sizeAnalysisEnabled) {
+                logSizeAnalysisMisconfigOnce(project)
+            }
+            if (isDebug) {
+                project.logger.warn(
+                    "Bugsee: skipping ${variant.name} — buildInfo is disabled"
+                )
+            }
+            return false
+        }
+
+        if (!isReleaseLikeVariant(project, variant) &&
+            !extension.buildInfo.allBuildTypes.getOrElse(false)) {
+            if (isDebug) {
+                project.logger.warn(
+                    "Bugsee: skipping non-release variant '${variant.name}' — " +
+                        "set buildInfo.allBuildTypes(true) to include it"
+                )
+            }
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * Per-project flag that's flipped the first time the
+     * sizeAnalysis-on / buildInfo-off misconfiguration warning fires.
+     * `onVariants` invokes [shouldRegisterBuildInfoFor] once per
+     * `ApplicationVariant`, so a multi-flavor app would otherwise
+     * emit the same warning N times. Stored on `project.extensions`
+     * via a small extra-properties marker rather than an instance
+     * field on the plugin (the plugin instance is shared across
+     * subprojects and using a field would coalesce warnings across
+     * unrelated apps).
+     */
+    private fun logSizeAnalysisMisconfigOnce(project: Project) {
+        val key = "bugseeSizeAnalysisMisconfigWarned"
+        val extra = project.extensions.extraProperties
+        if (extra.has(key) && extra.get(key) == true) {
+            return
+        }
+        extra.set(key, true)
+        project.logger.warn(
+            "Bugsee: sizeAnalysis is enabled but buildInfo is disabled — " +
+                "sizeAnalysis is a no-op without buildInfo. Either enable " +
+                "buildInfo or disable sizeAnalysis."
+        )
+    }
+
+    /**
+     * Resolve the variant's build-type definition and return `true`
+     * when it's NOT debuggable. Used as the release-only filter for
+     * build-info registration.
+     *
+     * AGP doesn't expose `isDebuggable` directly on the variant in
+     * recent versions — we read it from `android.buildTypes` via the
+     * variant's build-type name. Falls back to a name-based heuristic
+     * (`!buildType.contains("debug")`) if the lookup fails for any
+     * reason; that's looser than the DSL flag but still drops the
+     * default `debug` and any custom `*Debug` types.
+     */
+    private fun isReleaseLikeVariant(project: Project, variant: ApplicationVariant): Boolean {
+        val buildTypeName = variant.buildType ?: return false
+        val androidExt = project.extensions.findByType(
+            com.android.build.api.dsl.ApplicationExtension::class.java
+        )
+        val buildType = androidExt?.buildTypes?.findByName(buildTypeName)
+        return if (buildType != null) {
+            !buildType.isDebuggable
+        } else {
+            !buildTypeName.lowercase().contains("debug")
+        }
     }
 
     /**

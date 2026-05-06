@@ -1,12 +1,16 @@
 package com.bugsee.android.gradle
 
-import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import javax.inject.Inject
 
 /**
- * DSL block for configuring build size-analysis uploads.
+ * DSL block for configuring the optional size-analysis upload of the
+ * build artefact (AAB / APK). Size analysis is a sub-feature of
+ * `buildInfo` — it requires `bugsee.buildInfo.enabled = true` and
+ * piggybacks on the same per-variant upload task. When enabled, the
+ * task additionally requests a presigned PUT URL from the appserver
+ * and ships the artefact zip for server-side tree analysis.
  *
  * ```kotlin
  * bugsee {
@@ -16,6 +20,11 @@ import javax.inject.Inject
  *     }
  * }
  * ```
+ *
+ * The in-build size-check thresholds (warning / fail percent / bytes)
+ * live under [BugseeBuildInfoExtension.sizeCheck], NOT here — the
+ * check only needs the recorded `artifact_size` scalar (always sent
+ * as part of build-info), not the full size-tree analysis.
  */
 abstract class BugseeSizeAnalysisExtension @Inject constructor(objects: ObjectFactory) {
 
@@ -24,6 +33,11 @@ abstract class BugseeSizeAnalysisExtension @Inject constructor(objects: ObjectFa
      *
      * When `true`, the plugin uploads the build artifact (APK or AAB) to the
      * Bugsee backend for size tracking and comparison across builds.
+     *
+     * Requires `bugsee.buildInfo.enabled = true` (the default). When
+     * `buildInfo` is disabled and `sizeAnalysis` is enabled, the plugin
+     * logs a warning and skips both — size analysis on its own would
+     * have nothing to attach to.
      *
      * Default: `false`
      */
@@ -37,33 +51,4 @@ abstract class BugseeSizeAnalysisExtension @Inject constructor(objects: ObjectFa
      * (e.g. `"release"`, `"freeRelease"`) when not set.
      */
     val buildConfiguration: Property<String> = objects.property(String::class.java)
-
-    /**
-     * In-build size-check configuration. See [BugseeSizeCheckExtension]
-     * for thresholds and the env-var fallback contract. The check
-     * piggybacks on the size-analysis upload so it's only available
-     * when [enabled] is `true`.
-     */
-    val sizeCheck: BugseeSizeCheckExtension =
-        objects.newInstance(BugseeSizeCheckExtension::class.java)
-
-    /**
-     * Configure the in-build size-check via a DSL block.
-     *
-     * ```kotlin
-     * bugsee {
-     *     sizeAnalysis {
-     *         enabled.set(true)
-     *         sizeCheck {
-     *             enabled.set(true)
-     *             warningPercent.set(5.0)
-     *             failPercent.set(10.0)
-     *         }
-     *     }
-     * }
-     * ```
-     */
-    fun sizeCheck(action: Action<BugseeSizeCheckExtension>) {
-        action.execute(sizeCheck)
-    }
 }

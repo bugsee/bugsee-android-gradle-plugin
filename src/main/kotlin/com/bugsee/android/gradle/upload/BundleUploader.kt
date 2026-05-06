@@ -16,7 +16,16 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Two-stage uploader for app bundles (AAB/APK) to the Bugsee backend.
+ * Uploader for the Bugsee `/builds` endpoint. Two flows share this
+ * code path:
+ *
+ *   - **build-info only** (default): one POST with metadata. Server
+ *     creates the record at `size_analysis_status='unavailable'` and
+ *     returns just the `build_id` — no presigned URL, no PUT.
+ *   - **build-info + size-analysis**: same POST, but with
+ *     `request_artifact_upload: true` in the body. Server signs a PUT
+ *     URL and we ship the artefact bytes. Status starts at
+ *     `'uploading'` and the worker promotes it once the artefact lands.
  *
  * Mirrors [SymbolUploader] but targets the `/builds` endpoint
  * instead of `/symbols`.
@@ -35,22 +44,35 @@ internal object BundleUploader {
         if (token.length <= 8) "****" else "${token.take(4)}…${token.takeLast(4)}"
 
     /**
-     * Two-stage upload:
-     * 1. POST JSON metadata to get a presigned URL
-     * 2. PUT the file to the presigned URL
+     * POST metadata to `/builds`, optionally followed by a PUT of the
+     * artefact bytes when the server signed a presigned URL.
      *
-     * @param file The AAB or APK file to upload
-     * @param json JSON metadata string
-     * @param appToken The Bugsee app token
-     * @param endpoint The Bugsee API endpoint
-     * @param logger Gradle logger
-     * @param debug Whether debug logging is enabled
+     * The metadata POST runs whenever this method is invoked. The PUT
+     * is conditional: when [requestArtifactUpload] is `true` the
+     * server returns an `endpoint` URL and we stream [file] there;
+     * when `false`, the response carries no `endpoint` and the
+     * request is metadata-only (build-info path).
+     *
+     * @param file The AAB or APK file to upload (only consumed when
+     *             the response includes a presigned URL).
+     * @param json JSON metadata string. The caller is responsible for
+     *             setting `request_artifact_upload` inside the body
+     *             to match [requestArtifactUpload].
+     * @param appToken The Bugsee app token.
+     * @param endpoint The Bugsee API endpoint base URL.
+     * @param requestArtifactUpload Whether the body has asked the
+     *             server for a presigned PUT URL. When `false` the
+     *             absence of `endpoint` in the response is success
+     *             (build-info-only). When `true` it's an error.
+     * @param logger Gradle logger.
+     * @param debug Whether debug logging is enabled.
      */
     fun uploadData(
         file: File,
         json: String,
         appToken: String,
         endpoint: String,
+        requestArtifactUpload: Boolean,
         logger: Logger,
         debug: Boolean
     ) {
@@ -90,7 +112,7 @@ internal object BundleUploader {
                 ?: throw RuntimeException("Bugsee bundle upload step 1: no response body")
 
             val contentText = EntityUtils.toString(resEntity, "utf-8")
-            if (debug) logger.warn("Bugsee: Bundle upload step 2. Response: $contentText")
+            if (debug) logger.warn("Bugsee: Bundle upload response: $contentText")
 
             // Server may reply with XML (S3 or CDN) or HTML error page —
             // catch the parse failure so the user sees a meaningful
@@ -103,6 +125,25 @@ internal object BundleUploader {
             val payload = ApiEndpoint.unwrapResult(responseBody)
 
             val presignedEndpoint = payload.optString("endpoint", "")
+
+            // Build-info-only path: no `endpoint` is expected, the
+            // POST already did everything we need. Confirm the
+            // response carries the build_id and return — no PUT.
+            if (!requestArtifactUpload) {
+                if (presignedEndpoint.isNotEmpty()) {
+                    // Server returned a URL we didn't ask for. Treat
+                    // as a server bug rather than a hard failure —
+                    // we don't have the artefact ready and shouldn't
+                    // upload one we weren't planning to.
+                    logger.warn(
+                        "Bugsee: build-info upload received an unexpected presigned URL — ignoring."
+                    )
+                }
+                if (debug) logger.warn("Bugsee: Build-info upload complete.")
+                return@use
+            }
+
+            // Size-analysis path: presigned URL is required.
             if (presignedEndpoint.isEmpty()) {
                 val error = responseBody.optJSONObject("error") ?: payload.optJSONObject("error")
                 if (error != null) {

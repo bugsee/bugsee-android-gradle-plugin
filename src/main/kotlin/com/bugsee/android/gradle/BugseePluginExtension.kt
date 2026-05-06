@@ -90,9 +90,42 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val chunkedUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
+     * Build-info configuration block. Always-on by default; registers
+     * a Bugsee build record on every release variant with metadata
+     * (version, build, package_id, VCS, machine, plugin/SDK
+     * versions, timings, artefact file size). The in-build size-check
+     * thresholds also live under this block.
+     *
+     * Disable via `buildInfo { enabled.set(false) }` to opt out
+     * entirely (e.g. for firewalled CI).
+     */
+    val buildInfo: BugseeBuildInfoExtension = objects.newInstance(BugseeBuildInfoExtension::class.java)
+
+    /**
+     * Configure build-info via a DSL block.
+     *
+     * ```kotlin
+     * bugsee {
+     *     buildInfo {
+     *         enabled.set(true)
+     *         allBuildTypes.set(false)
+     *         sizeCheck { … }
+     *     }
+     * }
+     * ```
+     */
+    fun buildInfo(action: Action<BugseeBuildInfoExtension>) {
+        action.execute(buildInfo)
+    }
+
+    /**
      * Size analysis configuration block.
      *
-     * Disabled by default. Enable via `sizeAnalysis { enabled.set(true) }`.
+     * Sub-feature of `buildInfo`. Disabled by default. When enabled,
+     * the build-info task additionally uploads the artefact bytes
+     * for server-side tree analysis. Requires `buildInfo.enabled =
+     * true` (the default) — the plugin logs a warning and skips both
+     * if `sizeAnalysis` is enabled while `buildInfo` is off.
      */
     val sizeAnalysis: BugseeSizeAnalysisExtension = objects.newInstance(BugseeSizeAnalysisExtension::class.java)
 

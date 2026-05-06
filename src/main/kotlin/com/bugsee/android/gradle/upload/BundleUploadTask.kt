@@ -121,6 +121,19 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Input
     abstract val chunkedUpload: Property<Boolean>
 
+    // `true` when the user has enabled `bugsee.sizeAnalysis.enabled`.
+    // The task is registered whenever `buildInfo.enabled` is on (the
+    // default); this flag controls whether the metadata POST also
+    // requests a presigned URL for the artefact bytes. Mirrors the
+    // appserver's `request_artifact_upload` body field.
+    //
+    //   - `false` (default): metadata-only POST, server returns
+    //     `size_analysis_status: 'unavailable'`. Build-info path.
+    //   - `true`: same POST + `request_artifact_upload: true`. Server
+    //     returns a presigned PUT URL; the task ships the artefact.
+    @get:Input
+    abstract val requestArtifactUpload: Property<Boolean>
+
     // Project root — handed to `VcsMetadataResolver.resolve(...)` so
     // it can shell out to `git` when no CI provider env matches.
     // Wired from `project.layout.projectDirectory` at registration;
@@ -279,6 +292,8 @@ abstract class BundleUploadTask : DefaultTask() {
             // wrapper happens to be.
             val artifactSize = artifactFile.length()
 
+            val wantsArtifactUpload = requestArtifactUpload.getOrElse(false)
+
             // Build JSON metadata
             val json = JSONObject().apply {
                 put("uuid", buildUUID)
@@ -289,6 +304,10 @@ abstract class BundleUploadTask : DefaultTask() {
                 put("format", format.get())
                 put("has_mapping", mapping != null)
                 put("artifact_size", artifactSize)
+                // Server reads this to decide whether to start the
+                // record at `'unavailable'` (build-info only) or
+                // `'uploading'` (sign + return a presigned PUT URL).
+                put("request_artifact_upload", wantsArtifactUpload)
                 if (vcsJson.length() > 0) put("vcs", vcsJson)
                 // Machine + plugin/Gradle versions + per-category
                 // Gradle task timings (see resolveBuildMetadataJson).
@@ -318,10 +337,12 @@ abstract class BundleUploadTask : DefaultTask() {
                 )
             } else null
 
-            // Chunked upload path (Phase 6, feature-flagged). Falls back
+            // Chunked upload path (Phase 6, feature-flagged). Only
+            // meaningful when an artefact upload was requested — the
+            // build-info-only path has nothing to chunk. Falls back
             // to the single-PUT path on any failure so CI never breaks
             // just because the chunked endpoints aren't deployed yet.
-            val chunked = chunkedUpload.get()
+            val chunked = wantsArtifactUpload && chunkedUpload.get()
             var chunkedSucceeded = false
             if (chunked) {
                 try {
@@ -340,10 +361,10 @@ abstract class BundleUploadTask : DefaultTask() {
             }
 
             if (!chunkedSucceeded) {
-                // Upload: POST metadata → presigned URL → PUT file.
+                // POST metadata; PUT file too when wantsArtifactUpload.
                 // BundleUploader throws on any failure so the cause is
-                // observable, but size-analysis is best-effort — log at
-                // error level and swallow so a flaky upload doesn't
+                // observable, but the whole flow is best-effort — log
+                // at error level and swallow so a flaky network doesn't
                 // kill an otherwise-green CI build.
                 try {
                     BundleUploader.uploadData(
@@ -351,11 +372,12 @@ abstract class BundleUploadTask : DefaultTask() {
                         json = json,
                         appToken = appToken,
                         endpoint = endpoint.get(),
+                        requestArtifactUpload = wantsArtifactUpload,
                         logger = logger,
                         debug = isDebug
                     )
                 } catch (e: Exception) {
-                    logger.error("Bugsee: bundle upload failed (size analysis unavailable for this build): ${e.message}")
+                    logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${e.message}")
                 }
             }
 
