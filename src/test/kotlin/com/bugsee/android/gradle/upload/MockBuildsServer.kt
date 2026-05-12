@@ -38,7 +38,8 @@ internal class MockBuildsServer(
     data class Recorded(
         val method: String,
         val path: String,
-        val body: ByteArray
+        val body: ByteArray,
+        val headers: Map<String, String>
     )
 
     private data class Override(val status: Int, val body: String, var remaining: Int)
@@ -141,7 +142,16 @@ internal class MockBuildsServer(
                 val method = exchange.requestMethod
                 val path = exchange.requestURI.path
                 val body = exchange.requestBody.readAllBytes()
-                requestLog.add(Recorded(method, path, body))
+                // Capture headers lower-cased so tests don't have to
+                // know HTTP/1.1's case-insensitive name semantics.
+                // HttpExchange returns the first value as the only
+                // value for the headers we care about (Content-Type,
+                // Content-Length); multi-valued headers aren't
+                // expected here.
+                val headers = exchange.requestHeaders.entries.associate { (k, v) ->
+                    k.lowercase() to (v.firstOrNull() ?: "")
+                }
+                requestLog.add(Recorded(method, path, body, headers))
 
                 matchOverride(method, path)?.let { o ->
                     sendString(exchange, o.status, o.body)

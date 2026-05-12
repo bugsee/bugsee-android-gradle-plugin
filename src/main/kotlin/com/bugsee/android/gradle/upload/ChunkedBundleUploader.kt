@@ -259,6 +259,14 @@ internal object ChunkedBundleUploader {
             try {
                 val put = HttpPut(presignedUrl)
                 put.entity = ByteArrayEntity(reusable, 0, wanted)
+                // S3 signs the presigned URL with an explicit
+                // `application/octet-stream` Content-Type (see
+                // chunks.service.js#checkChunks). Without this
+                // header the request body is unsigned-equivalent
+                // for the CT line and S3 403s with
+                // "SignatureDoesNotMatch". Default HttpClient
+                // omits Content-Type for ByteArrayEntity.
+                put.setHeader("Content-Type", "application/octet-stream")
                 http.execute(put).use { response ->
                     val status = response.statusLine.statusCode
                     if (status in 200..299) return

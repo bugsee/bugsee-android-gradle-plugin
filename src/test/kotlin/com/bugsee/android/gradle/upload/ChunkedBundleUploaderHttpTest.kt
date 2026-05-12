@@ -272,6 +272,33 @@ class ChunkedBundleUploaderHttpTest {
         assertTrue(ex.message!!.contains("chunk_size"), "actual: ${ex.message}")
     }
 
+    @Test fun `chunk PUT carries Content-Type application slash octet-stream`() {
+        // Regression: the appserver signs the presigned URL with
+        // `application/octet-stream` (chunks.service.js#checkChunks).
+        // The client MUST send a matching Content-Type or S3 403s
+        // with SignatureDoesNotMatch. Apache HttpClient's
+        // ByteArrayEntity sends no Content-Type by default — caught
+        // live against apidev, the per-chunk PUT 403'd on every
+        // upload and the client silently fell back to single-PUT.
+        val zip = tempZipOfSize(1024)
+
+        ChunkedBundleUploader.upload(
+            uploadZip = zip, metadata = JSONObject(),
+            appToken = appToken, endpoint = server.baseUrl,
+            logger = logger, debug = false,
+        )
+
+        val putRequest = server.recordedRequests()
+            .single { it.method == "PUT" && it.path.startsWith("/chunk-store/") }
+        // HttpServer normalises Content-Type to lowercase via the
+        // header map in MockBuildsServer.
+        assertEquals(
+            "application/octet-stream",
+            putRequest.headers["content-type"],
+            "presigned chunk PUTs must carry the same Content-Type the server signed with"
+        )
+    }
+
     @Test fun `duplicate-content chunks PUT exactly once`() {
         // Three identical chunks → one unique sha1 → one PUT, then
         // the final POST advertises the same hash three times so the
