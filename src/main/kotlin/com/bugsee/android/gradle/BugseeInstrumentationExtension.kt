@@ -1,6 +1,5 @@
 package com.bugsee.android.gradle
 
-import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import javax.inject.Inject
@@ -134,7 +133,7 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      *
      * Example:
      * ```kotlin
-     * import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
+     * import com.bugsee.android.gradle.StartupTier
      *
      * bugsee {
      *     instrumentation {

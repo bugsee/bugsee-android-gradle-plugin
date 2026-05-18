@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
+import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.instrumentation.fixtures.AsmTestHarness
 import com.bugsee.android.gradle.instrumentation.fixtures.JavaSourceCompiler
 import com.bugsee.test.fixtures.RecordingStartupDispatcher

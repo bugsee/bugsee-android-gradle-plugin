@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
+import com.bugsee.android.gradle.StartupTier
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import org.objectweb.asm.ClassVisitor

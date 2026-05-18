@@ -1,7 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
 import com.bugsee.android.gradle.BugseeInstrumentationExtension
-import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
+import com.bugsee.android.gradle.StartupTier
 import org.gradle.api.Project
 import org.gradle.testfixtures.ProjectBuilder
 import org.junit.Assert.assertEquals

@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
+import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.instrumentation.BugseeInstrumentationParameters
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input

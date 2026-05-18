@@ -1,7 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
 import com.bugsee.android.gradle.BugseeInstrumentationExtension
-import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
+import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.Project
 import java.io.File

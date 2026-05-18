@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
+import com.bugsee.android.gradle.StartupTier
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

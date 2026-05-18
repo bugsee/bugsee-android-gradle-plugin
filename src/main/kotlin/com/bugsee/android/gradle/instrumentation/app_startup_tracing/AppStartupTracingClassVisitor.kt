@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
+import com.bugsee.android.gradle.StartupTier
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.Attribute
 import org.objectweb.asm.ClassVisitor

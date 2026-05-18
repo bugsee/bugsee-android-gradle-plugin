@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
+import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
