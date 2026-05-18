@@ -47,8 +47,25 @@ package com.bugsee.android.gradle.instrumentation.app_startup_tracing
  * `startupTier.set(StartupTier.FULL)` and add the import shown above.
  * The change ships in plugin `4.0.0-beta8`; earlier `4.0.0-beta7` and
  * below were unreleased so no public API contract was broken.
+ *
+ * **Stability contract.** This is a public DSL type. Once the plugin
+ * ships a non-beta release, the following changes become binary-
+ * incompatible breaks:
+ *
+ *  - Renaming or removing a value (`OFF`/`MINIMAL`/`STANDARD`/
+ *    `DETAILED`/`FULL`) — consumer build scripts reference them by
+ *    name.
+ *  - **Reordering existing values.** Predicates such as
+ *    [wrapsCalls]/[wrapsLoops]/[picksUpAnnotated] use `>=` against
+ *    `Comparable` semantics, which keys off the declaration ordinal.
+ *    A reorder silently changes which tier is "above" which —
+ *    callers' expectations break with no compile-time signal.
+ *    **Only ever APPEND new tiers** at the end (after `FULL`), and
+ *    update the predicate ladder consciously when doing so.
+ *  - Renaming any of the predicate methods or the [DEFAULT] companion
+ *    constant.
  */
-enum class StartupTier {
+public enum class StartupTier {
     OFF,
     MINIMAL,
     STANDARD,

@@ -104,4 +104,18 @@ class StartupTierResolutionTest {
         project.extensions.extraProperties.set("bugsee.instrumentation.startupTier", "DETAILED")
         assertEquals(StartupTier.DETAILED, resolver.resolveStartupTier())
     }
+
+    @Test fun `DSL set to absent Provider falls through to Gradle property`() {
+        // Gradle's `Property` semantics: setting to a Provider whose
+        // `getOrNull()` returns null leaves `isPresent == false`. The
+        // resolver's `isPresent` check should treat this the same as
+        // never having called `.set(...)`. Common shape in build
+        // scripts that read tier from an environment variable:
+        //   startupTier.set(provider { System.getenv("X")?.let(StartupTier::parse) })
+        // — when X is unset, the provider yields null and the resolver
+        // falls through to the next source.
+        extension.startupTier.set(project.provider<StartupTier> { null })
+        project.extensions.extraProperties.set("bugsee.instrumentation.startupTier", "MINIMAL")
+        assertEquals(StartupTier.MINIMAL, resolver.resolveStartupTier())
+    }
 }
