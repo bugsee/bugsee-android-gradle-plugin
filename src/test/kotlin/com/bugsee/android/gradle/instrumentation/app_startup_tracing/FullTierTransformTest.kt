@@ -232,6 +232,72 @@ class FullTierTransformTest {
         AsmTestHarness.verify(transformed).assertOk()
     }
 
+    // ── annotation-replay fidelity ───────────────────────────────────
+
+    @Test
+    fun `mixed annotations on a method are preserved through FULL-tier transform`() {
+        // FULL-tier instrumentation uses a peek-and-buffer visitor that
+        // intercepts every method's annotations to detect @BugseeTrace
+        // and decide whether to instrument. The annotation replay path
+        // must NOT drop or reorder other annotations — a method
+        // annotated with BOTH `@Deprecated` (a JDK runtime annotation)
+        // and `@BugseeTrace` (the SDK's CLASS-retained annotation)
+        // should retain BOTH in the produced bytecode. A bug that
+        // dropped the unrelated annotation would silently break consumer
+        // expectations about declared annotations (lint, reflection,
+        // IDE warnings, JLS visibility).
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/MixedAnnotated.java",
+            """
+            package fixtures;
+            import com.bugsee.library.contracts.performance.BugseeTrace;
+            public class MixedAnnotated {
+                @Deprecated
+                @BugseeTrace
+                public static int both(int x) { return x + 1; }
+            }
+            """.trimIndent(),
+        )
+        val transformed = applyAtTier(
+            classes["fixtures.MixedAnnotated"]!!,
+            tier = StartupTier.FULL,
+            candidateMethods = emptySet(),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+
+        // Parse the transformed bytecode and inspect the method's
+        // annotation tables to confirm both annotations are still there.
+        val node = org.objectweb.asm.tree.ClassNode()
+        org.objectweb.asm.ClassReader(transformed).accept(node, 0)
+        val method = node.methods.first { it.name == "both" && it.desc == "(I)I" }
+
+        // @Deprecated is RUNTIME-retained → visibleAnnotations.
+        // @BugseeTrace is CLASS-retained → invisibleAnnotations.
+        val visibleDescs = method.visibleAnnotations?.map { it.desc } ?: emptyList()
+        val invisibleDescs = method.invisibleAnnotations?.map { it.desc } ?: emptyList()
+        assertTrue("@Deprecated must survive transform: visible=$visibleDescs",
+            visibleDescs.contains("Ljava/lang/Deprecated;"))
+        assertTrue("@BugseeTrace must survive transform: invisible=$invisibleDescs",
+            invisibleDescs.contains("Lcom/bugsee/library/contracts/performance/BugseeTrace;"))
+
+        // And the method should still execute correctly (smoke check —
+        // body wasn't dropped or corrupted during the annotation peek).
+        RecordingStartupDispatcher.reset()
+        val result = AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.MixedAnnotated" to transformed),
+            "fixtures.MixedAnnotated", "both",
+            arrayOf(Int::class.javaPrimitiveType!!),
+            arrayOf(41),
+        )
+        assertEquals(42, result)
+        // Annotated method gets wrapped per FULL-tier rules:
+        // METHOD_START + METHOD_END.
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
+    }
+
     // ── helpers ──────────────────────────────────────────────────────
 
     private fun applyAtTier(

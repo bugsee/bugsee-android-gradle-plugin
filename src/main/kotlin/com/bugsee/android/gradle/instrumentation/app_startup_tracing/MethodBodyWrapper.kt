@@ -81,6 +81,11 @@ internal object MethodBodyWrapper {
             return
         }
 
+        // Defensive invariant snapshot — see the post-write assertion at
+        // the bottom of this method and the layer-ordering rationale on
+        // the catch-any [TryCatchBlockNode] append.
+        val preWrapSize = methodNode.tryCatchBlocks.size
+
         val startLabel = LabelNode()
         val endLabel = LabelNode()
         val handlerLabel = LabelNode()
@@ -151,9 +156,32 @@ internal object MethodBodyWrapper {
         //    outer catch-any BEFORE the new layer's narrower handler —
         //    silently breaking per-call / per-loop END emission on the
         //    exception path.
-        methodNode.tryCatchBlocks.add(
-            TryCatchBlockNode(startLabel, endLabel, handlerLabel, /* type = */ null)
-        )
+        val ourEntry = TryCatchBlockNode(startLabel, endLabel, handlerLabel, /* type = */ null)
+        methodNode.tryCatchBlocks.add(ourEntry)
+
+        // Enforce the layer-ordering invariant declared in the KDoc above:
+        // MethodBodyWrapper MUST be the last layer to add a try-catch
+        // entry on this method, and its catch-any entry MUST sit at the
+        // tail of `tryCatchBlocks` so the JVM's exception table walk
+        // gives prior (narrower) layers' handlers priority. Any future
+        // wrapper that runs after this one would silently demote the
+        // narrower handlers — fail loudly instead.
+        val postWrapSize = methodNode.tryCatchBlocks.size
+        check(postWrapSize == preWrapSize + 1) {
+            "MethodBodyWrapper layer-ordering invariant violated: " +
+                "tryCatchBlocks grew from $preWrapSize to $postWrapSize " +
+                "(expected exactly +1) during wrap of method " +
+                "${methodNode.name}${methodNode.desc}. Another layer ran " +
+                "inside MethodBodyWrapper.wrap; this is not supported."
+        }
+        check(methodNode.tryCatchBlocks.last() === ourEntry) {
+            "MethodBodyWrapper layer-ordering invariant violated: " +
+                "the catch-any entry appended for method " +
+                "${methodNode.name}${methodNode.desc} is not at the tail " +
+                "of tryCatchBlocks. Another layer reordered or appended " +
+                "after MethodBodyWrapper; this would demote narrower " +
+                "handlers in the JVM exception table."
+        }
     }
 
     private fun isReturnOpcode(opcode: Int): Boolean = when (opcode) {

@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.instrumentation
 import com.bugsee.android.gradle.BugseeInstrumentationExtension
 import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
 import com.bugsee.android.gradle.manifest.ManifestModifier
+import org.gradle.api.GradleException
 import org.gradle.api.Project
 import java.io.File
 
@@ -48,26 +49,48 @@ internal class InstrumentationConfigResolver(
      * 3. Manifest meta-data `com.bugsee.android.instrumentation.startupTier`
      * 4. Default — [StartupTier.DEFAULT] (STANDARD).
      *
-     * An invalid value at any source emits a warning and falls through to
-     * the next source — never the default directly — so a typo in the DSL
-     * doesn't silently mask a valid Gradle property.
+     * **DSL is strict.** An invalid value in `bugsee { instrumentation {
+     * startupTier = "BLERG" } }` fails the build with a [GradleException].
+     * The DSL is the user's explicit choice, hand-written and checked into
+     * source control; a typo there is far more likely to be a bug than an
+     * intentional fall-through, and silently masking it has burned at
+     * least one team that thought they were on FULL but were running on
+     * STANDARD for weeks.
+     *
+     * **Gradle property and manifest meta-data are lenient.** Invalid
+     * values at those sources emit a warning and fall through to the next
+     * source. Those sources are often set by CI variables, app-template
+     * overlays, or per-flavor configs whose values are not always under
+     * the build author's direct control; failing the build on a typo
+     * there would be more disruptive than informative.
      */
     fun resolveStartupTier(): StartupTier {
         val key = "startupTier"
         val gradlePropName = "$GRADLE_PROP_PREFIX.$key"
         val manifestMetaName = "$MANIFEST_META_PREFIX.$key"
 
-        // 1. DSL
+        // 1. DSL — strict for non-blank values
         if (extension.startupTier.isPresent) {
             val raw = extension.startupTier.get()
-            val parsed = StartupTier.parse(raw)
-            if (parsed != null) {
-                return parsed
+            // Blank values are treated as "unset" — they fall through to
+            // the next source. A user-template Gradle file that pre-declares
+            // `startupTier.set(System.getenv("BUGSEE_TIER") ?: "")` should
+            // still allow the Gradle property or manifest meta-data to
+            // win without forcing the user to wrap the call in a null
+            // check at the DSL layer.
+            if (raw.isNotBlank()) {
+                val parsed = StartupTier.parse(raw)
+                if (parsed != null) {
+                    return parsed
+                }
+                throw GradleException(
+                    "Bugsee: Invalid startupTier '$raw' in DSL " +
+                            "(bugsee { instrumentation { startupTier.set(...) } }). " +
+                            "Expected one of ${StartupTier.entries.joinToString { it.name }}. " +
+                            "Lower / mixed case is accepted (e.g. 'detailed' resolves to DETAILED). " +
+                            "Use OFF to disable app-startup tracing entirely."
+                )
             }
-            project.logger.warn(
-                "Bugsee: Invalid startupTier '$raw' in DSL; expected one of " +
-                        "${StartupTier.entries.joinToString { it.name }}. Falling through to next source."
-            )
         }
 
         // 2. Gradle property
@@ -96,8 +119,8 @@ internal class InstrumentationConfigResolver(
                     "Bugsee: Invalid startupTier '$manifestValue' in manifest meta-data " +
                             "'$manifestMetaName'; expected one of " +
                             "${StartupTier.entries.joinToString { it.name }}. " +
-                            "Falling through to next source (manifest is the last source — " +
-                            "this means falling back to default ${StartupTier.DEFAULT})."
+                            "Falling back to default ${StartupTier.DEFAULT} (manifest " +
+                            "meta-data is the last resolution source)."
                 )
             }
         }

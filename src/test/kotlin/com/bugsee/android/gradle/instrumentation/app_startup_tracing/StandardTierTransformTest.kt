@@ -223,6 +223,63 @@ class StandardTierTransformTest {
         assertTrue(events.none { it.kind == RecordingStartupDispatcher.Kind.CALL_END })
     }
 
+    // ── INVOKEDYNAMIC skip ───────────────────────────────────────────
+
+    @Test
+    fun `INVOKEDYNAMIC lambda bootstrap is NOT wrapped but surrounding INVOKE is`() {
+        // Lambda metafactory bootstraps compile to `INVOKEDYNAMIC`,
+        // which TopLevelCallWrapper deliberately skips (only
+        // MethodInsnNode is wrapped — InvokeDynamicInsnNode is a
+        // different ASM node type). The surrounding `forEach` INVOKE
+        // (an interface call) IS a MethodInsnNode and MUST be wrapped.
+        //
+        // Fixture: an inline lambda (not a method reference, which
+        // would trigger an `Objects.requireNonNull` null-check call
+        // and complicate the count). The inline lambda compiles to
+        // a single `INVOKEDYNAMIC` plus the `INVOKEINTERFACE
+        // list.forEach(Consumer)V`. We assert exactly one CALL pair
+        // (the forEach) and pin the site id so the assertion would
+        // fail if the indy bootstrap target leaked through.
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/IndyLambda.java",
+            """
+            package fixtures;
+            import java.util.List;
+            public class IndyLambda {
+                public static void onCreate(List<String> list) {
+                    list.forEach(s -> {});
+                }
+            }
+            """.trimIndent(),
+        )
+        val transformed = applyTransform(
+            classes["fixtures.IndyLambda"]!!,
+            candidateMethods = setOf(MethodKey("onCreate", "(Ljava/util/List;)V")),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.IndyLambda" to transformed),
+            "fixtures.IndyLambda", "onCreate",
+            arrayOf(List::class.java),
+            arrayOf(listOf("a", "b")),
+        )
+
+        val events = RecordingStartupDispatcher.events()
+        // METHOD_START + (exactly one CALL_START, CALL_END) + METHOD_END
+        // = 4 events. If INVOKEDYNAMIC had been wrapped we'd see at
+        // least one extra CALL pair (for the metafactory bootstrap).
+        val callStarts = events.count { it.kind == RecordingStartupDispatcher.Kind.CALL_START }
+        val callEnds = events.count { it.kind == RecordingStartupDispatcher.Kind.CALL_END }
+        assertEquals("exactly one CALL_START (the forEach), no INVOKEDYNAMIC wrap",
+            1, callStarts)
+        assertEquals(1, callEnds)
+        // The single wrapped call's site id must identify forEach, not
+        // anything resembling the lambda bootstrap (java.lang.invoke.*).
+        val callEvent = events.first { it.kind == RecordingStartupDispatcher.Kind.CALL_START }
+        assertEquals("java.util.List#forEach", callEvent.siteId)
+    }
+
     // ── tier gating ──────────────────────────────────────────────────
 
     @Test

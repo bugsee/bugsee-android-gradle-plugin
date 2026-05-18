@@ -1,31 +1,58 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
+import org.objectweb.asm.AnnotationVisitor
+import org.objectweb.asm.Attribute
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.TypePath
 import org.objectweb.asm.tree.AnnotationNode
 import org.objectweb.asm.tree.MethodNode
 
 /**
- * Class-level visitor for the MINIMAL tier of app-startup tracing.
+ * Class-level visitor for app-startup tracing. Tier-aware: dispatches
+ * each candidate method through the layer stack permitted by the
+ * resolved [StartupTier].
  *
- * Receives — from the factory — the set of [MethodKey]s this particular
+ * Receives — from the factory — the set of kind-based [MethodKey]s this
  * class qualifies for ([StartupMethodFilter.candidateMethodsFor] applied
- * to the class's [ClassKind] set). For each matching method visited:
+ * to the class's [ClassKind] set), the resolved tier, and the
+ * dispatcher's internal name. Per-method dispatch:
  *
- *  1. Buffer the method body into an ASM [MethodNode];
- *  2. On the method's `visitEnd`, run [MethodBodyWrapper.wrap] to inject
- *     the dispatch calls + outer catch-any handler;
- *  3. Emit the buffered, transformed MethodNode through to the next
- *     visitor (the ClassWriter).
+ *  - **Kind-candidate (Application / ContentProvider / Initializer /
+ *    ComponentRegistrar / Configuration.Provider init methods)** —
+ *    buffer the entire body into an ASM [MethodNode] via
+ *    [buildKindCandidateBufferingVisitor]. At `visitEnd` apply the
+ *    layer stack permitted by the tier, in increasing scope order:
+ *      * STANDARD+: [TopLevelCallWrapper.wrap] — per-`INVOKE*` start/end
+ *        wraps with per-call try-catch.
+ *      * DETAILED+: [LoopWrapper.wrap] — per-top-level-loop start/end
+ *        wraps with per-loop try-catch.
+ *      * MINIMAL+: [MethodBodyWrapper.wrap] — whole-body start/end
+ *        wrap with the outermost catch-any (must run LAST; this is the
+ *        invariant enforced by `MethodBodyWrapper`'s layer-ordering
+ *        guard).
+ *    Then `accept(downstream)` replays the rewritten method.
  *
- * Non-matching methods are streamed straight through to the next visitor
- * with no buffering / no transformation, so the throughput cost is paid
- * only for the handful of init methods this transform actually targets.
+ *  - **FULL-tier `@BugseeTrace`-annotated method (non-kind)** —
+ *    `buildAnnotationPeekVisitor` buffers pre-body events as small
+ *    lambdas (with [AnnotationNode] capturing annotation values for
+ *    fidelity-preserving replay) until `visitCode` arrives. At that
+ *    point, if `@BugseeTrace` was observed during the peek, a full
+ *    [MethodNode] is spun up and buffered events replay into it; the
+ *    body buffers, gets [MethodBodyWrapper.wrap] applied at `visitEnd`,
+ *    and `accept(downstream)`. If no annotation, the peek visitor
+ *    flushes its buffer to `downstream` directly and the body streams
+ *    through unwrapped.
  *
- * Suspend and abstract / native methods are skipped even if their (name,
- * descriptor) is in the candidate set — they have no body that the
- * MINIMAL-tier wrap can sensibly act on.
+ *  - **Non-candidate at lower tier (`!isKindCandidate &amp;&amp;
+ *    !tier.picksUpAnnotated()`)** — pure pass-through to the next
+ *    visitor. Zero buffering, zero allocations.
+ *
+ * Abstract / native / suspend / synthetic / bridge methods always
+ * stream through unmodified — they either have no body to wrap or
+ * (for synthetic / bridge) are not the right target even if their
+ * `(name, descriptor)` collides with a kind candidate.
  */
 internal class AppStartupTracingClassVisitor(
     apiVersion: Int,
@@ -96,92 +123,274 @@ internal class AppStartupTracingClassVisitor(
             return downstream
         }
 
-        // Buffer-and-transform path. At FULL tier with a non-kind
-        // candidate, the buffered MethodNode is only wrapped if its
-        // invisibleAnnotations contains @BugseeTrace; otherwise it
-        // accepts straight to the writer.
         val siteId = SiteIdGenerator.forMethod(ownerInternalName, name)
         val dispatcher = dispatcherInternalName
         val ownerNameForLoops = ownerInternalName
-        val api = this.api
+        val apiVersion = this.api
         val currentTier = tier
-        val kindCandidate = isKindCandidate
-        return object : MethodNode(api, access, name, descriptor, signature, exceptions) {
+
+        // Kind-candidate: we already know we'll wrap regardless of
+        // annotations. Buffer the entire method to a MethodNode and run
+        // the tier-appropriate layer stack at visitEnd.
+        if (isKindCandidate) {
+            return buildKindCandidateBufferingVisitor(
+                downstream = downstream,
+                apiVersion = apiVersion,
+                access = access,
+                methodName = name,
+                descriptor = descriptor,
+                signature = signature,
+                exceptions = exceptions,
+                siteId = siteId,
+                dispatcher = dispatcher,
+                ownerNameForLoops = ownerNameForLoops,
+                currentTier = currentTier,
+            )
+        }
+
+        // FULL-tier annotation pickup for a non-kind method: peek for
+        // `@BugseeTrace` BEFORE buffering the method body. The peek
+        // visitor records pre-body events as small lambdas (and
+        // annotation values via [AnnotationNode]) until visitCode
+        // arrives. At that point it knows whether the method is annotated
+        // and either:
+        //   * spins up a full MethodNode and replays the buffered
+        //     events into it (annotation present) — body is then
+        //     buffered for the wrap; OR
+        //   * replays the pre-body events to `downstream` and sets `mv
+        //     = downstream` (no annotation) — body streams through.
+        //
+        // For a 10K-class app with ~100 methods/class average and a
+        // sparse `@BugseeTrace` usage pattern, this cuts FULL-tier
+        // peak heap pressure from ~5-10 GB (MethodNode per method) to
+        // ~50-100 MB (small annotation lambda buffer per method).
+        // The optimization is class-internal — no plugin-level constant-
+        // pool pre-scan is feasible because AGP's instrumentation API
+        // does not expose raw class bytes to a `ClassVisitorFactory`.
+        return buildAnnotationPeekVisitor(
+            downstream = downstream,
+            apiVersion = apiVersion,
+            access = access,
+            methodName = name,
+            descriptor = descriptor,
+            signature = signature,
+            exceptions = exceptions,
+            siteId = siteId,
+            dispatcher = dispatcher,
+        )
+    }
+
+    /**
+     * Builds the buffering visitor for kind-candidate methods (Application
+     * etc.). Always buffers the full body into a [MethodNode] and runs
+     * the tier-appropriate layer stack at [MethodNode.visitEnd].
+     */
+    private fun buildKindCandidateBufferingVisitor(
+        downstream: MethodVisitor,
+        apiVersion: Int,
+        access: Int,
+        methodName: String,
+        descriptor: String,
+        signature: String?,
+        exceptions: Array<out String>?,
+        siteId: String,
+        dispatcher: String,
+        ownerNameForLoops: String,
+        currentTier: StartupTier,
+    ): MethodVisitor {
+        return object : MethodNode(apiVersion, access, methodName, descriptor, signature, exceptions) {
             override fun visitEnd() {
                 super.visitEnd()
-
-                // Decide whether THIS specific method gets wrapped.
-                val wrap = kindCandidate ||
-                        (currentTier.picksUpAnnotated() && hasBugseeTraceAnnotation(this))
-                if (!wrap) {
-                    accept(downstream)
-                    return
+                // Layers run in increasing scope order: per-call wraps
+                // first (smallest scope), then per-loop wraps, then the
+                // whole-method wrap. Each layer inspects
+                // mn.tryCatchBlocks at the time it runs to decide what's
+                // "already protected" — running them in this order keeps
+                // each layer's view of the existing try-catch table
+                // consistent with its own intent.
+                if (currentTier.wrapsCalls()) {
+                    TopLevelCallWrapper.wrap(this, dispatcher)
                 }
-
-                if (kindCandidate) {
-                    // The kind-based path: apply the full layer stack
-                    // permitted by the current tier (calls, loops, then
-                    // whole-method body). Layers run in increasing scope
-                    // order: per-call wraps first (smallest scope), then
-                    // per-loop wraps, then the whole-method wrap. Each
-                    // layer inspects mn.tryCatchBlocks at the time it
-                    // runs to decide what's "already protected" —
-                    // running them in this order keeps each layer's view
-                    // of the existing try-catch table consistent with
-                    // its own intent.
-                    if (currentTier.wrapsCalls()) {
-                        TopLevelCallWrapper.wrap(this, dispatcher)
-                    }
-                    if (currentTier.wrapsLoops()) {
-                        // LoopWrapper runs AFTER TopLevelCallWrapper so
-                        // the calls inside loop bodies are already
-                        // wrapped. The loop's own try-catch is then
-                        // added on top — it shows up as an outer event
-                        // around the per-call events on the dashboard.
-                        LoopWrapper.wrap(this, ownerNameForLoops, dispatcher)
-                    }
-                    MethodBodyWrapper.wrap(this, siteId, dispatcher)
-                } else {
-                    // FULL-tier annotation pickup: method-body wrap
-                    // ONLY (no call wraps, no loop wraps) regardless
-                    // of tier. The annotation is an opt-in marker for
-                    // an individual method; if the user wants finer
-                    // granularity they can pick STANDARD/DETAILED at
-                    // the tier level for kind-based classes. This
-                    // keeps the cost of opt-in tracing predictable.
-                    MethodBodyWrapper.wrap(this, siteId, dispatcher)
+                if (currentTier.wrapsLoops()) {
+                    LoopWrapper.wrap(this, ownerNameForLoops, dispatcher)
                 }
+                MethodBodyWrapper.wrap(this, siteId, dispatcher)
                 accept(downstream)
             }
         }
     }
 
     /**
-     * Looks for the {@code @BugseeTrace} annotation among a method's
-     * annotations. We match by descriptor string rather than by
-     * classpath-resolved type so the plugin's runtime never needs to
-     * load the SDK's annotation class.
+     * Builds the peek visitor for FULL-tier annotation pickup on non-kind
+     * methods. Buffers pre-body events as deferred lambdas, resolves at
+     * the first visitCode (or visitEnd for body-less methods), and either
+     * upgrades to a full MethodNode buffer (annotation found, will be
+     * wrapped) or passes everything through to `downstream` (no
+     * annotation, no wrap).
      *
-     * Both `invisibleAnnotations` (CLASS-retention — the current
-     * setting in the SDK's `BugseeTrace.java`) and `visibleAnnotations`
-     * (RUNTIME-retention) are checked. This is defense-in-depth: if a
-     * future SDK change ever promotes the annotation to RUNTIME
-     * retention (e.g. for reflection-based introspection), we still
-     * pick it up here without a paired plugin release. Cost is
-     * trivial — both lists are usually `null`.
+     * Pre-body events buffered (in ASM's visit order):
+     *  - visitParameter
+     *  - visitAnnotationDefault
+     *  - visitAnnotation (the one we peek at)
+     *  - visitTypeAnnotation
+     *  - visitAnnotableParameterCount
+     *  - visitParameterAnnotation
+     *  - visitAttribute
+     *
+     * Each event captures its arguments + an optional [AnnotationNode]
+     * (for the `AnnotationVisitor`-returning ones) so values are
+     * preserved on replay. Memory cost per method: ~50-200 bytes plus
+     * the annotation arg list, vs ~5-10 KB for a buffered MethodNode.
      */
-    private fun hasBugseeTraceAnnotation(methodNode: MethodNode): Boolean {
-        if (containsBugseeTrace(methodNode.invisibleAnnotations)) return true
-        if (containsBugseeTrace(methodNode.visibleAnnotations)) return true
-        return false
-    }
+    private fun buildAnnotationPeekVisitor(
+        downstream: MethodVisitor,
+        apiVersion: Int,
+        access: Int,
+        methodName: String,
+        descriptor: String,
+        signature: String?,
+        exceptions: Array<out String>?,
+        siteId: String,
+        dispatcher: String,
+    ): MethodVisitor {
+        return object : MethodVisitor(apiVersion) {
+            private val pendingEvents = ArrayList<(MethodVisitor) -> Unit>(2)
+            private var hasTraceAnnotation = false
+            private var bufferingNode: MethodNode? = null
+            private var resolved = false
 
-    private fun containsBugseeTrace(annotations: List<AnnotationNode>?): Boolean {
-        if (annotations == null) return false
-        for (a in annotations) {
-            if (a.desc == BUGSEE_TRACE_DESCRIPTOR) return true
+            override fun visitParameter(parameterName: String?, parameterAccess: Int) {
+                pendingEvents.add { it.visitParameter(parameterName, parameterAccess) }
+            }
+
+            override fun visitAnnotationDefault(): AnnotationVisitor {
+                val node = AnnotationNode(apiVersion, "")
+                pendingEvents.add { target ->
+                    val sink = target.visitAnnotationDefault()
+                    if (sink != null) node.accept(sink)
+                }
+                return node
+            }
+
+            override fun visitAnnotation(desc: String, visible: Boolean): AnnotationVisitor {
+                if (desc == BUGSEE_TRACE_DESCRIPTOR) {
+                    hasTraceAnnotation = true
+                }
+                val node = AnnotationNode(apiVersion, desc)
+                pendingEvents.add { target ->
+                    val sink = target.visitAnnotation(desc, visible)
+                    if (sink != null) node.accept(sink)
+                }
+                return node
+            }
+
+            override fun visitTypeAnnotation(
+                typeRef: Int,
+                typePath: TypePath?,
+                desc: String,
+                visible: Boolean
+            ): AnnotationVisitor {
+                val node = AnnotationNode(apiVersion, desc)
+                pendingEvents.add { target ->
+                    val sink = target.visitTypeAnnotation(typeRef, typePath, desc, visible)
+                    if (sink != null) node.accept(sink)
+                }
+                return node
+            }
+
+            override fun visitAnnotableParameterCount(parameterCount: Int, visible: Boolean) {
+                pendingEvents.add { it.visitAnnotableParameterCount(parameterCount, visible) }
+            }
+
+            override fun visitParameterAnnotation(
+                parameter: Int,
+                desc: String,
+                visible: Boolean
+            ): AnnotationVisitor {
+                val node = AnnotationNode(apiVersion, desc)
+                pendingEvents.add { target ->
+                    val sink = target.visitParameterAnnotation(parameter, desc, visible)
+                    if (sink != null) node.accept(sink)
+                }
+                return node
+            }
+
+            override fun visitAttribute(attribute: Attribute) {
+                pendingEvents.add { it.visitAttribute(attribute) }
+            }
+
+            private fun resolve() {
+                if (resolved) return
+                resolved = true
+
+                if (hasTraceAnnotation) {
+                    val node = MethodNode(
+                        apiVersion, access, methodName, descriptor, signature, exceptions
+                    )
+                    bufferingNode = node
+                    for (event in pendingEvents) event(node)
+                    mv = node
+                } else {
+                    mv = downstream
+                    for (event in pendingEvents) event(downstream)
+                }
+                // Free the buffer — body events go directly to mv from
+                // here on, and visitEnd just routes through the resolved
+                // delegate.
+                pendingEvents.clear()
+                pendingEvents.trimToSize()
+            }
+
+            override fun visitCode() {
+                resolve()
+                super.visitCode()
+            }
+
+            override fun visitEnd() {
+                // Ensure resolve fires even for body-less paths. In
+                // practice every method that reaches this visitor has a
+                // body (abstract / native / suspend / synthetic / bridge
+                // were filtered upstream), but defensive resolve() here
+                // keeps the contract simple: this visitor always emits a
+                // complete method to `downstream` on visitEnd, no matter
+                // what intermediate events it saw.
+                resolve()
+
+                // Two paths converge here:
+                //
+                // 1. **Pass-through (no annotation)** — `mv` is already
+                //    `downstream`. All buffered pre-body events and the
+                //    body itself were forwarded directly. We forward
+                //    visitEnd through `super.visitEnd()` to complete the
+                //    downstream method visit. Single visitEnd, correct.
+                //
+                // 2. **Buffering (annotation found)** — `mv` is the
+                //    buffering `MethodNode`. We must NOT call
+                //    `super.visitEnd()` here: that would call
+                //    `node.visitEnd()` (fine on its own) but then the
+                //    `node.accept(downstream)` below replays the FULL
+                //    buffered method to downstream — including
+                //    `downstream.visitEnd()` at the tail of `accept`.
+                //    Downstream would receive visitEnd twice. ClassWriter
+                //    tolerates this in current ASM; chained visitors
+                //    (e.g. CheckClassAdapter) do not.
+                //
+                // For the buffering branch we explicitly finalize the
+                // node (its own visitEnd is a no-op AbstractInsnVisitor-
+                // inherited terminator but kept for ASM-contract clarity),
+                // apply the body wrap, and then accept-replay to
+                // downstream. Downstream's visitEnd fires exactly once,
+                // from inside accept.
+                val node = bufferingNode
+                if (node == null) {
+                    super.visitEnd()
+                } else {
+                    node.visitEnd()
+                    MethodBodyWrapper.wrap(node, siteId, dispatcher)
+                    node.accept(downstream)
+                }
+            }
         }
-        return false
     }
 
     private companion object {

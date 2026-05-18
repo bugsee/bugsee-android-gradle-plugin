@@ -3,14 +3,17 @@ package com.bugsee.android.gradle.instrumentation.fixtures
 import com.bugsee.test.fixtures.RecordingStartupDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Smoke tests for the Phase 4 ASM test harness.
@@ -66,8 +69,16 @@ class HarnessSmokeTest {
             public class Empty {}
             """.trimIndent(),
         )
-        assertNotNull(classes["fixtures.Empty"])
-        assertTrue("non-empty bytes", classes["fixtures.Empty"]!!.isNotEmpty())
+        val bytes = classes["fixtures.Empty"]
+        assertNotNull(bytes)
+        assertTrue("non-empty bytes", bytes!!.isNotEmpty())
+        // Without this assertion, the test would pass for any garbage
+        // ByteArray of length >0. Parse the produced bytes through ClassReader
+        // and confirm the internal class name matches what we asked the
+        // compiler to produce — proves the bytes are a real .class for
+        // the named class, not random data.
+        val reader = ClassReader(bytes)
+        assertEquals("fixtures/Empty", reader.className)
     }
 
     // ── KotlinSourceCompiler ─────────────────────────────────────────
@@ -107,10 +118,27 @@ class HarnessSmokeTest {
             }
             """.trimIndent(),
         )
+        // Trip a flag inside the no-op visitor's visit() so we can prove
+        // the visitor actually saw the class header — without this, a
+        // silently broken transform() that returned input bytes unchanged
+        // would still pass `verify` and `assertEquals` below.
+        val visited = AtomicBoolean(false)
         val transformed = AsmTestHarness.transform(classes["fixtures.Identity"]!!) { writer ->
-            // Pure pass-through visitor — no transformation at all.
-            object : ClassVisitor(Opcodes.ASM9, writer) {}
+            object : ClassVisitor(Opcodes.ASM9, writer) {
+                override fun visit(
+                    version: Int,
+                    access: Int,
+                    name: String?,
+                    signature: String?,
+                    superName: String?,
+                    interfaces: Array<out String>?,
+                ) {
+                    visited.set(true)
+                    super.visit(version, access, name, signature, superName, interfaces)
+                }
+            }
         }
+        assertTrue("visitor must have observed class header", visited.get())
         AsmTestHarness.verify(transformed).assertOk()
 
         // Behavior preserved
@@ -146,9 +174,17 @@ class HarnessSmokeTest {
         writer.visitEnd()
 
         val result = AsmTestHarness.verify(writer.toByteArray())
+        // Pin the diagnostic specifically to the CheckClassAdapter path
+        // (or its fatal-throw branch when the verifier bails). A loose
+        // `||` against fatalThrowable that also accepts a successful
+        // empty result would still pass for code that silently dropped
+        // the verifier. Tighten to require an actual structural
+        // diagnostic from CheckClassAdapter.
         assertTrue("expected CheckClassAdapter diagnostic, got none: $result",
             result.checkAdapterOutput.isNotBlank() ||
                     result.fatalThrowable != null)
+        assertFalse("verifier must NOT silently accept invalid bytecode",
+            result.isOk)
     }
 
     @Test
@@ -256,5 +292,85 @@ class HarnessSmokeTest {
         assertEquals(1, events.size)
         assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
         assertEquals("smoke.site", events[0].siteId)
+        // Pin the threadId so we prove the dispatcher recorded on the
+        // calling thread (the InMemoryClassLoader invokes statically on
+        // the test thread — no async dispatch should sneak in here).
+        assertEquals(Thread.currentThread().id, events[0].threadId)
+    }
+
+    // ── onLoopStart / onLoopEnd dispatcher coverage ──────────────────
+
+    @Test
+    fun `RecordingStartupDispatcher records onLoopStart and onLoopEnd directly`() {
+        // Symmetry coverage: the round-trip test above pinned the
+        // method / call kinds but never exercised the loop kinds. A
+        // typo in the recording dispatcher's enum-to-kind mapping for
+        // onLoopStart/onLoopEnd would silently slip past every prior
+        // test in this class.
+        RecordingStartupDispatcher.onLoopStart("loop.site")
+        RecordingStartupDispatcher.onLoopEnd("loop.site")
+
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.LOOP_START, events[0].kind)
+        assertEquals("loop.site", events[0].siteId)
+        assertEquals(RecordingStartupDispatcher.Kind.LOOP_END, events[1].kind)
+        assertEquals("loop.site", events[1].siteId)
+        assertEquals(Thread.currentThread().id, events[0].threadId)
+    }
+
+    @Test
+    fun `INVOKESTATIC to dispatcher onLoopStart and onLoopEnd resolves through InMemoryClassLoader`() {
+        // Parallel to the existing onMethodStart resolution test —
+        // proves the bytecode-resolved path for onLoopStart and
+        // onLoopEnd also flows through the InMemoryClassLoader. Each
+        // injected INVOKESTATIC matches the signature
+        // `(Ljava/lang/String;)V`, identical to the production
+        // dispatcher's loop entry points.
+        val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES)
+        writer.visit(
+            Opcodes.V11, Opcodes.ACC_PUBLIC,
+            "fixtures/LoopEmitter", null, "java/lang/Object", null,
+        )
+        val mv: MethodVisitor = writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "emit", "()V", null, null,
+        )
+        mv.visitCode()
+        mv.visitLdcInsn("loop.site")
+        mv.visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            "com/bugsee/test/fixtures/RecordingStartupDispatcher",
+            "onLoopStart",
+            "(Ljava/lang/String;)V",
+            false,
+        )
+        mv.visitLdcInsn("loop.site")
+        mv.visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            "com/bugsee/test/fixtures/RecordingStartupDispatcher",
+            "onLoopEnd",
+            "(Ljava/lang/String;)V",
+            false,
+        )
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        writer.visitEnd()
+
+        val bytes = writer.toByteArray()
+        AsmTestHarness.verify(bytes).assertOk()
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.LoopEmitter" to bytes),
+            "fixtures.LoopEmitter",
+            "emit",
+        )
+
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.LOOP_START, events[0].kind)
+        assertEquals("loop.site", events[0].siteId)
+        assertEquals(RecordingStartupDispatcher.Kind.LOOP_END, events[1].kind)
+        assertEquals("loop.site", events[1].siteId)
     }
 }

@@ -8,6 +8,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Label
+import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 
 /**
@@ -234,6 +237,101 @@ class DetailedTierTransformTest {
         assertEquals(12, events.size)
     }
 
+    // ── sibling top-level loops ──────────────────────────────────────
+
+    /**
+     * Regression test for a `LoopWrapper.wrap` bug surfaced by a round-3
+     * deep review: when a method had TWO or more sibling top-level
+     * loops, `wrapSingleLoop` was being called in a single iteration
+     * loop that BOTH read indices off the original (pre-mutation) CFG
+     * AND mutated `methodNode.instructions` between iterations. The
+     * second loop's `methodNode.instructions.get(originalIdx)` lookups
+     * returned shifted nodes from the first loop's wrap region,
+     * producing structurally broken bytecode. The fix split the wrap
+     * into two phases (read-only planning + mutation), capturing all
+     * node references against the pre-mutation InsnList before any
+     * mutation runs.
+     *
+     * Every existing multi-loop test either uses a single loop or
+     * nested loops (where the top-level filter keeps only the outer,
+     * giving a single wrap per call). Sibling top-level loops had no
+     * coverage; this test closes the gap.
+     */
+    @Test
+    fun `sibling top-level loops — both wrapped independently with distinct site ids`() {
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/SiblingLoops.java",
+            """
+            package fixtures;
+            public class SiblingLoops {
+                public static void onCreate() {
+                    for (int i = 0; i < 2; i++) {
+                        String.valueOf(i);
+                    }
+                    for (int j = 0; j < 3; j++) {
+                        String.valueOf(j);
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val transformed = applyAtTier(
+            classes["fixtures.SiblingLoops"]!!,
+            tier = StartupTier.DETAILED,
+            candidateMethods = setOf(MethodKey("onCreate", "()V")),
+        )
+
+        // Verifier acceptance is the strongest signal that the InsnList
+        // is structurally sound — the pre-fix code produced bytecode
+        // that often failed CheckClassAdapter or SimpleVerifier.
+        AsmTestHarness.verify(transformed).assertOk()
+
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.SiblingLoops" to transformed),
+            "fixtures.SiblingLoops", "onCreate",
+        )
+
+        val events = RecordingStartupDispatcher.events()
+
+        // Exactly 2 LOOP_START / LOOP_END pairs — one per sibling top-
+        // level loop. Pre-fix this often produced 0, 1, or duplicate
+        // pairs depending on how the broken anchors landed.
+        val loopStarts = events.filter { it.kind == RecordingStartupDispatcher.Kind.LOOP_START }
+        val loopEnds = events.filter { it.kind == RecordingStartupDispatcher.Kind.LOOP_END }
+        assertEquals("two LOOP_START events — one per sibling loop", 2, loopStarts.size)
+        assertEquals("two LOOP_END events — one per sibling loop", 2, loopEnds.size)
+
+        // Site ids must be distinct (ordinal 1 + ordinal 2). Their order
+        // in the event stream matches the source order of the loops.
+        val loopStartSiteIds = loopStarts.map { it.siteId }
+        assertEquals(
+            "site ids must be distinct ordinals — loop_1 then loop_2",
+            listOf(
+                "fixtures.SiblingLoops#onCreate#loop_1",
+                "fixtures.SiblingLoops#onCreate#loop_2",
+            ),
+            loopStartSiteIds,
+        )
+
+        // Sanity: the call inside each loop fires the expected count
+        // (2 + 3 = 5 CALL_START events).
+        val callStarts = events.count { it.kind == RecordingStartupDispatcher.Kind.CALL_START }
+        assertEquals("5 String.valueOf calls total across both loops", 5, callStarts)
+
+        // Sanity: total event sequence shape — METHOD_START at head,
+        // METHOD_END at tail.
+        assertEquals(
+            "method-level wrap intact",
+            RecordingStartupDispatcher.Kind.METHOD_START,
+            events.first().kind,
+        )
+        assertEquals(
+            "method-level wrap intact",
+            RecordingStartupDispatcher.Kind.METHOD_END,
+            events.last().kind,
+        )
+    }
+
     // ── tier gating ──────────────────────────────────────────────────
 
     @Test
@@ -309,6 +407,189 @@ class DetailedTierTransformTest {
         })
     }
 
+    // ── LoopWrapper skip paths (synthetic bytecode) ──────────────────
+
+    @Test
+    fun `non-contiguous loop body is skipped — no LOOP events`() {
+        // Hand-crafted bytecode where the loop's body indices straddle
+        // unrelated code that's reachable from outside the loop body
+        // via a normal-CFG jump. LoopWrapper's contiguity check should
+        // skip the loop entirely, so the only events recorded come from
+        // the MINIMAL-tier method wrap (METHOD_START + METHOD_END) plus
+        // any wrapped INVOKE inside the bytecode.
+        //
+        // Layout (each line = one ASM instruction; verifier-clean):
+        //
+        //   00: ICONST_0                  ; i = 0
+        //   01: ISTORE_0
+        //   02: ICONST_0
+        //   03: IFEQ  L_BODY_HEAD         ; conditional pre-branch:
+        //                                 ; (always-taken at runtime because
+        //                                 ; top-of-stack is 0, but the JVM
+        //                                 ; CFG records both edges, so
+        //                                 ; L_UNRELATED keeps an external
+        //                                 ; predecessor).
+        //   04: GOTO L_UNRELATED          ; fallthrough-route to unrelated
+        //   05: L_BODY_HEAD               ; loop header (back-edge target)
+        //   06: GOTO L_BODY_TAIL          ; body half 1 → jump past unrelated
+        //   07: L_UNRELATED               ; unrelated code (in body-range
+        //                                 ; but NOT in body — external pred
+        //                                 ; from instruction 03/04 above)
+        //   08: ICONST_0
+        //   09: POP
+        //   10: GOTO L_EXIT
+        //   11: L_BODY_TAIL               ; body half 2
+        //   12: IINC 0 1
+        //   13: ILOAD_0
+        //   14: ICONST_3
+        //   15: IF_ICMPLT L_BODY_HEAD     ; back-edge to header
+        //   16: GOTO L_EXIT
+        //   17: L_EXIT
+        //   18: RETURN
+        //
+        // Body via reverse walk from the back-edge source (15):
+        //   {15, 14, 13, 12, L_BODY_TAIL, L_BODY_HEAD, GOTO@06}
+        // ⇒ minIdx ≤ 5 and maxIdx ≥ 15; the unrelated code (07..10)
+        // sits INSIDE [minIdx, maxIdx] but is NOT in body, AND has
+        // non-empty preds (from instruction 04's GOTO and the
+        // fall-through edge from 03). LoopWrapper's contiguity check
+        // should reject this loop.
+        val bytes = synthesizeNonContiguousLoop()
+        val transformed = applyAtTier(
+            bytes,
+            tier = StartupTier.DETAILED,
+            candidateMethods = setOf(MethodKey("onCreate", "()V")),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.NonContiguous" to transformed),
+            "fixtures.NonContiguous", "onCreate",
+        )
+
+        val events = RecordingStartupDispatcher.events()
+        // Loop was skipped → no LOOP_START / LOOP_END events. The
+        // MINIMAL-tier method wrap still fires.
+        assertEquals(0, events.count { it.kind == RecordingStartupDispatcher.Kind.LOOP_START })
+        assertEquals(0, events.count { it.kind == RecordingStartupDispatcher.Kind.LOOP_END })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_START })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_END })
+    }
+
+    @Test
+    fun `loop exit-target with external predecessor is skipped — no LOOP events`() {
+        // Hand-crafted bytecode where the loop's exit target is ALSO
+        // reachable from outside the body (an `if` above the loop
+        // jumping past it to the same label that's also the loop's
+        // exit). LoopWrapper's external-predecessor check should skip
+        // this loop to avoid false-positive `onLoopEnd` events when
+        // control bypasses the loop.
+        //
+        // Layout (verifier-clean):
+        //
+        //   00: ICONST_0                  ; condition for outer if
+        //   01: IFEQ L_EXIT               ; if condition zero, skip loop
+        //                                 ; → external predecessor of L_EXIT
+        //   02: ICONST_0                  ; i = 0
+        //   03: ISTORE_0
+        //   04: L_HEADER                  ; loop header
+        //   05: ILOAD_0
+        //   06: ICONST_3
+        //   07: IF_ICMPGE L_EXIT          ; exit edge: jumps to L_EXIT
+        //   08: IINC 0 1
+        //   09: GOTO L_HEADER             ; back-edge
+        //   10: L_EXIT                    ; both in-loop AND out-of-loop
+        //                                 ; predecessors → SKIP
+        //   11: RETURN
+        val bytes = synthesizeExitWithExternalPred()
+        val transformed = applyAtTier(
+            bytes,
+            tier = StartupTier.DETAILED,
+            candidateMethods = setOf(MethodKey("onCreate", "()V")),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.ExitExtPred" to transformed),
+            "fixtures.ExitExtPred", "onCreate",
+        )
+
+        val events = RecordingStartupDispatcher.events()
+        // Loop skipped → only the method wrap fires.
+        assertEquals("no LOOP events when exit has external pred", 0,
+            events.count {
+                it.kind == RecordingStartupDispatcher.Kind.LOOP_START
+                        || it.kind == RecordingStartupDispatcher.Kind.LOOP_END
+            })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_START })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_END })
+    }
+
+    // ── synchronized-block ───────────────────────────────────────────
+
+    @Test
+    fun `synchronized block around for loop — exception edge does NOT manufacture spurious loop`() {
+        // `synchronized` compiles to MONITORENTER + try/catch(any) +
+        // MONITOREXIT + ATHROW. The synthetic catch-any exception edge
+        // would, if treated as a normal CFG edge, manufacture a back
+        // edge whose target dominates the throw site — yielding a
+        // spurious "loop" around the synchronized body. MethodCfg
+        // deliberately excludes exception edges from the loop-
+        // detection CFG; this test pins that filter end-to-end.
+        //
+        // The test's load-bearing claim is exactly: the real for-loop
+        // INSIDE the synchronized block IS detected (1 LOOP_START /
+        // 1 LOOP_END pair) AND the synthetic synchronized-cleanup
+        // edge does NOT add a second loop pair. Call-wrap behavior
+        // for INVOKE* inside synchronized blocks is out of scope
+        // here (the calls sit inside the synthetic user-shaped
+        // try-catch, so `TopLevelCallWrapper`'s skip-calls-inside-
+        // user-try rule applies — but pinning that interaction is
+        // the job of `StandardTierTransformTest`'s user-try-catch
+        // test, not this one).
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/LoopSync.java",
+            """
+            package fixtures;
+            public class LoopSync {
+                public static void onCreate() {
+                    synchronized (LoopSync.class) {
+                        for (int i = 0; i < 3; i++) {
+                            String.valueOf(i);
+                        }
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val transformed = applyAtTier(
+            classes["fixtures.LoopSync"]!!,
+            tier = StartupTier.DETAILED,
+            candidateMethods = setOf(MethodKey("onCreate", "()V")),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.LoopSync" to transformed),
+            "fixtures.LoopSync", "onCreate",
+        )
+
+        val events = RecordingStartupDispatcher.events()
+        val loopStarts = events.count { it.kind == RecordingStartupDispatcher.Kind.LOOP_START }
+        val loopEnds = events.count { it.kind == RecordingStartupDispatcher.Kind.LOOP_END }
+        // Exactly one real loop should be detected — the synthetic
+        // synchronized cleanup must NOT manufacture a second loop.
+        // Note: the `String.valueOf` call sits inside the synchronized
+        // block's MONITOREXIT/ATHROW user-shaped try-catch, so
+        // TopLevelCallWrapper's "skip calls inside existing user try"
+        // rule applies — no CALL events are expected here. That's
+        // explicitly verified in the "user try-catch" test in
+        // StandardTierTransformTest. The point of THIS test is to pin
+        // the loop-detection behavior in the presence of the
+        // synthetic cleanup handler.
+        assertEquals("exactly one LOOP_START — synchronized cleanup is not a loop",
+            1, loopStarts)
+        assertEquals("exactly one LOOP_END — synchronized cleanup is not a loop",
+            1, loopEnds)
+    }
+
     // ── helpers ──────────────────────────────────────────────────────
 
     private fun applyAtTier(
@@ -325,5 +606,96 @@ class DetailedTierTransformTest {
                 tier = tier,
             )
         }
+    }
+
+    /**
+     * Builds a class containing a static `onCreate()V` method whose
+     * bytecode contains a natural loop with a non-contiguous body —
+     * see the test using this method for the layout. Goal: trigger
+     * the contiguity check in `LoopWrapper.wrapSingleLoop` so the loop
+     * is silently dropped.
+     */
+    private fun synthesizeNonContiguousLoop(): ByteArray {
+        val cw = ClassWriter(ClassWriter.COMPUTE_FRAMES)
+        cw.visit(
+            Opcodes.V11, Opcodes.ACC_PUBLIC,
+            "fixtures/NonContiguous", null, "java/lang/Object", null,
+        )
+        val mv: MethodVisitor = cw.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "onCreate", "()V", null, null,
+        )
+        val lBodyHead = Label()
+        val lUnrelated = Label()
+        val lBodyTail = Label()
+        val lExit = Label()
+        mv.visitCode()
+        mv.visitInsn(Opcodes.ICONST_0)
+        mv.visitVarInsn(Opcodes.ISTORE, 0)
+        // Conditional pre-branch: top-of-stack 0 → IFEQ taken at
+        // runtime, but JVM CFG records both edges so L_UNRELATED has
+        // an external predecessor on the fall-through.
+        mv.visitInsn(Opcodes.ICONST_0)
+        mv.visitJumpInsn(Opcodes.IFEQ, lBodyHead)
+        mv.visitJumpInsn(Opcodes.GOTO, lUnrelated)
+        mv.visitLabel(lBodyHead)
+        mv.visitJumpInsn(Opcodes.GOTO, lBodyTail)
+        mv.visitLabel(lUnrelated)
+        mv.visitInsn(Opcodes.ICONST_0)
+        mv.visitInsn(Opcodes.POP)
+        mv.visitJumpInsn(Opcodes.GOTO, lExit)
+        mv.visitLabel(lBodyTail)
+        mv.visitIincInsn(0, 1)
+        mv.visitVarInsn(Opcodes.ILOAD, 0)
+        mv.visitInsn(Opcodes.ICONST_3)
+        mv.visitJumpInsn(Opcodes.IF_ICMPLT, lBodyHead)
+        mv.visitJumpInsn(Opcodes.GOTO, lExit)
+        mv.visitLabel(lExit)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        return cw.toByteArray()
+    }
+
+    /**
+     * Builds a class containing a static `onCreate()V` method whose
+     * loop exit-target also has an external predecessor (an `if` ahead
+     * of the loop jumping past it). Goal: trigger LoopWrapper's
+     * external-predecessor check on exit targets.
+     */
+    private fun synthesizeExitWithExternalPred(): ByteArray {
+        val cw = ClassWriter(ClassWriter.COMPUTE_FRAMES)
+        cw.visit(
+            Opcodes.V11, Opcodes.ACC_PUBLIC,
+            "fixtures/ExitExtPred", null, "java/lang/Object", null,
+        )
+        val mv: MethodVisitor = cw.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "onCreate", "()V", null, null,
+        )
+        val lHeader = Label()
+        val lExit = Label()
+        mv.visitCode()
+        // Outer if — at runtime ICONST_0 + IFEQ always jumps to L_EXIT
+        // (skipping the loop). At analysis time both edges are
+        // recorded, so L_EXIT picks up an external predecessor here.
+        mv.visitInsn(Opcodes.ICONST_0)
+        mv.visitJumpInsn(Opcodes.IFEQ, lExit)
+        // Loop body: standard for(int i = 0; i < 3; i++) {} shape.
+        mv.visitInsn(Opcodes.ICONST_0)
+        mv.visitVarInsn(Opcodes.ISTORE, 0)
+        mv.visitLabel(lHeader)
+        mv.visitVarInsn(Opcodes.ILOAD, 0)
+        mv.visitInsn(Opcodes.ICONST_3)
+        mv.visitJumpInsn(Opcodes.IF_ICMPGE, lExit)  // exit edge from loop
+        mv.visitIincInsn(0, 1)
+        mv.visitJumpInsn(Opcodes.GOTO, lHeader)     // back-edge
+        mv.visitLabel(lExit)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        return cw.toByteArray()
     }
 }

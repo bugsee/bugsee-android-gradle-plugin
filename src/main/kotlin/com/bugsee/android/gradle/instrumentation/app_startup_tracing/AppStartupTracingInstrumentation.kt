@@ -19,11 +19,23 @@ import org.gradle.api.Project
  * Gated on:
  *  - the `com.bugsee:bugsee-android` dependency being present
  *  - the resolved [StartupTier] being something other than [StartupTier.OFF]
+ *  - the SDK shipping `BugseeAppStartupDispatcher` on the runtime classpath
+ *    (checked per-class by the factory via [classContext.loadClassData];
+ *    older SDKs surface a one-shot `System.err` warning and skip
+ *    instrumentation rather than emit calls against a missing class)
  *
- * **Phase 3:** the registered ASM factory is a skeleton — no bytecode is
- * rewritten yet. Tier selection, DSL plumbing, and per-variant registration
- * all work end-to-end so future phases can drop in the real transform
- * without touching the wiring.
+ * **Implementation layers:**
+ *  - **DSL plumbing + tier resolution + per-variant registration** —
+ *    declared here in `shouldApply` / `apply`, with the resolved tier
+ *    captured into the AGP transform parameter so the lambda stays
+ *    configuration-cache compatible.
+ *  - **Bytecode rewriting** — performed by
+ *    [AppStartupTracingClassVisitor] + [MethodBodyWrapper] (MINIMAL),
+ *    [TopLevelCallWrapper] (STANDARD), [LoopWrapper] (DETAILED), and
+ *    the FULL-tier annotation peek visitor (FULL). Layer order is
+ *    increasing-scope: per-call → per-loop → whole-method, with the
+ *    method-body catch-any pinned at the end of `tryCatchBlocks` via
+ *    [MethodBodyWrapper]'s layer-ordering invariant guard.
  */
 internal class AppStartupTracingInstrumentation(
     private val configResolver: InstrumentationConfigResolver
@@ -37,14 +49,15 @@ internal class AppStartupTracingInstrumentation(
         if (configResolver.resolveStartupTier() == StartupTier.OFF) {
             return false
         }
-        // TODO(phase-5): probe the resolved runtime classpath for
-        // BugseeAppStartupDispatcher.class and, if absent, emit a Gradle
-        // warning ("SDK too old — startup instrumentation will be skipped")
-        // and return false. For Phase 3 the per-class
-        // ClassContext.loadClassData check inside the factory is the only
-        // gate; an SDK without the dispatcher will simply produce no
-        // bytecode (because isInstrumentable currently returns false
-        // anyway).
+        // SDK-version gating lives inside the factory's createClassVisitor
+        // via ClassContext.loadClassData on the dispatcher FQN; when the
+        // dispatcher is missing (older SDK), the factory short-circuits AND
+        // writes a one-time "SDK too old" warning to System.err so the
+        // misconfiguration surfaces in the build output rather than
+        // silently producing no-op bytecode. Doing the probe at
+        // shouldApply time would require resolving the runtime
+        // configuration at configuration phase, which Gradle's lazy model
+        // discourages; the factory-level probe is the right trade-off.
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 

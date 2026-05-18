@@ -80,6 +80,20 @@ internal class MethodCfg private constructor(
         private val EMPTY = IntArray(0)
 
         /**
+         * Test seam — wraps a hand-crafted successors table in a
+         * [MethodCfg] without going through ASM's [Analyzer]. Lets the
+         * analyzer-layer unit tests ([DominatorsTest], [NaturalLoopsTest])
+         * exercise the algorithms on tiny synthetic graphs without
+         * needing to synthesize matching bytecode. Caller owns the array
+         * and must guarantee `successors[i]` is in `[0, successors.size)`
+         * for all entries — out-of-range successors trigger
+         * IndexOutOfBoundsException downstream.
+         */
+        internal fun fromSuccessorsForTest(successors: Array<IntArray>): MethodCfg {
+            return MethodCfg(successors.size, successors)
+        }
+
+        /**
          * Builds the CFG for [methodNode] in the context of class
          * [ownerInternalName] (used by the Analyzer for type resolution).
          * Returns `null` if the method has no instructions (abstract /

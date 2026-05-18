@@ -115,17 +115,57 @@ internal object LoopWrapper {
         // Process loops in a stable order (by header index ascending)
         // so per-method ordinal assignment is deterministic.
         val ordered = topLevel.sortedBy { it.header }
+
+        // **Two-phase wrap to support sibling top-level loops.**
+        //
+        // Phase 1 (read-only): for each loop, validate the skip
+        // conditions and resolve the persistent node references we'll
+        // need to mutate around — all `instructions.get(idx)` lookups
+        // happen here against the pre-mutation InsnList. The CFG /
+        // dominators / body BitSets are also pre-mutation indices,
+        // matching the node refs we capture in this phase.
+        //
+        // Phase 2 (mutating): for each plan, perform the InsnList
+        // mutations using the captured node references. ASM keeps node
+        // objects stable across `insertBefore` / `insert` / `add` calls,
+        // so a later loop's anchors remain valid even after earlier
+        // loops have mutated the list around them.
+        //
+        // Pre-fix this was a single loop that did both phases together;
+        // for the second sibling top-level loop, `instructions.get(idx)`
+        // would return a node FROM THE FIRST WRAP (since the index
+        // semantics shifted), producing structurally broken bytecode.
+        // No existing test surfaced this because every multi-loop
+        // fixture either uses a single loop or nested loops (where the
+        // top-level filter keeps only the outer, again giving a single
+        // wrap). See `DetailedTierTransformTest` — the
+        // sibling-top-level-loops fixture pins the fix.
+        // **Ordinal semantics:** `ordinal++` runs for EVERY loop in
+        // `ordered`, including loops that `planSingleLoopWrap` ultimately
+        // rejects. A skipped loop therefore "burns" its ordinal — e.g.
+        // a method with three sibling top-level loops where the second
+        // is non-contiguous would emit `loop_1` and `loop_3` site ids,
+        // skipping `loop_2`. This is intentional: ordinals are stable
+        // across builds (loop discovery order is sorted by header
+        // index) and distinct within a method, but NOT guaranteed to
+        // be contiguous. Stability beats density for telemetry
+        // continuity — a downstream dashboard binding to
+        // `MyApp#onCreate#loop_3` keeps tracking the same loop even
+        // if a future code change adds or removes a sibling.
+        val plans = ArrayList<WrapPlan>(ordered.size)
         var ordinal = 0
         for (loop in ordered) {
             ordinal++
-            wrapSingleLoop(
+            val plan = planSingleLoopWrap(
                 methodNode = methodNode,
                 loop = loop,
                 ordinal = ordinal,
                 ownerInternalName = ownerInternalName,
-                dispatcherInternalName = dispatcherInternalName,
                 cfg = cfg,
             )
+            if (plan != null) {
+                plans.add(plan)
+            }
             // Skipped loops are silently dropped — no observable side
             // effect other than the absence of LOOP_START/LOOP_END
             // events for that loop. The relevant skip paths are:
@@ -135,22 +175,50 @@ internal object LoopWrapper {
             //   * exit target ALSO reachable from outside the loop
             //     body (false-positive end events would otherwise fire
             //     when control bypassed the loop).
-            // See the inline comments in wrapSingleLoop for each
+            // See the inline comments in planSingleLoopWrap for each
             // condition.
+        }
+
+        for (plan in plans) {
+            applyWrapPlan(methodNode, plan, dispatcherInternalName)
         }
     }
 
-    private fun wrapSingleLoop(
+    /**
+     * The persistent state needed to apply a single loop's wrap. All
+     * fields hold either pure data (siteId) or stable ASM node references
+     * (the body anchors and exit anchors). Node references survive
+     * arbitrary `InsnList.insertBefore` / `insert` / `add` mutations
+     * elsewhere in the InsnList — only outright `remove` invalidates
+     * them, and we never remove nodes during wrap.
+     */
+    private data class WrapPlan(
+        val siteId: String,
+        val firstBodyInsn: AbstractInsnNode,
+        val lastBodyInsn: AbstractInsnNode,
+        val exitTargetAnchors: List<AbstractInsnNode>,
+        val tryStart: LabelNode,
+        val tryEnd: LabelNode,
+        val handler: LabelNode,
+    )
+
+    /**
+     * Read-only planning phase. Validates skip conditions and captures
+     * persistent ASM node references against the pre-mutation InsnList.
+     * Returns a [WrapPlan] if the loop should be wrapped, `null` if it
+     * should be skipped. Does NOT mutate [methodNode] or any of its
+     * substructures.
+     */
+    private fun planSingleLoopWrap(
         methodNode: MethodNode,
         loop: NaturalLoop,
         ordinal: Int,
         ownerInternalName: String,
-        dispatcherInternalName: String,
         cfg: MethodCfg,
-    ) {
+    ): WrapPlan? {
         val body = loop.body
         val minIdx = body.nextSetBit(0)
-        if (minIdx < 0) return
+        if (minIdx < 0) return null
         val maxIdx = body.previousSetBit(cfg.instructionCount - 1)
 
         // Contiguity check — every index in [minIdx, maxIdx] must be
@@ -179,7 +247,7 @@ internal object LoopWrapper {
             if (cfg.successors[i].isNotEmpty()
                 || cfg.predecessorsOf(i).isNotEmpty()
             ) {
-                return
+                return null
             }
         }
 
@@ -203,7 +271,7 @@ internal object LoopWrapper {
         // exception path's handler-fire would still emit an END, but
         // an event with start-without-end is more useful than the
         // reverse, so skip these entirely.
-        if (exitTargets.isEmpty()) return
+        if (exitTargets.isEmpty()) return null
 
         // **External-predecessor check.** If any exit target is ALSO
         // reachable from outside the loop body (e.g. an `if` above the
@@ -219,7 +287,7 @@ internal object LoopWrapper {
             val preds = cfg.predecessorsOf(targetIdx)
             for (pred in preds) {
                 if (pred in 0 until cfg.instructionCount && !body.get(pred)) {
-                    return
+                    return null
                 }
             }
         }
@@ -230,8 +298,16 @@ internal object LoopWrapper {
         // an `insertBefore`, the original `get(i)` would return a
         // different node (the one now at position i in the new layout),
         // not the original instruction at that pre-mutation index.
-        // The exit-target lookups in particular MUST be done up-front,
-        // not in the per-target loop below.
+        //
+        // **Critical for sibling top-level loops**: the planning phase
+        // captures node references against the pre-mutation InsnList.
+        // Subsequent loops' planning passes also see the pre-mutation
+        // InsnList (no mutations happen during phase 1 of the outer
+        // wrap loop), so each plan's anchors are valid pre-mutation
+        // references. ASM keeps node objects stable across phase-2
+        // mutations elsewhere in the list — `insertBefore(anchor, list)`
+        // works against the anchor's current linked-list neighbors,
+        // wherever those happen to be.
         val siteId = SiteIdGenerator.forLoop(ownerInternalName, methodNode.name, ordinal)
         val firstBodyInsn = methodNode.instructions.get(minIdx)
         val lastBodyInsn = methodNode.instructions.get(maxIdx)
@@ -239,15 +315,34 @@ internal object LoopWrapper {
             methodNode.instructions.get(idx)
         }
 
-        val tryStart = LabelNode()
-        val tryEnd = LabelNode()
-        val handler = LabelNode()
+        return WrapPlan(
+            siteId = siteId,
+            firstBodyInsn = firstBodyInsn,
+            lastBodyInsn = lastBodyInsn,
+            exitTargetAnchors = exitTargetNodes,
+            tryStart = LabelNode(),
+            tryEnd = LabelNode(),
+            handler = LabelNode(),
+        )
+    }
 
+    /**
+     * Applies a [WrapPlan] to [methodNode]. Mutates the InsnList and
+     * tryCatchBlocks. Safe to call sequentially for multiple plans
+     * built against the same pre-mutation InsnList — each plan's
+     * anchors stay valid across other plans' mutations because ASM
+     * preserves node identity.
+     */
+    private fun applyWrapPlan(
+        methodNode: MethodNode,
+        plan: WrapPlan,
+        dispatcherInternalName: String,
+    ) {
         // Insert onLoopStart prefix BEFORE the first body instruction.
         // Order: LDC + INVOKESTATIC + tryStart label, then original
         // first-body-instruction.
         val prefix = InsnList().apply {
-            add(LdcInsnNode(siteId))
+            add(LdcInsnNode(plan.siteId))
             add(MethodInsnNode(
                 Opcodes.INVOKESTATIC,
                 dispatcherInternalName,
@@ -255,32 +350,50 @@ internal object LoopWrapper {
                 DISPATCH_DESCRIPTOR,
                 false,
             ))
-            add(tryStart)
+            add(plan.tryStart)
         }
-        methodNode.instructions.insertBefore(firstBodyInsn, prefix)
+        methodNode.instructions.insertBefore(plan.firstBodyInsn, prefix)
 
         // Insert tryEnd label AFTER the last body instruction.
-        methodNode.instructions.insert(lastBodyInsn, tryEnd)
+        methodNode.instructions.insert(plan.lastBodyInsn, plan.tryEnd)
 
-        // For each unique exit target, insert onLoopEnd so that all
-        // entry paths into the target run through the event:
-        //   * Target is a [LabelNode]: insert AFTER it. Labels are
-        //     pseudo-instructions; a jump resolves to the first real
-        //     instruction at-or-after the label position in the
-        //     InsnList. Inserting BEFORE the label would put the
-        //     event ahead of the label position — the jump would
-        //     land on the label and skip the event entirely.
-        //     Inserting AFTER places the event AT the resolved label
-        //     position, so jumps to the label run the event first
-        //     and then fall through to the original target.
-        //   * Target is a real instruction (fall-through-only exit):
-        //     insert BEFORE so sequential flow hits the event before
-        //     the original instruction. Inserting AFTER would run
-        //     the original first (and if it's a RETURN, the event
-        //     would never fire).
-        for (targetInsn in exitTargetNodes) {
+        // For each unique exit target, insert onLoopEnd BEFORE the first
+        // real-opcode anchor at-or-after the target. This single rule
+        // covers all anchor shapes uniformly:
+        //
+        //   * **Real-opcode target** (fall-through exit): `targetInsn`
+        //     is already real, so `firstRealOpcodeAtOrAfter` returns
+        //     it. `insertBefore(targetInsn, onEnd)` places the event
+        //     ahead of the original instruction — sequential flow
+        //     hits the event first. Inserting AFTER would run the
+        //     original first (and if it's a RETURN, the event would
+        //     never fire).
+        //
+        //   * **[LabelNode] target** (jump exit): walk past the label
+        //     plus any intervening pseudo-nodes ([FrameNode],
+        //     [LineNumberNode]) to the first real opcode, and insert
+        //     BEFORE it. The label's resolved bytecode offset is the
+        //     offset of that first real opcode — so a jump to the
+        //     label lands on our injected `LDC` first, runs the
+        //     dispatch, and falls through into the original target
+        //     instruction. The preserved leading `Label → Frame → Line`
+        //     pseudo-chain keeps frame directives at their original
+        //     jump-target boundary, which matters for non-
+        //     `COMPUTE_FRAMES` ClassWriter configurations.
+        //
+        //   * **[FrameNode] / [LineNumberNode] target**: walk past the
+        //     pseudo chain similarly. Same rationale as the LabelNode
+        //     case.
+        //
+        // `firstRealOpcodeAtOrAfter` returns `null` only if no real
+        // opcode exists between the target and the end of the InsnList
+        // — never expected in well-formed bytecode (the JVM requires a
+        // real terminator). The `continue` defensively skips this
+        // pathological case.
+        for (targetInsn in plan.exitTargetAnchors) {
+            val anchor = firstRealOpcodeAtOrAfter(targetInsn) ?: continue
             val onEnd = InsnList().apply {
-                add(LdcInsnNode(siteId))
+                add(LdcInsnNode(plan.siteId))
                 add(MethodInsnNode(
                     Opcodes.INVOKESTATIC,
                     dispatcherInternalName,
@@ -289,11 +402,7 @@ internal object LoopWrapper {
                     false,
                 ))
             }
-            if (targetInsn is LabelNode) {
-                methodNode.instructions.insert(targetInsn, onEnd)
-            } else {
-                methodNode.instructions.insertBefore(targetInsn, onEnd)
-            }
+            methodNode.instructions.insertBefore(anchor, onEnd)
         }
 
         // Append the catch-any handler at the END of the method body.
@@ -303,9 +412,13 @@ internal object LoopWrapper {
         // and appends its own outer-handler suffix, that lands AFTER
         // this loop handler — and this loop handler ends in ATHROW,
         // so no fall-through into MethodBodyWrapper's suffix either.
+        // For sibling top-level loops, each loop's handler suffix is
+        // appended in turn; they sit at the tail of the InsnList in
+        // plan-application order, each terminating in ATHROW so no
+        // fall-through between them either.
         val handlerSuffix = InsnList().apply {
-            add(handler)
-            add(LdcInsnNode(siteId))
+            add(plan.handler)
+            add(LdcInsnNode(plan.siteId))
             add(MethodInsnNode(
                 Opcodes.INVOKESTATIC,
                 dispatcherInternalName,
@@ -322,7 +435,32 @@ internal object LoopWrapper {
         // Known limitation re: user-try-around-loop documented in the
         // class KDoc.
         methodNode.tryCatchBlocks.add(
-            TryCatchBlockNode(tryStart, tryEnd, handler, /* type = */ null)
+            TryCatchBlockNode(plan.tryStart, plan.tryEnd, plan.handler, /* type = */ null)
         )
+    }
+
+    /**
+     * An "opcode-bearing" instruction node — has a real JVM opcode
+     * (opcode `>= 0`). [LabelNode], [org.objectweb.asm.tree.FrameNode],
+     * and [org.objectweb.asm.tree.LineNumberNode] return `-1` for
+     * `getOpcode()` and are NOT real opcodes for our purposes.
+     */
+    private fun isRealOpcode(node: AbstractInsnNode): Boolean = node.opcode >= 0
+
+    /**
+     * Walks forward from [start] (inclusive) through any pseudo-nodes
+     * ([LabelNode], [org.objectweb.asm.tree.FrameNode],
+     * [org.objectweb.asm.tree.LineNumberNode]) until a real opcode is
+     * found. Returns `null` if no real opcode exists between [start]
+     * and the end of the InsnList — should not happen in well-formed
+     * bytecode, but the caller defensively `continue`s on `null`.
+     */
+    private fun firstRealOpcodeAtOrAfter(start: AbstractInsnNode): AbstractInsnNode? {
+        var cursor: AbstractInsnNode? = start
+        while (cursor != null) {
+            if (isRealOpcode(cursor)) return cursor
+            cursor = cursor.next
+        }
+        return null
     }
 }
