@@ -48,6 +48,27 @@ dependencies {
     implementation("org.apache.httpcomponents:httpclient:4.5.14")
     implementation("org.apache.httpcomponents:httpmime:4.5.14")
     implementation("org.json:json:20240303")
+
+    // ASM tree + analysis used by the app-startup-tracing production
+    // transforms (MethodNode-based rewrite, Analyzer/BasicInterpreter
+    // for natural-loop detection). compileOnly — AGP brings the same
+    // ASM 9.7 transitively at plugin runtime through its R8/transform
+    // toolchain, so packaging another copy would risk classloader
+    // pollution.
+    //
+    // **AGP→ASM version coupling.** AGP 8.6.0 (the version this plugin
+    // is built against) pulls ASM 9.7 transitively via its R8/transform
+    // chain (`com.android.tools.build:gradle:8.6.0` → `transform-api`
+    // → `org.ow2.asm:asm-*:9.7`). Consumers MUST use AGP 8.6.0+ at
+    // build time; earlier AGP releases shipped older ASM versions
+    // (e.g. AGP 8.4 ships ASM 9.5) that lack a few utility methods
+    // this plugin doesn't use today but is one refactor away from
+    // depending on. If the plugin ever drops to a Method/Class API
+    // added in ASM 9.6+, surface the minimum AGP requirement in the
+    // plugin's POM constraint instead of relying on this comment.
+    compileOnly("org.ow2.asm:asm-tree:9.7")
+    compileOnly("org.ow2.asm:asm-analysis:9.7")
+
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
 
