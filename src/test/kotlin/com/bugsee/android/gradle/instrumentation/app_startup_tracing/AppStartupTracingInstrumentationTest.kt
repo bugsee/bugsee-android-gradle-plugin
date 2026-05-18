@@ -34,7 +34,7 @@ class AppStartupTracingInstrumentationTest {
     }
 
     @Test fun `tier OFF disables instrumentation regardless of dependency`() {
-        extension.startupTier.set("OFF")
+        extension.startupTier.set(StartupTier.OFF)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         // No bugsee-android dependency present in this fresh ProjectBuilder
         // project; OFF should short-circuit before the dependency probe.
@@ -42,7 +42,7 @@ class AppStartupTracingInstrumentationTest {
     }
 
     @Test fun `tier set but no Bugsee dependency present returns false`() {
-        extension.startupTier.set("STANDARD")
+        extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         // The dependency probe fails on a bare ProjectBuilder project, so
         // shouldApply returns false for the dependency reason. Phase 5
@@ -77,7 +77,7 @@ class AppStartupTracingInstrumentationTest {
         // external dependency to the project so the probe would succeed,
         // and assert OFF still wins.
         addBugseeAndroidDependency(project)
-        extension.startupTier.set("OFF")
+        extension.startupTier.set(StartupTier.OFF)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         org.junit.Assert.assertFalse(instrumentation.shouldApply(project))
     }
@@ -88,7 +88,7 @@ class AppStartupTracingInstrumentationTest {
         // non-OFF tier. Combined with the OFF-with-dep test above, this
         // pair distinguishes the OFF gate from the dependency gate.
         addBugseeAndroidDependency(project)
-        extension.startupTier.set("STANDARD")
+        extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
     }

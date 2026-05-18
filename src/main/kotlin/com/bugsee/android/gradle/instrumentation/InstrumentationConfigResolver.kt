@@ -3,7 +3,6 @@ package com.bugsee.android.gradle.instrumentation
 import com.bugsee.android.gradle.BugseeInstrumentationExtension
 import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
 import com.bugsee.android.gradle.manifest.ManifestModifier
-import org.gradle.api.GradleException
 import org.gradle.api.Project
 import java.io.File
 
@@ -41,56 +40,35 @@ internal class InstrumentationConfigResolver(
     }
 
     /**
-     * Resolves the app-startup tracing tier through the same priority chain
-     * as [isFeatureEnabled]:
+     * Resolves the app-startup tracing tier through the priority chain:
      *
-     * 1. DSL `bugsee { instrumentation { startupTier = "DETAILED" } }`
+     * 1. DSL `bugsee { instrumentation { startupTier.set(StartupTier.DETAILED) } }`
      * 2. Gradle property `bugsee.instrumentation.startupTier=DETAILED`
      * 3. Manifest meta-data `com.bugsee.android.instrumentation.startupTier`
      * 4. Default — [StartupTier.DEFAULT] (STANDARD).
      *
-     * **DSL is strict.** An invalid value in `bugsee { instrumentation {
-     * startupTier = "BLERG" } }` fails the build with a [GradleException].
-     * The DSL is the user's explicit choice, hand-written and checked into
-     * source control; a typo there is far more likely to be a bug than an
-     * intentional fall-through, and silently masking it has burned at
-     * least one team that thought they were on FULL but were running on
-     * STANDARD for weeks.
+     * **DSL is now typed** ([org.gradle.api.provider.Property]<[StartupTier]>),
+     * so the compiler enforces validity at write time — no runtime parse,
+     * no strict-validation throw needed. If the property is unset, the
+     * resolver falls through to the Gradle-property source.
      *
-     * **Gradle property and manifest meta-data are lenient.** Invalid
-     * values at those sources emit a warning and fall through to the next
-     * source. Those sources are often set by CI variables, app-template
-     * overlays, or per-flavor configs whose values are not always under
-     * the build author's direct control; failing the build on a typo
-     * there would be more disruptive than informative.
+     * **Gradle property and manifest meta-data are lenient.** Both still
+     * carry the tier as a String (Gradle properties and manifest XML are
+     * always strings). Invalid values at those sources emit a warning
+     * and fall through to the next source. Those sources are often set
+     * by CI variables, app-template overlays, or per-flavor configs
+     * whose values are not always under the build author's direct
+     * control; failing the build on a typo there would be more
+     * disruptive than informative.
      */
     fun resolveStartupTier(): StartupTier {
         val key = "startupTier"
         val gradlePropName = "$GRADLE_PROP_PREFIX.$key"
         val manifestMetaName = "$MANIFEST_META_PREFIX.$key"
 
-        // 1. DSL — strict for non-blank values
+        // 1. DSL — typed; compiler enforces validity.
         if (extension.startupTier.isPresent) {
-            val raw = extension.startupTier.get()
-            // Blank values are treated as "unset" — they fall through to
-            // the next source. A user-template Gradle file that pre-declares
-            // `startupTier.set(System.getenv("BUGSEE_TIER") ?: "")` should
-            // still allow the Gradle property or manifest meta-data to
-            // win without forcing the user to wrap the call in a null
-            // check at the DSL layer.
-            if (raw.isNotBlank()) {
-                val parsed = StartupTier.parse(raw)
-                if (parsed != null) {
-                    return parsed
-                }
-                throw GradleException(
-                    "Bugsee: Invalid startupTier '$raw' in DSL " +
-                            "(bugsee { instrumentation { startupTier.set(...) } }). " +
-                            "Expected one of ${StartupTier.entries.joinToString { it.name }}. " +
-                            "Lower / mixed case is accepted (e.g. 'detailed' resolves to DETAILED). " +
-                            "Use OFF to disable app-startup tracing entirely."
-                )
-            }
+            return extension.startupTier.get()
         }
 
         // 2. Gradle property

@@ -19,10 +19,15 @@ import org.gradle.api.tasks.Input
 internal interface AppStartupTracingParameters : BugseeInstrumentationParameters {
 
     /**
-     * Selected tier as a `String` ([StartupTier.name]). The factory parses
-     * it on first use; AGP's parameter framework does not support enum
-     * properties directly across configuration-cache boundaries.
+     * Selected tier. Carried as a typed [StartupTier] enum — Kotlin enums
+     * are [java.io.Serializable] by virtue of extending [java.lang.Enum],
+     * so they cross AGP's configuration-cache boundary without issue.
+     *
+     * The DSL is also typed (`Property<StartupTier>` on the extension);
+     * Gradle-property and manifest-meta-data sources stay as strings and
+     * are parsed via [StartupTier.parse] at resolution time, then handed
+     * to this property as an already-resolved enum value.
      */
     @get:Input
-    val tier: Property<String>
+    val tier: Property<StartupTier>
 }

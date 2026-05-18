@@ -196,15 +196,14 @@ abstract class AppStartupTracingClassVisitorFactory :
     /**
      * Cached tier value: AGP invokes `isInstrumentable` and
      * `createClassVisitor` once per class in scope (thousands of times
-     * per build at FULL tier). Re-parsing the `Property<String>` each
-     * call would do thousands of `StartupTier.parse` calls per build
-     * for no useful reason — the tier is build-time-constant once
-     * `apply(variant)` has set it. Falls back to
-     * [StartupTier.DEFAULT] defensively (the resolver already
-     * validated the value upstream).
+     * per build at FULL tier). The parameter is now typed `Property<StartupTier>`
+     * so no per-call parse is needed — the lazy read just unboxes the
+     * enum once per factory instance. Falls back to [StartupTier.DEFAULT]
+     * defensively in case AGP ever invokes the factory without setting
+     * the parameter (the resolver always sets it at `apply(variant)`).
      */
     private val resolvedTier: StartupTier by lazy {
-        StartupTier.parse(parameters.get().tier.orNull) ?: StartupTier.DEFAULT
+        parameters.get().tier.orNull ?: StartupTier.DEFAULT
     }
 
     private companion object {

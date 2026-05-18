@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle
 
+import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
 import javax.inject.Inject
@@ -18,7 +19,7 @@ import javax.inject.Inject
  *         mainThreadMisuse.set(true)
  *         ktor.set(true)              // Ktor HTTP client plugin auto-loading
  *         cronet.set(true)            // Cronet HTTP client plugin auto-loading
- *         startupTier.set("STANDARD") // App-startup bytecode tracing depth
+ *         startupTier.set(StartupTier.STANDARD) // App-startup bytecode tracing depth
  *     }
  * }
  * ```
@@ -121,15 +122,30 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
     /**
      * Depth of app-startup bytecode tracing.
      *
-     * Accepted values (case-insensitive): `"OFF"`, `"MINIMAL"`, `"STANDARD"`,
-     * `"DETAILED"`, `"FULL"`. Unset (or invalid) falls back through Gradle
-     * property `bugsee.instrumentation.startupTier`, then manifest meta-data
+     * Typed [StartupTier] property — the compiler enforces that the value
+     * is one of [StartupTier.OFF], [StartupTier.MINIMAL],
+     * [StartupTier.STANDARD], [StartupTier.DETAILED], [StartupTier.FULL].
+     * Unset falls back through Gradle property
+     * `bugsee.instrumentation.startupTier`, then manifest meta-data
      * `com.bugsee.android.instrumentation.startupTier`, then defaults to
-     * `"STANDARD"`.
+     * [StartupTier.STANDARD]. Both fallback sources still accept the
+     * case-insensitive tier name as a String (Gradle properties and
+     * manifest meta-data are always strings).
      *
-     * See `StartupTier` (plugin-internal) for what each tier wraps.
+     * Example:
+     * ```kotlin
+     * import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
+     *
+     * bugsee {
+     *     instrumentation {
+     *         startupTier.set(StartupTier.FULL)
+     *     }
+     * }
+     * ```
+     *
+     * See [StartupTier] for what each tier wraps.
      */
-    val startupTier: Property<String> = objects.property(String::class.java)
+    val startupTier: Property<StartupTier> = objects.property(StartupTier::class.java)
 
     /**
      * Auto-load the Bugsee Ktor HTTP client plugin when a Ktor dependency is detected.

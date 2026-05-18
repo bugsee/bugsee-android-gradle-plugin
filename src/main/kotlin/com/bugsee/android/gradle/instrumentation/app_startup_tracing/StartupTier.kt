@@ -25,11 +25,30 @@ package com.bugsee.android.gradle.instrumentation.app_startup_tracing
  *    Method-level wrap only — calls and loops inside annotated methods are
  *    not auto-wrapped.
  *
- * Parsed from the DSL / Gradle property / manifest meta-data via
- * [StartupTier.parse], which accepts case-insensitive names and falls back
- * to [STANDARD] (with a warning) for unknown values.
+ * **Public DSL surface.** Configured from `build.gradle.kts`:
+ * ```kotlin
+ * import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
+ *
+ * bugsee {
+ *     instrumentation {
+ *         startupTier.set(StartupTier.FULL)
+ *     }
+ * }
+ * ```
+ *
+ * Gradle-property and manifest-meta-data sources still pass the tier as
+ * a String — those are parsed via [parse], which accepts case-insensitive
+ * names. The DSL source is typed and cannot carry an invalid value.
+ *
+ * **Backwards-compat note.** This used to be `Property<String>` plus
+ * runtime `StartupTier.parse(...)`. The enum-typed DSL is a breaking
+ * change relative to the prior `Property<String>` shape — consumers
+ * who wrote `startupTier.set("FULL")` must migrate to
+ * `startupTier.set(StartupTier.FULL)` and add the import shown above.
+ * The change ships in plugin `4.0.0-beta8`; earlier `4.0.0-beta7` and
+ * below were unreleased so no public API contract was broken.
  */
-internal enum class StartupTier {
+enum class StartupTier {
     OFF,
     MINIMAL,
     STANDARD,

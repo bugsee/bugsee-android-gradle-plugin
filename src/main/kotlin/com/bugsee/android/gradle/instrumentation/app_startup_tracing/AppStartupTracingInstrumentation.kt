@@ -73,7 +73,7 @@ internal class AppStartupTracingInstrumentation(
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeAppStartupDispatcher")
-            params.tier.set(tier.name)
+            params.tier.set(tier)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
