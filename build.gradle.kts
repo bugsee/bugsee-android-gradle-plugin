@@ -50,6 +50,19 @@ dependencies {
     implementation("org.json:json:20240303")
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
+
+    // ASM toolchain used by the app-startup-tracing test harness
+    // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
+    // for CFG-correctness assertions, tree + core for transform code).
+    testImplementation("org.ow2.asm:asm:9.7")
+    testImplementation("org.ow2.asm:asm-tree:9.7")
+    testImplementation("org.ow2.asm:asm-util:9.7")
+    testImplementation("org.ow2.asm:asm-analysis:9.7")
+
+    // Kotlin compiler embeddable for the test harness's Kotlin-source
+    // compiler (compiles inline Kotlin snippets to class bytes that the
+    // ASM harness then transforms).
+    testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.1.0")
 }
 
 // Generate version resource so the plugin can read its own version at runtime.
