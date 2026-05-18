@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
 import com.bugsee.android.gradle.BugseeInstrumentationExtension
+import com.bugsee.android.gradle.instrumentation.app_startup_tracing.StartupTier
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.Project
 import java.io.File
@@ -36,6 +37,73 @@ internal class InstrumentationConfigResolver(
     fun isFeatureEnabled(key: String): Boolean {
         val dslProp = extension.propertyForKey(key)
         return resolve(dslProp, "$GRADLE_PROP_PREFIX.$key", "$MANIFEST_META_PREFIX.$key")
+    }
+
+    /**
+     * Resolves the app-startup tracing tier through the same priority chain
+     * as [isFeatureEnabled]:
+     *
+     * 1. DSL `bugsee { instrumentation { startupTier = "DETAILED" } }`
+     * 2. Gradle property `bugsee.instrumentation.startupTier=DETAILED`
+     * 3. Manifest meta-data `com.bugsee.android.instrumentation.startupTier`
+     * 4. Default — [StartupTier.DEFAULT] (STANDARD).
+     *
+     * An invalid value at any source emits a warning and falls through to
+     * the next source — never the default directly — so a typo in the DSL
+     * doesn't silently mask a valid Gradle property.
+     */
+    fun resolveStartupTier(): StartupTier {
+        val key = "startupTier"
+        val gradlePropName = "$GRADLE_PROP_PREFIX.$key"
+        val manifestMetaName = "$MANIFEST_META_PREFIX.$key"
+
+        // 1. DSL
+        if (extension.startupTier.isPresent) {
+            val raw = extension.startupTier.get()
+            val parsed = StartupTier.parse(raw)
+            if (parsed != null) {
+                return parsed
+            }
+            project.logger.warn(
+                "Bugsee: Invalid startupTier '$raw' in DSL; expected one of " +
+                        "${StartupTier.entries.joinToString { it.name }}. Falling through to next source."
+            )
+        }
+
+        // 2. Gradle property
+        val gradleValue = project.findProperty(gradlePropName)?.toString()
+        if (gradleValue != null) {
+            val parsed = StartupTier.parse(gradleValue)
+            if (parsed != null) {
+                return parsed
+            }
+            project.logger.warn(
+                "Bugsee: Invalid startupTier '$gradleValue' for Gradle property '$gradlePropName'; " +
+                        "expected one of ${StartupTier.entries.joinToString { it.name }}. " +
+                        "Falling through to next source."
+            )
+        }
+
+        // 3. Manifest meta-data
+        if (sourceManifest != null && sourceManifest.exists()) {
+            val manifestValue = ManifestModifier.getMetaDataValue(sourceManifest, manifestMetaName)
+            if (manifestValue != null) {
+                val parsed = StartupTier.parse(manifestValue)
+                if (parsed != null) {
+                    return parsed
+                }
+                project.logger.warn(
+                    "Bugsee: Invalid startupTier '$manifestValue' in manifest meta-data " +
+                            "'$manifestMetaName'; expected one of " +
+                            "${StartupTier.entries.joinToString { it.name }}. " +
+                            "Falling through to next source (manifest is the last source — " +
+                            "this means falling back to default ${StartupTier.DEFAULT})."
+                )
+            }
+        }
+
+        // 4. Default
+        return StartupTier.DEFAULT
     }
 
     /**

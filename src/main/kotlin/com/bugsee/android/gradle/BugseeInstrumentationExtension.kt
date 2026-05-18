@@ -18,6 +18,7 @@ import javax.inject.Inject
  *         mainThreadMisuse.set(true)
  *         ktor.set(true)              // Ktor HTTP client plugin auto-loading
  *         cronet.set(true)            // Cronet HTTP client plugin auto-loading
+ *         startupTier.set("STANDARD") // App-startup bytecode tracing depth
  *     }
  * }
  * ```
@@ -118,6 +119,19 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
     val composeInput: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
     /**
+     * Depth of app-startup bytecode tracing.
+     *
+     * Accepted values (case-insensitive): `"OFF"`, `"MINIMAL"`, `"STANDARD"`,
+     * `"DETAILED"`, `"FULL"`. Unset (or invalid) falls back through Gradle
+     * property `bugsee.instrumentation.startupTier`, then manifest meta-data
+     * `com.bugsee.android.instrumentation.startupTier`, then defaults to
+     * `"STANDARD"`.
+     *
+     * See `StartupTier` (plugin-internal) for what each tier wraps.
+     */
+    val startupTier: Property<String> = objects.property(String::class.java)
+
+    /**
      * Auto-load the Bugsee Ktor HTTP client plugin when a Ktor dependency is detected.
      *
      * When unset, defaults to `true`.
@@ -133,7 +147,11 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
 
     /**
      * Returns the DSL property for the given instrumentation key, or `null`
-     * if the key does not match any known property.
+     * if the key does not match any known boolean property.
+     *
+     * Tier-driven instrumentations (currently only `appStartupTracing` via
+     * [startupTier]) are intentionally absent — they own their own enum-typed
+     * DSL surface and bypass the boolean gate in `InstrumentationRegistrar`.
      */
     internal fun propertyForKey(key: String): Property<Boolean>? = when (key) {
         "okhttp" -> okhttp

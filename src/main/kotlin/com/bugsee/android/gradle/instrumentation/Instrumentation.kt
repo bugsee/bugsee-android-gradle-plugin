@@ -16,6 +16,17 @@ internal interface Instrumentation {
     /** Machine-readable key used for gradle property and manifest meta-data lookups. */
     val key: String
 
+    /**
+     * Whether this instrumentation is governed by a non-boolean knob
+     * (e.g. a tier enum) rather than the standard `isFeatureEnabled` boolean
+     * gate. The registrar skips the boolean check for tier-driven entries
+     * so that a typo'd `bugsee.instrumentation.<key>=garbage` Gradle
+     * property does not produce a misleading "invalid boolean" warning and
+     * silently disable the feature. Defaults to `false` (boolean-gated,
+     * matching the long-standing behavior of every other instrumentation).
+     */
+    val isTierDriven: Boolean get() = false
+
     /** Returns true if this instrumentation should be applied (dependency is present). */
     fun shouldApply(project: Project): Boolean
 

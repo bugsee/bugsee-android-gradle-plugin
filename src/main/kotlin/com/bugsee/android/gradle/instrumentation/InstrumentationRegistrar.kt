@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
 import com.android.build.api.variant.Variant
+import com.bugsee.android.gradle.instrumentation.app_startup_tracing.AppStartupTracingInstrumentation
 import com.bugsee.android.gradle.instrumentation.compose_input.ComposeInputInstrumentation
 import com.bugsee.android.gradle.instrumentation.http_engine.HttpEngineInstrumentation
 import com.bugsee.android.gradle.instrumentation.log.LogInstrumentation
@@ -27,12 +28,20 @@ internal class InstrumentationRegistrar(
         ThreadInstrumentation(),
         MainThreadMisuseInstrumentation(),
         OperationDispatchInstrumentation(),
-        ComposeInputInstrumentation()
+        ComposeInputInstrumentation(),
+        AppStartupTracingInstrumentation(configResolver)
     )
 
     fun applyAll(variant: Variant) {
         for (instrumentation in instrumentations) {
-            if (!configResolver.isFeatureEnabled(instrumentation.key)) {
+            // Tier-driven instrumentations (e.g. AppStartupTracing) own
+            // their disable logic via shouldApply; routing them through
+            // the boolean gate would treat a typo'd Gradle property like
+            // bugsee.instrumentation.appStartupTracing=garbage as an
+            // "invalid boolean" and silently disable, masking the real
+            // configuration mistake.
+            if (!instrumentation.isTierDriven
+                && !configResolver.isFeatureEnabled(instrumentation.key)) {
                 if (debug) logger.warn("Bugsee: Skipping ${instrumentation.name} instrumentation (disabled by configuration)")
                 continue
             }
