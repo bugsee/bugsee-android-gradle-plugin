@@ -19,3 +19,6 @@ bin
 .settings/
 node-compile-cache/
 .DS_Store
+
+# Kotlin 2.x incremental compile cache
+.kotlin/
