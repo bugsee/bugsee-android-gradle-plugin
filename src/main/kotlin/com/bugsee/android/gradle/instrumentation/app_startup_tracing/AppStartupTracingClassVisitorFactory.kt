@@ -65,7 +65,7 @@ abstract class AppStartupTracingClassVisitorFactory :
         val params = parameters.get()
         val dispatcherClassFqn = params.targetClass.get()
 
-        val tier = resolvedTier
+        val tier = resolveTier()
         if (tier == StartupTier.OFF) {
             return nextClassVisitor
         }
@@ -142,7 +142,7 @@ abstract class AppStartupTracingClassVisitorFactory :
         // pre-scan optimization (skip classes whose raw bytecode
         // doesn't contain the literal string "BugseeTrace") to cut
         // this cost by 10-100× depending on annotation density.
-        return resolvedTier.picksUpAnnotated()
+        return resolveTier().picksUpAnnotated()
     }
 
     private fun classifyKinds(classData: ClassData): Set<ClassKind> {
@@ -195,17 +195,25 @@ abstract class AppStartupTracingClassVisitorFactory :
     }
 
     /**
-     * Cached tier value: AGP invokes `isInstrumentable` and
-     * `createClassVisitor` once per class in scope (thousands of times
-     * per build at FULL tier). The parameter is now typed `Property<StartupTier>`
-     * so no per-call parse is needed — the lazy read just unboxes the
-     * enum once per factory instance. Falls back to [StartupTier.DEFAULT]
-     * defensively in case AGP ever invokes the factory without setting
-     * the parameter (the resolver always sets it at `apply(variant)`).
+     * Resolves the tier from the typed `Property<StartupTier>` parameter.
+     *
+     * Must NOT cache via `by lazy` — AGP serializes
+     * [AsmClassVisitorFactory] instances across the artifact-transform
+     * isolation boundary, and Kotlin's `Lazy<T>` is not
+     * [java.io.Serializable] (it holds a captured lambda). A `by lazy`
+     * field here breaks Gradle's "Could not isolate parameters
+     * AsmClassesTransform$Parameters_Decorated" with "Could not serialize
+     * value of type AppStartupTracingClassVisitorFactory".
+     *
+     * Inlining is cheap: AGP invokes `isInstrumentable` and
+     * `createClassVisitor` thousands of times per build at FULL tier, but
+     * each call here just reads a resolved Gradle [Property] — effectively
+     * a hashmap lookup. Falls back to [StartupTier.DEFAULT] defensively
+     * in case AGP ever invokes the factory without the parameter set
+     * (the resolver always sets it at `apply(variant)`).
      */
-    private val resolvedTier: StartupTier by lazy {
+    private fun resolveTier(): StartupTier =
         parameters.get().tier.orNull ?: StartupTier.DEFAULT
-    }
 
     private companion object {
         /**
