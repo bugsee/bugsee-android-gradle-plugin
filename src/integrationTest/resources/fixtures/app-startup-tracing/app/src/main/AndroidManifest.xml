@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:name=".SampleApp"
+        android:label="fixture"
+        android:allowBackup="false">
+
+        <provider
+            android:name=".SampleProvider"
+            android:authorities="${applicationId}.sampleprovider"
+            android:exported="false" />
+
+        <!-- AndroidX startup library provider — pulls in our Initializer
+             via metadata. The plugin should NOT instrument the provider
+             itself (it's androidx.startup.InitializationProvider), but
+             SHOULD instrument our SampleInitializer.create. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="com.example.fixture.SampleInitializer"
+                android:value="androidx.startup" />
+        </provider>
+    </application>
+
+</manifest>

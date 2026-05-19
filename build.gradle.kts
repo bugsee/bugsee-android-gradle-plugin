@@ -86,6 +86,148 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.1.0")
 }
 
+// ============================================================================
+// integrationTest — TestKit-driven build-time tests
+//
+// Why a separate source set: TestKit launches a fresh Gradle daemon per
+// fixture build (5-15s warm, 30-60s cold), so folding these into the
+// existing `test` task would balloon the inner-loop unit suite from
+// ~10s to several minutes. The fast unit-test loop is a real productivity
+// feature worth preserving.
+//
+// Wired into `check` so CI runs both layers; not wired into `test` so
+// `./gradlew test` stays fast for developers.
+// ============================================================================
+
+val integrationTest: SourceSet = sourceSets.create("integrationTest") {
+    // Kotlin source dirs (`src/integrationTest/kotlin`) and resource dirs
+    // (`src/integrationTest/resources`) are auto-wired by the `kotlin("jvm")`
+    // plugin convention. Adding them explicitly here causes
+    // `processIntegrationTestResources` to see each resource entry twice.
+    compileClasspath += sourceSets["main"].output + configurations["testRuntimeClasspath"]
+    runtimeClasspath += output + compileClasspath
+}
+
+configurations.named("integrationTestImplementation") {
+    extendsFrom(configurations["testImplementation"])
+}
+configurations.named("integrationTestRuntimeOnly") {
+    extendsFrom(configurations["testRuntimeOnly"])
+}
+
+dependencies {
+    "integrationTestImplementation"(gradleTestKit())
+}
+
+// Stub-SDK jar packaging task — compiles `src/integrationTest/stub-sdk-src/*.java`
+// into a tiny jar that the fixture project pins as `compileOnly`. Mirrors the
+// SDK's locked Bugsee*Dispatcher/Trace contracts; any drift surfaces as a
+// compile error here at integration-test time. Built fresh each run (~1s).
+val stubSdkClassesDir = layout.buildDirectory.dir("integrationTest/stub-sdk/classes")
+val stubSdkJarDir = layout.buildDirectory.dir("integrationTest/stub-sdk")
+
+val compileStubSdk by tasks.registering(JavaCompile::class) {
+    description = "Compile stub-SDK source for integrationTest fixture."
+    group = "verification"
+    source = fileTree("src/integrationTest/stub-sdk-src")
+    destinationDirectory.set(stubSdkClassesDir)
+    classpath = files()
+    sourceCompatibility = "1.8"
+    targetCompatibility = "1.8"
+    options.release.set(8)
+    options.encoding = "UTF-8"
+}
+
+val buildStubSdkJar by tasks.registering(Jar::class) {
+    description = "Bundle stub-SDK classes into a jar consumable by fixture projects."
+    group = "verification"
+    dependsOn(compileStubSdk)
+    archiveFileName.set("bugsee-stub.jar")
+    destinationDirectory.set(stubSdkJarDir)
+    from(stubSdkClassesDir)
+}
+
+// Publish the stub jar to a local Maven repo under build/integrationTest/stub-sdk-repo
+// using the real `com.bugsee:bugsee-android:1.0.0` coordinates. The fixture
+// declares this as `compileOnly("com.bugsee:bugsee-android:1.0.0")` so the
+// plugin's `DependencyDetector.hasBugseeDependency(...)` recognizes the dep
+// (it matches on group=com.bugsee + name starts-with "bugsee-android") and
+// proceeds to register the AppStartupTracing transform.
+val stubSdkRepoDir = layout.buildDirectory.dir("integrationTest/stub-sdk-repo")
+val publishStubSdkToLocalRepo by tasks.registering(Copy::class) {
+    description = "Publish the stub-SDK jar under com.bugsee:bugsee-android:1.0.0 to a local repo."
+    group = "verification"
+    dependsOn(buildStubSdkJar)
+    val artifactDir = stubSdkRepoDir.map { it.dir("com/bugsee/bugsee-android/1.0.0") }
+    from(buildStubSdkJar.flatMap { it.archiveFile })
+    into(artifactDir)
+    rename { "bugsee-android-1.0.0.jar" }
+    doLast {
+        // Minimal POM — the plugin's dependency detector only reads
+        // group/name/version, but Gradle's POM-strict resolution wants the
+        // file to exist and parse.
+        artifactDir.get().asFile.resolve("bugsee-android-1.0.0.pom").writeText(
+            """<?xml version="1.0" encoding="UTF-8"?>
+            |<project xmlns="http://maven.apache.org/POM/4.0.0">
+            |  <modelVersion>4.0.0</modelVersion>
+            |  <groupId>com.bugsee</groupId>
+            |  <artifactId>bugsee-android</artifactId>
+            |  <version>1.0.0</version>
+            |  <packaging>jar</packaging>
+            |</project>
+            """.trimMargin()
+        )
+    }
+}
+
+// Pre-resolve a JDK 17 launcher at configure time so we can forward its
+// installation path to TestKit's fixture build (AGP 8.6 requires JDK 17 at
+// daemon runtime, even though the plugin itself builds against JDK 11).
+val launcher17Provider = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}
+
+// Note: the fixture build sources this plugin via
+// `pluginManagement.includeBuild(...)` (see
+// `src/integrationTest/resources/fixtures/.../settings.gradle.kts`)
+// instead of TestKit's `withPluginClasspath()`. That way the plugin
+// under test loads into the SAME classloader as AGP and the Kotlin
+// Gradle Plugin API — the buildscript classloader — avoiding
+// cross-classloader `NoClassDefFoundError` against `SingleArtifact` /
+// `KotlinCompilerPluginSupportPlugin` when Gradle's plugin verifier
+// resolves Bugsee plugin class references.
+
+tasks.register<Test>("integrationTest") {
+    description = "TestKit-driven build-time integration tests for the Bugsee Android Gradle plugin."
+    group = "verification"
+    testClassesDirs = integrationTest.output.classesDirs
+    classpath = integrationTest.runtimeClasspath
+    dependsOn(buildStubSdkJar)
+    dependsOn(publishStubSdkToLocalRepo)
+    useJUnit()
+    // Forward the local stub-SDK Maven repo path so the fixture's
+    // `settings.gradle.kts` can wire it via
+    // `repositoriesMode { … repositories { maven { url = … } } }`.
+    systemProperty(
+        "bugsee.testkit.stubSdkRepo",
+        stubSdkRepoDir.get().asFile.absolutePath
+    )
+    // Forward the project dir so tests can resolve the fixture resources
+    // root from the integrationTest source set.
+    systemProperty("bugsee.testkit.pluginProjectDir", project.projectDir.absolutePath)
+    // Forward JDK 17 JAVA_HOME for the fixture build's daemon.
+    systemProperty(
+        "bugsee.testkit.javaHome",
+        launcher17Provider.get().metadata.installationPath.asFile.absolutePath
+    )
+    // Large heap — TestKit + AGP daemons are memory-hungry.
+    maxHeapSize = "2g"
+}
+
+tasks.named("check") {
+    dependsOn("integrationTest")
+}
+
 // Generate version resource so the plugin can read its own version at runtime.
 // Must include the -SNAPSHOT suffix when applicable.
 tasks.named<Copy>("processResources") {
