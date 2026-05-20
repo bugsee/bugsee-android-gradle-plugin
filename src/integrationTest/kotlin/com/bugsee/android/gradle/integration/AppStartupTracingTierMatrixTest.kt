@@ -59,6 +59,15 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
         private const val TRACED_HELPER = "com/example/fixture/TracedHelper"
         private const val NOT_MY_CLASS = "com/bugsee/fake/NotMyClass"
         private const val INIT_PROVIDER = "androidx/startup/InitializationProvider"
+
+        // Issue 2: per-kind dispatcher entry-point pairs. The plugin emits
+        // a kind-specific INVOKESTATIC target so the SDK side folds each
+        // wrap into a distinct `app.startup.<kind>` operation name.
+        // Annotation-pickup uses its own pair regardless of class kind.
+        private val APPLICATION_PAIR = "onApplicationStart" to "onApplicationEnd"
+        private val PROVIDER_PAIR = "onProviderStart" to "onProviderEnd"
+        private val ANNOTATED_PAIR = "onAnnotatedStart" to "onAnnotatedEnd"
+        private val METHOD_PAIR = "onMethodStart" to "onMethodEnd"
     }
 
     @Test
@@ -106,12 +115,14 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
     }
 
     private fun assertMinimalTier(idx: InstrumentedBytecodeIndex.Index) {
-        // Method wraps in each kind-candidate; no calls/loops.
-        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate")
-        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext")
-        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo")
-        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "onCreate")
-        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create")
+        // Method wraps in each kind-candidate; no calls/loops. Per
+        // issue 2, each kind routes to its specific dispatcher pair.
+        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo", PROVIDER_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "onCreate", PROVIDER_PAIR)
+        // Initializer falls back to the generic METHOD pair.
+        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create", METHOD_PAIR)
         assertNoCallWraps(idx, SAMPLE_APP, "onCreate")
         assertNoLoopWraps(idx, SAMPLE_APP, "onCreate")
         // TracedHelper.tracedWork is not picked up below FULL.
@@ -119,10 +130,10 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
     }
 
     private fun assertStandardTier(idx: InstrumentedBytecodeIndex.Index) {
-        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate")
-        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext")
-        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo")
-        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create")
+        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo", PROVIDER_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create", METHOD_PAIR)
         // STANDARD adds per-call wraps inside instrumented methods.
         assertHasCallWraps(idx, SAMPLE_APP, "onCreate")
         // No loop wraps at STANDARD.
@@ -132,24 +143,26 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
     }
 
     private fun assertDetailedTier(idx: InstrumentedBytecodeIndex.Index) {
-        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate")
-        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext")
-        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo")
-        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create")
+        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo", PROVIDER_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create", METHOD_PAIR)
         assertHasCallWraps(idx, SAMPLE_APP, "onCreate")
         assertHasLoopWraps(idx, SAMPLE_APP, "onCreate")
         assertNoDispatcherCalls(idx, TRACED_HELPER, "tracedWork")
     }
 
     private fun assertFullTier(idx: InstrumentedBytecodeIndex.Index) {
-        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate")
-        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext")
-        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo")
-        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create")
+        assertHasMethodWrap(idx, SAMPLE_APP, "onCreate", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext", APPLICATION_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo", PROVIDER_PAIR)
+        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create", METHOD_PAIR)
         assertHasCallWraps(idx, SAMPLE_APP, "onCreate")
         assertHasLoopWraps(idx, SAMPLE_APP, "onCreate")
-        // Annotation pickup: TracedHelper.tracedWork carries @BugseeTrace.
-        assertHasMethodWrap(idx, TRACED_HELPER, "tracedWork")
+        // Annotation pickup: TracedHelper.tracedWork carries @BugseeTrace
+        // → routes through the ANNOTATED pair, NOT the generic METHOD
+        // pair (folds to `app.startup.annotated` on the SDK side).
+        assertHasMethodWrap(idx, TRACED_HELPER, "tracedWork", ANNOTATED_PAIR)
         // Documented FULL-tier contract: annotated methods receive ONLY a
         // method-level wrap — NO automatic call/loop wraps inside.
         assertNoCallWraps(idx, TRACED_HELPER, "tracedWork")
@@ -167,19 +180,25 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
         // count is typically 2x START count per wrapped method, not
         // equal. The invariant that actually holds is END >= START
         // (never can a normal exit run without entry having happened).
+        // Per issue 2, kind-routing fans method-level wraps out across
+        // four pairs: generic METHOD + APPLICATION + PROVIDER + ANNOTATED.
+        // Call and loop wraps stay on the generic pair.
         val byTarget = idx.countByTargetGlobal()
-        val mStart = byTarget["onMethodStart"] ?: 0
-        val mEnd = byTarget["onMethodEnd"] ?: 0
-        val cStart = byTarget["onCallStart"] ?: 0
-        val cEnd = byTarget["onCallEnd"] ?: 0
-        val lStart = byTarget["onLoopStart"] ?: 0
-        val lEnd = byTarget["onLoopEnd"] ?: 0
-        assertTrue("onMethodEnd ($mEnd) must be >= onMethodStart ($mStart): $byTarget",
-                mEnd >= mStart)
-        assertTrue("onCallEnd ($cEnd) must be >= onCallStart ($cStart): $byTarget",
-                cEnd >= cStart)
-        assertTrue("onLoopEnd ($lEnd) must be >= onLoopStart ($lStart): $byTarget",
-                lEnd >= lStart)
+        for ((start, end) in listOf(
+            METHOD_PAIR,
+            APPLICATION_PAIR,
+            PROVIDER_PAIR,
+            ANNOTATED_PAIR,
+            "onCallStart" to "onCallEnd",
+            "onLoopStart" to "onLoopEnd",
+        )) {
+            val starts = byTarget[start] ?: 0
+            val ends = byTarget[end] ?: 0
+            assertTrue(
+                "$end ($ends) must be >= $start ($starts): $byTarget",
+                ends >= starts,
+            )
+        }
     }
 
     private fun assertDenylistRespected(idx: InstrumentedBytecodeIndex.Index) {
@@ -208,20 +227,38 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
         idx: InstrumentedBytecodeIndex.Index,
         classInternal: String,
         methodName: String,
+        dispatchPair: Pair<String, String> = METHOD_PAIR,
     ) {
+        val (startName, endName) = dispatchPair
         val sites = idx.sitesIn(classInternal, methodName)
-        val starts = sites.count { it.targetMethodName == "onMethodStart" }
-        val ends = sites.count { it.targetMethodName == "onMethodEnd" }
+        val starts = sites.count { it.targetMethodName == startName }
+        val ends = sites.count { it.targetMethodName == endName }
         assertTrue(
-            "expected onMethodStart in $classInternal#$methodName at tier=$tier, got=$sites",
+            "expected $startName in $classInternal#$methodName at tier=$tier, got=$sites",
             starts >= 1
         )
         assertTrue(
-            "expected onMethodEnd in $classInternal#$methodName at tier=$tier, got=$sites",
+            "expected $endName in $classInternal#$methodName at tier=$tier, got=$sites",
             ends >= 1
         )
+        // Negative: no FOREIGN method-level wrap dispatcher should fire
+        // on this method — guards against a kind-routing flip silently
+        // emitting both the right pair AND a wrong one.
+        val foreignNames = setOf(
+            METHOD_PAIR.first, METHOD_PAIR.second,
+            APPLICATION_PAIR.first, APPLICATION_PAIR.second,
+            PROVIDER_PAIR.first, PROVIDER_PAIR.second,
+            ANNOTATED_PAIR.first, ANNOTATED_PAIR.second,
+        ) - setOf(startName, endName)
+        val foreignSites = sites.filter { it.targetMethodName in foreignNames }
+        assertEquals(
+            "$classInternal#$methodName at tier=$tier must route through " +
+                "$startName/$endName only — found foreign wrap calls: $foreignSites",
+            emptyList<InstrumentedBytecodeIndex.CallSite>(),
+            foreignSites,
+        )
         // Sanity: site id is non-empty and looks like FQN#method.
-        val firstStart = sites.first { it.targetMethodName == "onMethodStart" }
+        val firstStart = sites.first { it.targetMethodName == startName }
         assertNotNull("missing site_id LDC for method wrap", firstStart.siteIdConstant)
         assertTrue(
             "site_id should mention the owner class: ${firstStart.siteIdConstant}",

@@ -2,6 +2,7 @@ package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -116,5 +117,123 @@ class StartupMethodFilterTest {
     @Test fun `empty or malformed descriptor returns false`() {
         assertFalse(StartupMethodFilter.isSuspendDescriptor(""))
         assertFalse(StartupMethodFilter.isSuspendDescriptor("garbage"))
+    }
+
+    // ── kindForMethodKey ─────────────────────────────────────────────
+
+    // Catches a mutation that swaps APPLICATION_METHODS entries into the wrong
+    // table — e.g. moving `attachBaseContext` into CONTENT_PROVIDER_METHODS
+    // would return CONTENT_PROVIDER instead of APPLICATION here.
+    @Test fun `kindForMethodKey routes every APPLICATION_METHODS entry to APPLICATION`() {
+        // Iterates the full APPLICATION_METHODS table via candidateMethodsFor
+        // (which exposes it) — so this test stays in sync if a method is
+        // added/removed without a hard-coded duplicate list.
+        val appKeys = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.APPLICATION))
+        assertTrue("expected APPLICATION_METHODS to be non-empty", appKeys.isNotEmpty())
+        for (key in appKeys) {
+            assertEquals(
+                "APPLICATION method $key must route to APPLICATION kind",
+                ClassKind.APPLICATION,
+                StartupMethodFilter.kindForMethodKey(key),
+            )
+        }
+    }
+
+    // Catches a mutation that flips CONTENT_PROVIDER_METHODS entries into
+    // another kind's table.
+    @Test fun `kindForMethodKey routes every CONTENT_PROVIDER_METHODS entry to CONTENT_PROVIDER`() {
+        val cpKeys = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.CONTENT_PROVIDER))
+        assertTrue("expected CONTENT_PROVIDER_METHODS to be non-empty", cpKeys.isNotEmpty())
+        for (key in cpKeys) {
+            assertEquals(
+                "CONTENT_PROVIDER method $key must route to CONTENT_PROVIDER kind",
+                ClassKind.CONTENT_PROVIDER,
+                StartupMethodFilter.kindForMethodKey(key),
+            )
+        }
+    }
+
+    // Catches a mutation that moves the INITIALIZER `create` key into a
+    // different table.
+    @Test fun `kindForMethodKey routes every INITIALIZER_METHODS entry to INITIALIZER`() {
+        val initKeys = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.INITIALIZER))
+        assertTrue("expected INITIALIZER_METHODS to be non-empty", initKeys.isNotEmpty())
+        for (key in initKeys) {
+            assertEquals(
+                "INITIALIZER method $key must route to INITIALIZER kind",
+                ClassKind.INITIALIZER,
+                StartupMethodFilter.kindForMethodKey(key),
+            )
+        }
+    }
+
+    // Catches a mutation that moves the COMPONENT_REGISTRAR `getComponents`
+    // key out of its table or into another kind's table.
+    @Test fun `kindForMethodKey routes every COMPONENT_REGISTRAR_METHODS entry to COMPONENT_REGISTRAR`() {
+        val crKeys = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.COMPONENT_REGISTRAR))
+        assertTrue("expected COMPONENT_REGISTRAR_METHODS to be non-empty", crKeys.isNotEmpty())
+        for (key in crKeys) {
+            assertEquals(
+                "COMPONENT_REGISTRAR method $key must route to COMPONENT_REGISTRAR kind",
+                ClassKind.COMPONENT_REGISTRAR,
+                StartupMethodFilter.kindForMethodKey(key),
+            )
+        }
+    }
+
+    // Catches a mutation that moves the CONFIGURATION_PROVIDER
+    // `getWorkManagerConfiguration` key out of its table.
+    @Test fun `kindForMethodKey routes every CONFIGURATION_PROVIDER_METHODS entry to CONFIGURATION_PROVIDER`() {
+        val cpKeys = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.CONFIGURATION_PROVIDER))
+        assertTrue("expected CONFIGURATION_PROVIDER_METHODS to be non-empty", cpKeys.isNotEmpty())
+        for (key in cpKeys) {
+            assertEquals(
+                "CONFIGURATION_PROVIDER method $key must route to CONFIGURATION_PROVIDER kind",
+                ClassKind.CONFIGURATION_PROVIDER,
+                StartupMethodFilter.kindForMethodKey(key),
+            )
+        }
+    }
+
+    // Catches a mutation that collapses the descriptor disambiguation — e.g.
+    // matching on name only would route `onCreate ()Z` to APPLICATION.
+    @Test fun `kindForMethodKey disambiguates onCreate by descriptor`() {
+        // Same name, different descriptors: must route to different kinds.
+        assertEquals(
+            ClassKind.APPLICATION,
+            StartupMethodFilter.kindForMethodKey(MethodKey("onCreate", "()V")),
+        )
+        assertEquals(
+            ClassKind.CONTENT_PROVIDER,
+            StartupMethodFilter.kindForMethodKey(MethodKey("onCreate", "()Z")),
+        )
+    }
+
+    // Catches a mutation that broadens membership (e.g. an `or true` slipped
+    // into the `in` check) or accidentally caches the wrong default.
+    @Test fun `kindForMethodKey returns null for non-candidate keys`() {
+        assertNull(StartupMethodFilter.kindForMethodKey(MethodKey("compute", "()I")))
+        assertNull(StartupMethodFilter.kindForMethodKey(MethodKey("foo", "()V")))
+        assertNull(StartupMethodFilter.kindForMethodKey(MethodKey("", "")))
+    }
+
+    // Catches a mutation that loosens the lookup to name-only matching. The
+    // `onCreate` name is in two tables (APPLICATION ()V, CONTENT_PROVIDER ()Z)
+    // — a wrong descriptor like (I)V must miss both, not silently route to
+    // APPLICATION.
+    @Test fun `kindForMethodKey is descriptor-sensitive`() {
+        // `onCreate (I)V` is neither in APPLICATION (which expects ()V) nor
+        // CONTENT_PROVIDER (which expects ()Z) — must return null, NOT
+        // APPLICATION.
+        assertNull(StartupMethodFilter.kindForMethodKey(MethodKey("onCreate", "(I)V")))
+        // `attachBaseContext` with the wrong descriptor (Object instead of
+        // Context) must miss APPLICATION_METHODS.
+        assertNull(StartupMethodFilter.kindForMethodKey(
+            MethodKey("attachBaseContext", "(Ljava/lang/Object;)V")
+        ))
+        // `create` with no-args descriptor must miss INITIALIZER_METHODS.
+        assertNull(StartupMethodFilter.kindForMethodKey(
+            MethodKey("create", "()Ljava/lang/Object;")
+        ))
     }
 }

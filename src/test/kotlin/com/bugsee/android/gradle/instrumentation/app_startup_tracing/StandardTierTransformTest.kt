@@ -64,10 +64,11 @@ class StandardTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // 1 METHOD_START + 3×(CALL_START, CALL_END) + 1 METHOD_END = 8
+        // 1 APPLICATION_START + 3×(CALL_START, CALL_END) + 1 APPLICATION_END = 8
+        // (`onCreate ()V` → APPLICATION kind → onApplicationStart/End.)
         assertEquals(8, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events.first().kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events.last().kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events.first().kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events.last().kind)
         // Middle 6 events are the three call pairs.
         val callEvents = events.subList(1, 7)
         for (i in 0..5 step 2) {
@@ -117,14 +118,14 @@ class StandardTierTransformTest {
         }
 
         val events = RecordingStartupDispatcher.events()
-        // METHOD_START, CALL_START, CALL_END (from per-call handler),
-        // METHOD_END (from outer catch-any). Both the call's onCallEnd
-        // and the method's onMethodEnd must fire on the exception path.
+        // APPLICATION_START, CALL_START, CALL_END (from per-call handler),
+        // APPLICATION_END (from outer catch-any). Both the call's onCallEnd
+        // and the method's kind-specific end must fire on the exception path.
         assertEquals(4, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
         assertEquals(RecordingStartupDispatcher.Kind.CALL_START, events[1].kind)
         assertEquals(RecordingStartupDispatcher.Kind.CALL_END, events[2].kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[3].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[3].kind)
     }
 
     // ── filter behaviors ─────────────────────────────────────────────
@@ -208,17 +209,19 @@ class StandardTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // Expected: METHOD_START (outer wrap, siteId = our class),
-        //           METHOD_START (manual call, siteId = "manual"),
-        //           METHOD_END (outer wrap).
+        // Expected: APPLICATION_START (outer wrap on `onCreate ()V` →
+        //                              APPLICATION kind),
+        //           METHOD_START (the manual user-code call into the
+        //                         generic onMethodStart, siteId = "manual"),
+        //           APPLICATION_END (outer wrap).
         // No CALL_START / CALL_END entries — the dispatcher self-call
         // was excluded by the guard.
         assertEquals(3, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
         assertEquals("fixtures.SelfCall#onCreate", events[0].siteId)
         assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[1].kind)
         assertEquals("manual", events[1].siteId)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[2].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[2].kind)
         // Sanity-check: no CALL_* events at all.
         assertTrue(events.none { it.kind == RecordingStartupDispatcher.Kind.CALL_START })
         assertTrue(events.none { it.kind == RecordingStartupDispatcher.Kind.CALL_END })
@@ -311,9 +314,10 @@ class StandardTierTransformTest {
 
         val events = RecordingStartupDispatcher.events()
         // MINIMAL: only the method wrap fires. Calls are not wrapped.
+        // `onCreate ()V` → APPLICATION kind → onApplicationStart/End.
         assertEquals(2, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[1].kind)
     }
 
     // ── helpers ──────────────────────────────────────────────────────

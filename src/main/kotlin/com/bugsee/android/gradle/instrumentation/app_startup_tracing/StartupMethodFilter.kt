@@ -83,6 +83,34 @@ internal object StartupMethodFilter {
     }
 
     /**
+     * Inverse of [methodsForKind]: given a [MethodKey] from the
+     * candidate set, returns the [ClassKind] it belongs to, or
+     * {@code null} if the key isn't a candidate for any kind.
+     *
+     * <p>Used by the bytecode wrapper to select the kind-specific
+     * dispatcher entry point ({@code onApplicationStart/End},
+     * {@code onProviderStart/End}, etc.) so the resulting span on the
+     * SDK side folds into the correct {@code app.startup.<kind>}
+     * operation name.
+     *
+     * <p>The (name, descriptor) pairs across the per-kind tables don't
+     * overlap (notably: {@code onCreate} appears in both
+     * {@code APPLICATION_METHODS} with descriptor {@code ()V} AND in
+     * {@code CONTENT_PROVIDER_METHODS} with descriptor {@code ()Z} —
+     * the descriptors disambiguate), so the mapping is unique.
+     */
+    fun kindForMethodKey(key: MethodKey): ClassKind? {
+        return when (key) {
+            in APPLICATION_METHODS -> ClassKind.APPLICATION
+            in CONTENT_PROVIDER_METHODS -> ClassKind.CONTENT_PROVIDER
+            in INITIALIZER_METHODS -> ClassKind.INITIALIZER
+            in COMPONENT_REGISTRAR_METHODS -> ClassKind.COMPONENT_REGISTRAR
+            in CONFIGURATION_PROVIDER_METHODS -> ClassKind.CONFIGURATION_PROVIDER
+            else -> null
+        }
+    }
+
+    /**
      * True if [descriptor] is a Kotlin `suspend` function's JVM signature
      * — last parameter type is {@code Lkotlin/coroutines/Continuation;}
      * and return type is {@code Ljava/lang/Object;}. Both conditions

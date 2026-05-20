@@ -78,9 +78,12 @@ class MinimalTierTransformTest {
 
         val events = RecordingStartupDispatcher.events()
         assertEquals(2, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        // `onCreate ()V` is in StartupMethodFilter's APPLICATION_METHODS,
+        // so the kind-specific dispatcher pair onApplicationStart/End
+        // fires (folds to `app.startup.application` on the SDK side).
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
         assertEquals("fixtures.SimpleApp#onCreate", events[0].siteId)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[1].kind)
         assertEquals("fixtures.SimpleApp#onCreate", events[1].siteId)
     }
 
@@ -107,7 +110,12 @@ class MinimalTierTransformTest {
             "compute",
         )
         assertEquals(42, result)
-        assertEquals(2, RecordingStartupDispatcher.size())
+        // `compute ()I` is not in any per-kind table → kindForMethodKey
+        // returns null → generic onMethodStart/End fallback.
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
     }
 
     @Test
@@ -138,8 +146,13 @@ class MinimalTierTransformTest {
             arrayOf(5),
         )
         assertEquals(1, r1)
-        // Branch taken: one start, one end (the first return only)
-        assertEquals(2, RecordingStartupDispatcher.size())
+        // `branch (I)I` is not in any per-kind table → generic
+        // onMethodStart/End fallback. Branch taken: one start, one end
+        // (the first return only).
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
     }
 
     @Test
@@ -172,8 +185,9 @@ class MinimalTierTransformTest {
 
         val events = RecordingStartupDispatcher.events()
         assertEquals(2, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
+        // `onCreate ()V` → APPLICATION kind → onApplicationStart/End.
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[1].kind)
     }
 
     @Test
@@ -226,6 +240,286 @@ class MinimalTierTransformTest {
         assertEquals(2, events.size)
         assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
         assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
+    }
+
+    // ── kind routing (issue 2) ───────────────────────────────────────
+
+    @Test
+    fun `ContentProvider onCreate ()Z routes to PROVIDER_START_END`() {
+        // Verifies `kindForMethodKey` classifies `onCreate ()Z` as
+        // CONTENT_PROVIDER and the visitor wraps with the
+        // onProviderStart/End dispatcher pair (folds to
+        // `app.startup.provider` on the SDK side). A mutation that
+        // collapses CONTENT_PROVIDER → APPLICATION in
+        // `dispatchMethodNamesFor` would surface here as APPLICATION_*
+        // events instead of PROVIDER_*.
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/SampleProvider.java",
+            """
+            package fixtures;
+            public class SampleProvider {
+                public static boolean onCreate() {
+                    return true;
+                }
+            }
+            """.trimIndent(),
+        )
+        val transformed = applyTransform(
+            classes["fixtures.SampleProvider"]!!,
+            candidateMethods = setOf(MethodKey("onCreate", "()Z")),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+
+        val result = AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.SampleProvider" to transformed),
+            "fixtures.SampleProvider",
+            "onCreate",
+        )
+        assertEquals(true, result)
+
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.PROVIDER_START, events[0].kind)
+        assertEquals("fixtures.SampleProvider#onCreate", events[0].siteId)
+        assertEquals(RecordingStartupDispatcher.Kind.PROVIDER_END, events[1].kind)
+        assertEquals("fixtures.SampleProvider#onCreate", events[1].siteId)
+    }
+
+    @Test
+    fun `ContentProvider attachInfo routes to PROVIDER_START_END`() {
+        // Verifies the second ContentProvider candidate descriptor
+        // (`attachInfo (Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V`)
+        // also routes through onProviderStart/End. The runtime args are
+        // unused by the body; the test passes `(null, null)` to satisfy
+        // the descriptor. A mutation that removed this MethodKey from
+        // CONTENT_PROVIDER_METHODS (or swapped it into the wrong table)
+        // would surface as METHOD_* (null kind fallback) or APPLICATION_*
+        // here instead of PROVIDER_*.
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/AttachInfoProvider.java",
+            """
+            package fixtures;
+            public class AttachInfoProvider {
+                public static void attachInfo(Object ctx, Object info) {
+                    // body intentionally empty
+                }
+            }
+            """.trimIndent(),
+        )
+        // The CONTENT_PROVIDER_METHODS table keys on the real Android
+        // descriptor; manually patch the compiled method's descriptor
+        // to claim the real Android parameter types so kindForMethodKey
+        // matches. The body is empty so no actual Android classes need
+        // to be loadable for invocation.
+        val patched = renameMethodDescriptor(
+            classes["fixtures.AttachInfoProvider"]!!,
+            methodName = "attachInfo",
+            from = "(Ljava/lang/Object;Ljava/lang/Object;)V",
+            to = "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V",
+        )
+        val transformed = applyTransform(
+            patched,
+            candidateMethods = setOf(MethodKey(
+                "attachInfo",
+                "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V",
+            )),
+        )
+        // Verifier accepts the unmodified-descriptor pass-through;
+        // we can't invoke without Android stubs but the wrap-or-not
+        // distinction is encoded in the recorded events via the test
+        // harness's static-rewrite path. Instead, count the
+        // dispatcher INVOKESTATIC calls in the transformed bytecode
+        // and assert they target the PROVIDER_* pair.
+        AsmTestHarness.verify(transformed).assertOk()
+
+        val node = org.objectweb.asm.tree.ClassNode()
+        ClassReader(transformed).accept(node, 0)
+        val method = node.methods.first {
+            it.name == "attachInfo"
+                && it.desc == "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V"
+        }
+        val dispatcherInvokes = method.instructions
+            .toArray()
+            .filterIsInstance<org.objectweb.asm.tree.MethodInsnNode>()
+            .filter { it.opcode == Opcodes.INVOKESTATIC && it.owner == dispatcherInternal }
+            .map { it.name }
+        // MethodBodyWrapper emits 1 start (prefix) + 1 end per return
+        // (this method has one implicit RETURN) + 1 end in the
+        // catch-any handler suffix → onProviderStart × 1 +
+        // onProviderEnd × 2. The exact target method NAMES are the
+        // load-bearing assertion (kind routing); the counts are
+        // MethodBodyWrapper's contract, locked elsewhere.
+        assertEquals(
+            "attachInfo (CONTENT_PROVIDER kind) emits exactly one onProviderStart",
+            1,
+            dispatcherInvokes.count { it == "onProviderStart" },
+        )
+        assertEquals(
+            "attachInfo (CONTENT_PROVIDER kind) emits onProviderEnd (one per return + catch-any)",
+            2,
+            dispatcherInvokes.count { it == "onProviderEnd" },
+        )
+        // Negative: no APPLICATION_*, no METHOD_*, no ANNOTATED_* — a
+        // routing flip would surface here.
+        assertEquals(
+            "no foreign dispatcher method emitted on a CONTENT_PROVIDER candidate",
+            emptyList<String>(),
+            dispatcherInvokes.filter { it !in setOf("onProviderStart", "onProviderEnd") },
+        )
+    }
+
+    @Test
+    fun `Application attachBaseContext routes to APPLICATION_START_END`() {
+        // Catches a mutation that removes `attachBaseContext` from
+        // APPLICATION_METHODS (or swaps it into the wrong table). The
+        // method's Android descriptor takes a `Landroid/content/Context;`
+        // which isn't loadable in plain JVM tests, so we compile a stub
+        // method with `(Ljava/lang/Object;)V` and patch the descriptor —
+        // same pattern as the existing `attachInfo` test below. The kind
+        // routing assertion is on the dispatcher method NAMES emitted in
+        // bytecode, not on runtime invocation.
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/SampleApplication.java",
+            """
+            package fixtures;
+            public class SampleApplication {
+                public static void attachBaseContext(Object ctx) {
+                    // body intentionally empty
+                }
+            }
+            """.trimIndent(),
+        )
+        val patched = renameMethodDescriptor(
+            classes["fixtures.SampleApplication"]!!,
+            methodName = "attachBaseContext",
+            from = "(Ljava/lang/Object;)V",
+            to = "(Landroid/content/Context;)V",
+        )
+        val transformed = applyTransform(
+            patched,
+            candidateMethods = setOf(MethodKey(
+                "attachBaseContext",
+                "(Landroid/content/Context;)V",
+            )),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+
+        val node = org.objectweb.asm.tree.ClassNode()
+        ClassReader(transformed).accept(node, 0)
+        val method = node.methods.first {
+            it.name == "attachBaseContext"
+                && it.desc == "(Landroid/content/Context;)V"
+        }
+        val dispatcherInvokes = method.instructions
+            .toArray()
+            .filterIsInstance<org.objectweb.asm.tree.MethodInsnNode>()
+            .filter { it.opcode == Opcodes.INVOKESTATIC && it.owner == dispatcherInternal }
+            .map { it.name }
+        // 1 start (prefix) + 1 end per implicit RETURN + 1 end in the
+        // catch-any handler = 1 onApplicationStart + 2 onApplicationEnd.
+        assertEquals(
+            "attachBaseContext (APPLICATION kind) emits exactly one onApplicationStart",
+            1,
+            dispatcherInvokes.count { it == "onApplicationStart" },
+        )
+        assertEquals(
+            "attachBaseContext (APPLICATION kind) emits onApplicationEnd (one per return + catch-any)",
+            2,
+            dispatcherInvokes.count { it == "onApplicationEnd" },
+        )
+        // Negative: no foreign dispatcher names — a routing flip would
+        // surface here.
+        assertEquals(
+            "no foreign dispatcher method emitted on an APPLICATION candidate",
+            emptyList<String>(),
+            dispatcherInvokes.filter { it !in setOf("onApplicationStart", "onApplicationEnd") },
+        )
+    }
+
+    @Test
+    fun `Initializer create routes to METHOD_START_END (generic fallback)`() {
+        // Catches a mutation that moves INITIALIZER out of the METHOD_*
+        // fallback arm in `dispatchMethodNamesFor` (e.g. INITIALIZER →
+        // (onApplicationStart, onApplicationEnd)). Initializer's `create`
+        // takes a Context (unloadable in plain JVM tests), so we patch
+        // the descriptor in the same way as `attachInfo` / `attachBaseContext`.
+        // Body returns a fresh Object (NOT the Context parameter) so the
+        // verifier never has to resolve the patched-in `android/content/Context`
+        // type on the operand stack — same reason the existing `attachInfo`
+        // test compiles with an empty body.
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/SampleInitializer.java",
+            """
+            package fixtures;
+            public class SampleInitializer {
+                public static Object create(Object ctx) {
+                    return new Object();
+                }
+            }
+            """.trimIndent(),
+        )
+        val patched = renameMethodDescriptor(
+            classes["fixtures.SampleInitializer"]!!,
+            methodName = "create",
+            from = "(Ljava/lang/Object;)Ljava/lang/Object;",
+            to = "(Landroid/content/Context;)Ljava/lang/Object;",
+        )
+        val transformed = applyTransform(
+            patched,
+            candidateMethods = setOf(MethodKey(
+                "create",
+                "(Landroid/content/Context;)Ljava/lang/Object;",
+            )),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+
+        val node = org.objectweb.asm.tree.ClassNode()
+        ClassReader(transformed).accept(node, 0)
+        val method = node.methods.first {
+            it.name == "create"
+                && it.desc == "(Landroid/content/Context;)Ljava/lang/Object;"
+        }
+        val dispatcherInvokes = method.instructions
+            .toArray()
+            .filterIsInstance<org.objectweb.asm.tree.MethodInsnNode>()
+            .filter { it.opcode == Opcodes.INVOKESTATIC && it.owner == dispatcherInternal }
+            .map { it.name }
+        // 1 start (prefix) + 1 end per explicit ARETURN + 1 end in catch-any.
+        assertEquals(
+            "Initializer create (INITIALIZER kind) emits exactly one onMethodStart",
+            1,
+            dispatcherInvokes.count { it == "onMethodStart" },
+        )
+        assertEquals(
+            "Initializer create (INITIALIZER kind) emits onMethodEnd (one per return + catch-any)",
+            2,
+            dispatcherInvokes.count { it == "onMethodEnd" },
+        )
+        // Strong negative assertion: a mutation that promotes INITIALIZER
+        // to a kind-specific pair would surface here as one of these
+        // names appearing in the bytecode.
+        assertEquals(
+            "Initializer must NOT emit onApplicationStart",
+            0,
+            dispatcherInvokes.count { it == "onApplicationStart" },
+        )
+        assertEquals(
+            "Initializer must NOT emit onProviderStart",
+            0,
+            dispatcherInvokes.count { it == "onProviderStart" },
+        )
+        assertEquals(
+            "Initializer must NOT emit onAnnotatedStart",
+            0,
+            dispatcherInvokes.count { it == "onAnnotatedStart" },
+        )
+        // Catch-all foreign-name negative — covers any future entry point
+        // added to the dispatcher contract.
+        assertEquals(
+            "no foreign dispatcher method emitted on an INITIALIZER candidate",
+            emptyList<String>(),
+            dispatcherInvokes.filter { it !in setOf("onMethodStart", "onMethodEnd") },
+        )
     }
 
     // ── filter behavior ──────────────────────────────────────────────

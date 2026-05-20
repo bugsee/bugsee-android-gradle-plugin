@@ -58,9 +58,14 @@ class AppStartupTracingFailureModeTest {
 
         // The transform must still have produced bytecode at the default
         // tier (STANDARD): method wraps + call wraps inside SampleApp.
+        // Per issue 2, method-level wraps fan out across kind-specific
+        // dispatcher pairs — sum across all wrap variants here.
         val idx = fixture.indexBytecode()
         val byTarget = idx.countByTargetGlobal()
         val totalStarts = (byTarget["onMethodStart"] ?: 0) +
+                (byTarget["onApplicationStart"] ?: 0) +
+                (byTarget["onProviderStart"] ?: 0) +
+                (byTarget["onAnnotatedStart"] ?: 0) +
                 (byTarget["onCallStart"] ?: 0) +
                 (byTarget["onLoopStart"] ?: 0)
         assertTrue(

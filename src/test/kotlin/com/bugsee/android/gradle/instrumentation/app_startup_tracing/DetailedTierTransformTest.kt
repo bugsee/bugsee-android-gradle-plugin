@@ -85,10 +85,11 @@ class DetailedTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // METHOD_START, LOOP_START, then 3 iterations × (CALL_START,
-        // CALL_END), LOOP_END, METHOD_END = 1 + 1 + 6 + 1 + 1 = 10.
+        // APPLICATION_START, LOOP_START, then 3 iterations × (CALL_START,
+        // CALL_END), LOOP_END, APPLICATION_END = 1 + 1 + 6 + 1 + 1 = 10.
+        // (`onCreate ()V` → APPLICATION kind → onApplicationStart/End.)
         assertEquals(10, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
         assertEquals(RecordingStartupDispatcher.Kind.LOOP_START, events[1].kind)
         // Middle six are 3 × (CALL_START, CALL_END).
         for (i in 0..5 step 2) {
@@ -96,7 +97,7 @@ class DetailedTierTransformTest {
             assertEquals(RecordingStartupDispatcher.Kind.CALL_END, events[2 + i + 1].kind)
         }
         assertEquals(RecordingStartupDispatcher.Kind.LOOP_END, events[8].kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[9].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[9].kind)
     }
 
     @Test
@@ -128,11 +129,13 @@ class DetailedTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // 1 METHOD_START + 1 LOOP_START + 2×(CALL_START, CALL_END) +
-        // 1 LOOP_END + 1 METHOD_END = 8.
+        // 1 APPLICATION_START + 1 LOOP_START + 2×(CALL_START, CALL_END) +
+        // 1 LOOP_END + 1 APPLICATION_END = 8. (`onCreate ()V` → APPLICATION.)
         assertEquals(8, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
         assertEquals(RecordingStartupDispatcher.Kind.LOOP_START, events[1].kind)
         assertEquals(RecordingStartupDispatcher.Kind.LOOP_END, events[6].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[7].kind)
     }
 
     // ── exception path ──────────────────────────────────────────────
@@ -177,18 +180,18 @@ class DetailedTierTransformTest {
         }
 
         val events = RecordingStartupDispatcher.events()
-        // METHOD_START, LOOP_START, then iteration i=2's CALL_START,
+        // APPLICATION_START, LOOP_START, then iteration i=2's CALL_START,
         // CALL_END (per-call handler), LOOP_END (loop handler),
-        // METHOD_END (outer method handler).
+        // APPLICATION_END (outer method handler).
         // (i=0 and i=1 don't invoke Helper.boom — the `if (i == 2)`
         // gate keeps them from calling at all.)
         assertEquals(6, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
         assertEquals(RecordingStartupDispatcher.Kind.LOOP_START, events[1].kind)
         assertEquals(RecordingStartupDispatcher.Kind.CALL_START, events[2].kind)
         assertEquals(RecordingStartupDispatcher.Kind.CALL_END, events[3].kind)
         assertEquals(RecordingStartupDispatcher.Kind.LOOP_END, events[4].kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[5].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[5].kind)
     }
 
     // ── nested loops: top-level filter ───────────────────────────────
@@ -319,16 +322,16 @@ class DetailedTierTransformTest {
         val callStarts = events.count { it.kind == RecordingStartupDispatcher.Kind.CALL_START }
         assertEquals("5 String.valueOf calls total across both loops", 5, callStarts)
 
-        // Sanity: total event sequence shape — METHOD_START at head,
-        // METHOD_END at tail.
+        // Sanity: total event sequence shape — APPLICATION_START at head,
+        // APPLICATION_END at tail. (`onCreate ()V` → APPLICATION kind.)
         assertEquals(
             "method-level wrap intact",
-            RecordingStartupDispatcher.Kind.METHOD_START,
+            RecordingStartupDispatcher.Kind.APPLICATION_START,
             events.first().kind,
         )
         assertEquals(
             "method-level wrap intact",
-            RecordingStartupDispatcher.Kind.METHOD_END,
+            RecordingStartupDispatcher.Kind.APPLICATION_END,
             events.last().kind,
         )
     }
@@ -362,8 +365,11 @@ class DetailedTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // 1 METHOD_START + 2×(CALL_START, CALL_END) + 1 METHOD_END = 6.
+        // 1 APPLICATION_START + 2×(CALL_START, CALL_END) + 1 APPLICATION_END = 6.
+        // (`onCreate ()V` → APPLICATION kind → onApplicationStart/End.)
         assertEquals(6, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events.first().kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events.last().kind)
         assertTrue("no LOOP events at STANDARD tier",
             events.none {
                 it.kind == RecordingStartupDispatcher.Kind.LOOP_START
@@ -399,9 +405,12 @@ class DetailedTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // No loops to wrap → just method + calls. 1 METHOD_START +
-        // 2×(CALL_START, CALL_END) + 1 METHOD_END = 6.
+        // No loops to wrap → just method + calls. 1 APPLICATION_START +
+        // 2×(CALL_START, CALL_END) + 1 APPLICATION_END = 6.
+        // (`onCreate ()V` → APPLICATION kind.)
         assertEquals(6, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events.first().kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events.last().kind)
         assertTrue(events.none {
             it.kind == RecordingStartupDispatcher.Kind.LOOP_START
                     || it.kind == RecordingStartupDispatcher.Kind.LOOP_END
@@ -469,11 +478,12 @@ class DetailedTierTransformTest {
 
         val events = RecordingStartupDispatcher.events()
         // Loop was skipped → no LOOP_START / LOOP_END events. The
-        // MINIMAL-tier method wrap still fires.
+        // MINIMAL-tier method wrap still fires — `onCreate ()V` →
+        // APPLICATION kind → onApplicationStart/End.
         assertEquals(0, events.count { it.kind == RecordingStartupDispatcher.Kind.LOOP_START })
         assertEquals(0, events.count { it.kind == RecordingStartupDispatcher.Kind.LOOP_END })
-        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_START })
-        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_END })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.APPLICATION_START })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.APPLICATION_END })
     }
 
     @Test
@@ -514,14 +524,15 @@ class DetailedTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // Loop skipped → only the method wrap fires.
+        // Loop skipped → only the method wrap fires. `onCreate ()V` →
+        // APPLICATION kind → onApplicationStart/End.
         assertEquals("no LOOP events when exit has external pred", 0,
             events.count {
                 it.kind == RecordingStartupDispatcher.Kind.LOOP_START
                         || it.kind == RecordingStartupDispatcher.Kind.LOOP_END
             })
-        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_START })
-        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.METHOD_END })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.APPLICATION_START })
+        assertEquals(1, events.count { it.kind == RecordingStartupDispatcher.Kind.APPLICATION_END })
     }
 
     // ── synchronized-block ───────────────────────────────────────────

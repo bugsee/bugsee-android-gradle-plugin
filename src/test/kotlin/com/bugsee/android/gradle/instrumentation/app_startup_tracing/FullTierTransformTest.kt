@@ -76,12 +76,14 @@ class FullTierTransformTest {
         )
         assertEquals(10, tracedResult)
 
-        // Annotated method should have fired METHOD_START + METHOD_END.
+        // FULL-tier @BugseeTrace pickup uses the dedicated
+        // onAnnotatedStart/End dispatcher pair → ANNOTATED kind events
+        // (folds to `app.startup.annotated` on the SDK side).
         val eventsAfterAnnotated = RecordingStartupDispatcher.events()
         assertEquals(2, eventsAfterAnnotated.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, eventsAfterAnnotated[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.ANNOTATED_START, eventsAfterAnnotated[0].kind)
         assertEquals("fixtures.AnnotatedClass#explicitlyTraced", eventsAfterAnnotated[0].siteId)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, eventsAfterAnnotated[1].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.ANNOTATED_END, eventsAfterAnnotated[1].kind)
 
         // Now invoke the un-annotated method. It must NOT fire any events.
         RecordingStartupDispatcher.reset()
@@ -128,9 +130,15 @@ class FullTierTransformTest {
         )
 
         val events = RecordingStartupDispatcher.events()
-        // METHOD_START + METHOD_END only. The String.valueOf call inside
-        // is NOT wrapped (no CALL_START/CALL_END).
+        // ANNOTATED_START + ANNOTATED_END only (FULL-tier @BugseeTrace
+        // pickup → onAnnotatedStart/End → `app.startup.annotated` on the
+        // SDK side). The String.valueOf call inside is NOT wrapped (no
+        // CALL_START/CALL_END). Pinning the exact Kind here catches a
+        // regression that mistakenly routes annotated methods through
+        // the generic onMethodStart/End fallback pair.
         assertEquals(2, events.size)
+        assertEquals(RecordingStartupDispatcher.Kind.ANNOTATED_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.ANNOTATED_END, events[1].kind)
         assertTrue(events.none {
             it.kind == RecordingStartupDispatcher.Kind.CALL_START
                     || it.kind == RecordingStartupDispatcher.Kind.CALL_END
@@ -291,12 +299,64 @@ class FullTierTransformTest {
             arrayOf(41),
         )
         assertEquals(42, result)
-        // Annotated method gets wrapped per FULL-tier rules:
-        // METHOD_START + METHOD_END.
+        // Annotated method gets wrapped per FULL-tier rules — uses the
+        // ANNOTATED-kind dispatcher pair (onAnnotatedStart/End).
         val events = RecordingStartupDispatcher.events()
         assertEquals(2, events.size)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_START, events[0].kind)
-        assertEquals(RecordingStartupDispatcher.Kind.METHOD_END, events[1].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.ANNOTATED_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.ANNOTATED_END, events[1].kind)
+    }
+
+    // ── kind precedence over annotation (issue 2) ────────────────────
+
+    @Test
+    fun `kind-candidate method ALSO carrying @BugseeTrace routes through kind, not annotation`() {
+        // A method that is both a kind candidate (Application.onCreate)
+        // AND `@BugseeTrace`-annotated must route through the kind-
+        // candidate branch — the SDK side folds it into
+        // `app.startup.application`, not `app.startup.annotated`. The
+        // visitor's `if (isKindCandidate)` precedence check in
+        // `visitMethod` enforces this ordering; a regression that
+        // flipped the check (e.g. annotation-pickup running first)
+        // would silently re-route Application's `onCreate` into the
+        // ANNOTATED bucket — caught here.
+        val classes = JavaSourceCompiler.compile(
+            "fixtures/TracedApp.java",
+            """
+            package fixtures;
+            import com.bugsee.library.contracts.performance.BugseeTrace;
+            public class TracedApp {
+                @BugseeTrace
+                public static void onCreate() {
+                    int x = 1 + 2;
+                }
+            }
+            """.trimIndent(),
+        )
+        val transformed = applyAtTier(
+            classes["fixtures.TracedApp"]!!,
+            tier = StartupTier.FULL,
+            candidateMethods = setOf(MethodKey("onCreate", "()V")),
+        )
+        AsmTestHarness.verify(transformed).assertOk()
+
+        AsmTestHarness.loadAndInvokeStatic(
+            mapOf("fixtures.TracedApp" to transformed),
+            "fixtures.TracedApp", "onCreate",
+        )
+
+        val events = RecordingStartupDispatcher.events()
+        assertEquals(2, events.size)
+        // APPLICATION_* (kind wins), NOT ANNOTATED_*.
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_START, events[0].kind)
+        assertEquals(RecordingStartupDispatcher.Kind.APPLICATION_END, events[1].kind)
+        assertTrue(
+            "kind precedence: ANNOTATED_* must NOT fire on a kind-candidate method",
+            events.none {
+                it.kind == RecordingStartupDispatcher.Kind.ANNOTATED_START
+                    || it.kind == RecordingStartupDispatcher.Kind.ANNOTATED_END
+            },
+        )
     }
 
     // ── helpers ──────────────────────────────────────────────────────

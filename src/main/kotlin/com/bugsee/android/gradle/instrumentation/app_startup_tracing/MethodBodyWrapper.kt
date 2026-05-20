@@ -71,10 +71,45 @@ internal object MethodBodyWrapper {
 
     private const val DISPATCH_DESCRIPTOR = "(Ljava/lang/String;)V"
 
+    /**
+     * Wraps {@code methodNode}'s body in the standard start/finally/end
+     * pattern.
+     *
+     * <p>{@code startMethodName} / {@code endMethodName} parameterize
+     * which dispatcher entry points are invoked. The default is
+     * {@code onMethodStart} / {@code onMethodEnd} (the generic kind-
+     * agnostic pair that emits {@code app.startup.method} spans on the
+     * SDK side). Callers select kind-specific variants for distinct
+     * dashboard labels:
+     * <ul>
+     *   <li>{@code onApplicationStart} / {@code onApplicationEnd} for
+     *       Application kind → {@code app.startup.application}</li>
+     *   <li>{@code onProviderStart} / {@code onProviderEnd} for
+     *       ContentProvider kind → {@code app.startup.provider}</li>
+     *   <li>{@code onAnnotatedStart} / {@code onAnnotatedEnd} for
+     *       FULL-tier {@code @BugseeTrace}-annotated methods →
+     *       {@code app.startup.annotated}</li>
+     * </ul>
+     *
+     * <p>Note: {@code onActivityStart/End} entry points also exist on
+     * the SDK dispatcher and fold to {@code app.startup.activity}, but
+     * the plugin DOES NOT emit them — Activity lifecycle events are
+     * self-emitted at runtime by
+     * {@code StartupPerformanceProvider.StartupLifecycleTracker} on the
+     * SDK side, not via bytecode injection.
+     *
+     * <p>Both names must point at static methods with descriptor
+     * {@code (Ljava/lang/String;)V} on {@code dispatcherInternalName}
+     * (the locked dispatcher contract; the kind-specific entry points
+     * follow the same signature as the originals so the emit shape
+     * stays uniform).
+     */
     fun wrap(
         methodNode: MethodNode,
         siteId: String,
         dispatcherInternalName: String,
+        startMethodName: String = "onMethodStart",
+        endMethodName: String = "onMethodEnd",
     ) {
         val instructions = methodNode.instructions
         if (instructions.size() == 0) {
@@ -93,7 +128,8 @@ internal object MethodBodyWrapper {
         // 1. Collect return-family opcodes BEFORE mutating the list, so
         //    we don't have to reason about iterator validity under
         //    concurrent insertion. ATHROW is deliberately excluded — it
-        //    propagates into the catch-any handler which emits onMethodEnd.
+        //    propagates into the catch-any handler which emits the end
+        //    dispatch.
         val returnSites = ArrayList<AbstractInsnNode>()
         run {
             var node = instructions.first
@@ -105,21 +141,21 @@ internal object MethodBodyWrapper {
             }
         }
 
-        // 2. Inject onMethodEnd before each return.
+        // 2. Inject the end dispatch before each return.
         for (returnNode in returnSites) {
             instructions.insertBefore(
                 returnNode,
-                buildDispatchCall(siteId, dispatcherInternalName, "onMethodEnd")
+                buildDispatchCall(siteId, dispatcherInternalName, endMethodName)
             )
         }
 
-        // 3. Prefix: onMethodStart + try-block start label.
+        // 3. Prefix: start dispatch + try-block start label.
         val prefix = InsnList().apply {
             add(LdcInsnNode(siteId))
             add(MethodInsnNode(
                 Opcodes.INVOKESTATIC,
                 dispatcherInternalName,
-                "onMethodStart",
+                startMethodName,
                 DISPATCH_DESCRIPTOR,
                 false,
             ))
@@ -127,7 +163,7 @@ internal object MethodBodyWrapper {
         }
         instructions.insert(prefix) // prepend to the InsnList
 
-        // 4. Suffix: try-block end label, handler label, onMethodEnd, ATHROW.
+        // 4. Suffix: try-block end label, handler label, end dispatch, ATHROW.
         val suffix = InsnList().apply {
             add(endLabel)
             add(handlerLabel)
@@ -135,7 +171,7 @@ internal object MethodBodyWrapper {
             add(MethodInsnNode(
                 Opcodes.INVOKESTATIC,
                 dispatcherInternalName,
-                "onMethodEnd",
+                endMethodName,
                 DISPATCH_DESCRIPTOR,
                 false,
             ))

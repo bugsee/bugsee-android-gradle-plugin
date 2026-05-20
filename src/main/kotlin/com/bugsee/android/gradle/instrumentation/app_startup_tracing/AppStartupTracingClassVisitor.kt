@@ -132,8 +132,13 @@ internal class AppStartupTracingClassVisitor(
 
         // Kind-candidate: we already know we'll wrap regardless of
         // annotations. Buffer the entire method to a MethodNode and run
-        // the tier-appropriate layer stack at visitEnd.
+        // the tier-appropriate layer stack at visitEnd. Pick the
+        // kind-specific dispatcher entry points so the resulting span
+        // folds into the right `app.startup.<kind>` operation on the
+        // SDK side (issue 2 — distinct dashboard row labels per source).
         if (isKindCandidate) {
+            val classKind = StartupMethodFilter.kindForMethodKey(key)
+            val (startName, endName) = dispatchMethodNamesFor(classKind)
             return buildKindCandidateBufferingVisitor(
                 downstream = downstream,
                 apiVersion = apiVersion,
@@ -146,6 +151,8 @@ internal class AppStartupTracingClassVisitor(
                 dispatcher = dispatcher,
                 ownerNameForLoops = ownerNameForLoops,
                 currentTier = currentTier,
+                startMethodName = startName,
+                endMethodName = endName,
             )
         }
 
@@ -198,6 +205,8 @@ internal class AppStartupTracingClassVisitor(
         dispatcher: String,
         ownerNameForLoops: String,
         currentTier: StartupTier,
+        startMethodName: String,
+        endMethodName: String,
     ): MethodVisitor {
         return object : MethodNode(apiVersion, access, methodName, descriptor, signature, exceptions) {
             override fun visitEnd() {
@@ -215,7 +224,10 @@ internal class AppStartupTracingClassVisitor(
                 if (currentTier.wrapsLoops()) {
                     LoopWrapper.wrap(this, ownerNameForLoops, dispatcher)
                 }
-                MethodBodyWrapper.wrap(this, siteId, dispatcher)
+                MethodBodyWrapper.wrap(
+                    this, siteId, dispatcher,
+                    startMethodName, endMethodName,
+                )
                 accept(downstream)
             }
         }
@@ -387,7 +399,15 @@ internal class AppStartupTracingClassVisitor(
                     super.visitEnd()
                 } else {
                     node.visitEnd()
-                    MethodBodyWrapper.wrap(node, siteId, dispatcher)
+                    // FULL-tier @BugseeTrace pickup uses the dedicated
+                    // onAnnotatedStart/End dispatcher pair so the
+                    // resulting span folds into `app.startup.annotated`
+                    // on the SDK side — distinct from the kind-based
+                    // wraps' app.startup.{provider,application,...}.
+                    MethodBodyWrapper.wrap(
+                        node, siteId, dispatcher,
+                        ANNOTATED_START_METHOD, ANNOTATED_END_METHOD,
+                    )
                     node.accept(downstream)
                 }
             }
@@ -414,5 +434,83 @@ internal class AppStartupTracingClassVisitor(
          */
         private const val BUGSEE_TRACE_DESCRIPTOR =
             "Lcom/bugsee/library/contracts/performance/BugseeTrace;"
+
+        /**
+         * Dispatcher entry-point method names emitted as the static-call
+         * target of every plugin-injected INVOKESTATIC.
+         *
+         * <p>**CROSS-REPO COUPLING.** Every name below must match an
+         * `@Keep`-annotated static method on
+         * `library/src/main/java/com/bugsee/library/adapters/BugseeAppStartupDispatcher.java`
+         * with the exact signature {@code (Ljava/lang/String;)V}. Renaming
+         * or removing any of those methods on the SDK side requires a
+         * paired plugin release that updates these constants. The
+         * coupling is descriptor-based (string match against bytecode),
+         * not classpath-based — the plugin's runtime never loads the SDK
+         * dispatcher class.
+         *
+         * <p>{@code APPLICATION_*} / {@code PROVIDER_*} fan out to the
+         * kind-specific {@code app.startup.application} /
+         * {@code app.startup.provider} operations on the SDK side
+         * (issue 2 — distinct dashboard rows per source category).
+         * {@code ANNOTATED_*} is used by FULL-tier {@code @BugseeTrace}
+         * pickup → {@code app.startup.annotated}.
+         * {@code METHOD_*} is the generic fallback for kinds without a
+         * dedicated variant (Initializer / ComponentRegistrar /
+         * Configuration.Provider) and for the defensive {@code null}
+         * branch in {@link #dispatchMethodNamesFor} → {@code app.startup.method}.
+         *
+         * <p>{@code Activity} dispatcher entry points exist on the SDK
+         * side ({@code onActivityStart} / {@code onActivityEnd}) but are
+         * NOT emitted by the plugin — the SDK's {@code StartupLifecycleTracker}
+         * self-emits them directly via the dispatcher API at runtime.
+         */
+        private const val APPLICATION_START_METHOD = "onApplicationStart"
+        private const val APPLICATION_END_METHOD = "onApplicationEnd"
+        private const val PROVIDER_START_METHOD = "onProviderStart"
+        private const val PROVIDER_END_METHOD = "onProviderEnd"
+        private const val ANNOTATED_START_METHOD = "onAnnotatedStart"
+        private const val ANNOTATED_END_METHOD = "onAnnotatedEnd"
+        private const val METHOD_START_METHOD = "onMethodStart"
+        private const val METHOD_END_METHOD = "onMethodEnd"
+
+        /**
+         * Maps a kind-candidate's {@link ClassKind} to its specific
+         * dispatcher entry-point pair, so the bytecode wrap routes
+         * each Application/ContentProvider/etc. to a distinct
+         * {@code app.startup.<kind>} operation name on the SDK side
+         * — giving the dashboard waterfall distinct row labels per
+         * source category (issue 2).
+         *
+         * <p>Kinds without a dedicated variant ({@code INITIALIZER},
+         * {@code COMPONENT_REGISTRAR}, {@code CONFIGURATION_PROVIDER})
+         * fall back to {@code onMethodStart/End} → {@code app.startup.method}
+         * (preserves the pre-issue-2 behavior for those kinds).
+         *
+         * <p>The {@code null} branch is defensive — in production the
+         * candidate set passed to the visitor is built from the per-kind
+         * tables in {@link StartupMethodFilter}, so every candidate
+         * {@link MethodKey} resolves to a {@link ClassKind}. The
+         * {@code null} fallthrough exists so a future bug that feeds an
+         * arbitrary {@code MethodKey} (e.g. from a test) routes through
+         * the generic pair rather than NPE-ing here.
+         */
+        fun dispatchMethodNamesFor(kind: ClassKind?): Pair<String, String> {
+            return when (kind) {
+                ClassKind.APPLICATION ->
+                    APPLICATION_START_METHOD to APPLICATION_END_METHOD
+                ClassKind.CONTENT_PROVIDER ->
+                    PROVIDER_START_METHOD to PROVIDER_END_METHOD
+                // Three real fallback kinds plus the defensive null arm
+                // (kindForMethodKey returned null for a candidate — should
+                // not happen in production, but we'd rather route through
+                // the generic pair than crash).
+                ClassKind.INITIALIZER,
+                ClassKind.COMPONENT_REGISTRAR,
+                ClassKind.CONFIGURATION_PROVIDER,
+                null ->
+                    METHOD_START_METHOD to METHOD_END_METHOD
+            }
+        }
     }
 }
