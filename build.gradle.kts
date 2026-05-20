@@ -224,8 +224,16 @@ tasks.register<Test>("integrationTest") {
     maxHeapSize = "2g"
 }
 
-tasks.named("check") {
-    dependsOn("integrationTest")
+// Integration tests are opt-in: `./gradlew build` runs the fast unit suite
+// only. To include the TestKit-driven integration tier in `check`/`build`,
+// pass `-Pbugsee.runIntegrationTests=true` (or run `./gradlew integrationTest`
+// directly, or use `./scripts/build.sh --full`). Mirrors the SDK's
+// `./scripts/test.sh` split between fast unit tests and slow on-device tests
+// — both projects keep the inner dev loop quick by default.
+if (project.findProperty("bugsee.runIntegrationTests") == "true") {
+    tasks.named("check") {
+        dependsOn("integrationTest")
+    }
 }
 
 // Generate version resource so the plugin can read its own version at runtime.
