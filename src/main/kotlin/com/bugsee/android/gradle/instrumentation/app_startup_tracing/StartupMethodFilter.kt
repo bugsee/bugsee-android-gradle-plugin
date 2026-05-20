@@ -64,9 +64,25 @@ internal object StartupMethodFilter {
         MethodKey("getWorkManagerConfiguration", "()Landroidx/work/Configuration;"),
     )
 
-    /** Union of methods to instrument given the set of kinds the class qualifies for. */
+    /**
+     * Union of methods to instrument given the set of kinds the class
+     * qualifies for.
+     *
+     * <p>Single-kind fast path: the vast majority of classes qualify for
+     * exactly one kind (Application OR ContentProvider OR Initializer
+     * etc.; classes that hit two kinds are rare in practice). Returning
+     * the per-kind {@link Set} reference directly avoids allocating a
+     * fresh {@link LinkedHashSet} on every call. The per-kind tables are
+     * built with {@code setOf(...)} which produces an immutable
+     * {@code Set}; any caller that tries to mutate will throw at
+     * runtime, and we've verified callers don't (the visitor only does
+     * {@code key in candidateMethods} membership tests).
+     */
     fun candidateMethodsFor(kinds: Set<ClassKind>): Set<MethodKey> {
         if (kinds.isEmpty()) return emptySet()
+        if (kinds.size == 1) {
+            return methodsForKind(kinds.first())
+        }
         val result = LinkedHashSet<MethodKey>()
         for (kind in kinds) {
             result += methodsForKind(kind)

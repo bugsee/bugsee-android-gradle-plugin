@@ -2,7 +2,9 @@ package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,6 +49,38 @@ class StartupMethodFilterTest {
             setOf(MethodKey("getWorkManagerConfiguration", "()Landroidx/work/Configuration;")),
             ms,
         )
+    }
+
+    @Test fun `single-kind fast path returns the same set reference on repeated calls`() {
+        // Mutation rationale: catches a regression where the single-kind
+        // fast path is removed and a fresh LinkedHashSet is allocated per
+        // call. Reference identity proves the implementation returns the
+        // canonical per-kind table without copying — the documented
+        // allocation-free behavior the perf review relied on.
+        val a = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.APPLICATION))
+        val b = StartupMethodFilter.candidateMethodsFor(setOf(ClassKind.APPLICATION))
+        assertSame(a, b)
+        // Same property for every other kind — guards against a partial
+        // fast-path that only covers Application.
+        for (kind in ClassKind.entries) {
+            val first = StartupMethodFilter.candidateMethodsFor(setOf(kind))
+            val second = StartupMethodFilter.candidateMethodsFor(setOf(kind))
+            assertSame("single-kind fast path must return same ref for $kind", first, second)
+        }
+    }
+
+    @Test fun `multi-kind path still allocates a fresh union set`() {
+        // Sanity that the fast path doesn't accidentally short-circuit
+        // the multi-kind union — multiple calls must yield equal
+        // contents (the union is deterministic) but distinct instances.
+        val a = StartupMethodFilter.candidateMethodsFor(setOf(
+            ClassKind.APPLICATION, ClassKind.INITIALIZER,
+        ))
+        val b = StartupMethodFilter.candidateMethodsFor(setOf(
+            ClassKind.APPLICATION, ClassKind.INITIALIZER,
+        ))
+        assertEquals(a, b)
+        assertNotSame("multi-kind union must allocate a fresh set per call", a, b)
     }
 
     @Test fun `multiple kinds union their method sets`() {

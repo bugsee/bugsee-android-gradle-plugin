@@ -145,7 +145,36 @@ abstract class AppStartupTracingClassVisitorFactory :
         return resolveTier().picksUpAnnotated()
     }
 
+    /**
+     * Resolves the [ClassKind] set for the given [classData].
+     *
+     * <p>AGP invokes the factory's [isInstrumentable] and
+     * [createClassVisitor] back-to-back per class — both call this
+     * method with what is functionally the same input, so a 1-element
+     * per-thread cache hits ~100% on the second call and avoids
+     * redoing the superclass/interface walks. AGP doesn't guarantee
+     * the same [ClassData] instance across the two calls, so the
+     * cache is keyed by [ClassData.className] (a stable string) rather
+     * than by identity.
+     *
+     * <p>Static [ThreadLocal] rather than an instance field because
+     * AGP/Gradle serializes [AsmClassVisitorFactory] instances across
+     * the artifact-transform isolation boundary; an instance field
+     * with non-Gradle-managed state breaks parameter isolation (same
+     * bug class as the historical `by lazy` regression).
+     */
     private fun classifyKinds(classData: ClassData): Set<ClassKind> {
+        val className = classData.className
+        val cached = sLastClassifyKindsCache.get()
+        if (cached != null && cached.first == className) {
+            return cached.second
+        }
+        val result = computeKinds(classData)
+        sLastClassifyKindsCache.set(className to result)
+        return result
+    }
+
+    private fun computeKinds(classData: ClassData): Set<ClassKind> {
         // AndroidX `InitializationProvider` is itself a `ContentProvider`
         // — its `onCreate` / `attachInfo` would match the
         // CONTENT_PROVIDER kind set. But that same method calls each
@@ -325,6 +354,22 @@ abstract class AppStartupTracingClassVisitorFactory :
          * same bug class as the historical `by lazy` regression.
          */
         private val sSdkPresenceConfirmed: ConcurrentHashMap<String, Boolean> = ConcurrentHashMap()
+
+        /**
+         * One-element per-thread cache for {@link #classifyKinds} —
+         * stores the most recent (className → kinds) pair seen on the
+         * current thread. AGP invokes [isInstrumentable] then
+         * [createClassVisitor] back-to-back per class, both pass the
+         * same logical input through [classifyKinds], so a tiny "last
+         * one" cache hits ~100% on the second call. Cleared and
+         * overwritten on every miss; never grows.
+         *
+         * ThreadLocal so concurrent AGP workers don't share state
+         * (cleaner than a global ConcurrentHashMap, since the access
+         * pattern is "recently-used in this thread" not "shared cache").
+         */
+        private val sLastClassifyKindsCache: ThreadLocal<Pair<String, Set<ClassKind>>?> =
+            ThreadLocal()
     }
 }
 
