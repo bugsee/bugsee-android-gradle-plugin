@@ -185,4 +185,12 @@ abstract class BuildTimingService :
      */
     internal fun snapshot(topN: Int = DEFAULT_TOP_N): BuildTimings =
         buildTimings(records.toList(), topN)
+
+    /**
+     * Return the full list of recorded task timings — used by the
+     * timings-detail blob serializer ([TimingsPayloadSerializer]).
+     * Same consistent point-in-time read posture as [snapshot], so a
+     * task completing concurrently may or may not be visible.
+     */
+    internal fun timeline(): List<TaskTiming> = records.toList()
 }

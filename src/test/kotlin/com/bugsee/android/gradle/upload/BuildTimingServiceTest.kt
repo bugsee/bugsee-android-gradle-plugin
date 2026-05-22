@@ -1,11 +1,14 @@
 package com.bugsee.android.gradle.upload
 
+import com.bugsee.android.gradle.registerBuildTimingListenerOnce
 import org.gradle.api.services.BuildServiceParameters
+import org.gradle.testfixtures.ProjectBuilder
 import org.gradle.tooling.events.FinishEvent
 import org.gradle.tooling.events.OperationDescriptor
 import org.gradle.tooling.events.OperationResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -70,6 +73,12 @@ class BuildTimingServiceTest {
         // threads; snapshot() reads on the upload-task thread. This
         // test pins the concurrent-producer property: no records go
         // missing when multiple threads call `record` in lockstep.
+        //
+        // Tightened beyond a simple cardinality check: every produced
+        // `(path, durationMs)` pair must appear in the snapshot's
+        // `topTasks`. A naïve size check could pass if duplicate paths
+        // overwrote each other in a buggy implementation; comparing
+        // sets pins both identity AND uniqueness.
         val svc = TestService()
         val threads = 8
         val perThread = 50
@@ -77,7 +86,11 @@ class BuildTimingServiceTest {
         for (i in 0 until threads) {
             Thread {
                 for (j in 0 until perThread) {
-                    svc.record(":t:${i}-$j", 0, 1L)
+                    // Distinct endTime per task so each entry has a
+                    // unique non-zero duration — lets us assert the
+                    // (path, durationMs) pair survives the round trip.
+                    val end = (i.toLong() * 1000 + j.toLong() + 1)
+                    svc.record(":t:${i}-$j", 0, end)
                 }
                 latch.countDown()
             }.start()
@@ -86,6 +99,88 @@ class BuildTimingServiceTest {
 
         val rollup = svc.snapshot(topN = threads * perThread)
         assertEquals(threads * perThread, rollup.topTasks.size)
+
+        // Build the expected (path, durationMs) set from the same
+        // distinct-endTime arithmetic the producer used above.
+        val expected: Set<Pair<String, Long>> = buildSet {
+            for (i in 0 until threads) {
+                for (j in 0 until perThread) {
+                    add(":t:${i}-$j" to (i.toLong() * 1000 + j.toLong() + 1))
+                }
+            }
+        }
+        val actual: Set<Pair<String, Long>> =
+            rollup.topTasks.map { it.path to it.durationMs }.toSet()
+        assertEquals(threads * perThread, actual.size)
+        assertEquals(expected, actual)
+
+        // Per-record duration must be preserved exactly — not collapsed,
+        // rounded, or replaced with a default. Spot-check a few specific
+        // entries by lookup since iteration order in `topTasks` is sorted
+        // by duration descending.
+        val byPath = rollup.topTasks.associateBy { it.path }
+        assertEquals(1L,       byPath[":t:0-0"]!!.durationMs)
+        assertEquals(50L,      byPath[":t:0-49"]!!.durationMs)
+        assertEquals(7_050L,   byPath[":t:7-49"]!!.durationMs)
+    }
+
+
+    @Test fun `registerBuildTimingListenerOnce only registers on the first call`() {
+        // Multi-module project shape: a root project and two children
+        // (both would apply the bugsee plugin). They share the same
+        // Gradle instance — naïvely calling `listenerRegistry
+        // .onTaskCompletion(...)` from BOTH would subscribe the
+        // task-completion listener twice and double-record every
+        // task's timing. The plugin's `registerBuildTimingListenerOnce`
+        // single-flight guard prevents that.
+        //
+        // We can't directly apply the BugseePlugin class in a unit
+        // test (it extends KotlinCompilerPluginSupportPlugin from the
+        // `compileOnly` Kotlin Gradle plugin API, which isn't on the
+        // unit-test classpath). The helper sits in its own top-level
+        // file precisely so referencing it doesn't drag the plugin
+        // class onto the test classpath.
+        val root = ProjectBuilder.builder().withName("test-root").build()
+        val sub1 = ProjectBuilder.builder().withName("sub1").withParent(root).build()
+        val sub2 = ProjectBuilder.builder().withName("sub2").withParent(root).build()
+
+        val fakeRegistry = RecordingListenerRegistry()
+        val fakeServiceProvider = sub1.provider { TestService() as BuildTimingService }
+
+        // Two `apply()` invocations from different subprojects.
+        registerBuildTimingListenerOnce(sub1, fakeRegistry, fakeServiceProvider)
+        registerBuildTimingListenerOnce(sub2, fakeRegistry, fakeServiceProvider)
+
+        // Listener must have been registered EXACTLY once. A
+        // counter == 2 here would mean the second subproject
+        // re-registered and would double-count every task event.
+        assertEquals(1, fakeRegistry.onTaskCompletionCallCount)
+
+        // The flag itself must be set on the root project's
+        // extra-properties — the persistence mechanism the second
+        // call observes. Flag name is duplicated as a string literal
+        // here to avoid loading BugseePlugin (see above).
+        val flagKey = "bugseeBuildTimingListenerRegistered"
+        val rootExtra = root.extensions.extraProperties
+        assertTrue("flag must be set after first call", rootExtra.has(flagKey))
+        assertEquals(true, rootExtra.get(flagKey))
+    }
+
+
+    /**
+     * Recording fake of [org.gradle.build.event.BuildEventsListenerRegistry]
+     * for the single-flight guard test. Tracks the number of
+     * `onTaskCompletion` calls so the test can assert exactly-once
+     * registration semantics.
+     */
+    private class RecordingListenerRegistry :
+        org.gradle.build.event.BuildEventsListenerRegistry {
+        var onTaskCompletionCallCount: Int = 0
+        override fun onTaskCompletion(
+            provider: org.gradle.api.provider.Provider<out org.gradle.tooling.events.OperationCompletionListener>
+        ) {
+            onTaskCompletionCallCount++
+        }
     }
 
 

@@ -16,18 +16,27 @@ package com.bugsee.android.gradle.upload
  * top-level function instead of an object so the list of rules
  * composes naturally with tests.
  */
-internal enum class TaskCategory {
+internal enum class TaskCategory(val wire: String) {
     // JVM-bytecode compilation (kotlinc / javac / R8 / desugar) —
     // renamed from the earlier `JAVA` as part of cross-platform
     // schema harmonisation. The wire-format field on the
     // appserver is `managed_code_ms`; iOS omits it entirely since
     // Swift / Obj-C / C++ all compile into the Mach-O and land
     // in `NATIVE` on that platform.
-    MANAGED_CODE,
-    NATIVE,
-    RESOURCES,
-    PACKAGING,
-    OTHER,
+    //
+    // The `wire` string is the lowercased token used in:
+    //   - The roll-up JSON's `<wire>_ms` field keys
+    //     (see [BuildTimings.toJson]).
+    //   - The detail-blob `task.category` field
+    //     (see [TimingsPayloadSerializer]).
+    //   - The viewer's category palette class names
+    //     (`slice-<wire>` in the timings SCSS).
+    // Producer + consumer share this single source of truth.
+    MANAGED_CODE("managed_code"),
+    NATIVE("native"),
+    RESOURCES("resources"),
+    PACKAGING("packaging"),
+    OTHER("other"),
 }
 
 
@@ -54,8 +63,15 @@ internal object TaskCategoryClassifier {
         // Manifest processing (merging, per-package prep) — these can
         // take tens of seconds on large apps with many modules / feature
         // deliveries, so tracking them alongside resource processing is
-        // the right grouping for "non-code input packaging".
-        Regex("^process[A-Z].*Manifest(ForPackage)?$", RegexOption.IGNORE_CASE) to TaskCategory.RESOURCES,
+        // the right grouping for "non-code input packaging". AGP 8.x
+        // emits variants such as `processApplicationManifestForBundle`
+        // and `processDebugManifestForBundle` — match any suffix.
+        Regex("^process[A-Z].*Manifest.*$", RegexOption.IGNORE_CASE) to TaskCategory.RESOURCES,
+        // Shrink-resources tasks (`shrink<Variant>Res` /
+        // `shrink<Variant>Resources`) — AGP's R8-driven resource
+        // shrinking step. Categorised as RESOURCES (not MANAGED_CODE)
+        // since the work is resource-table / res/ pruning, not bytecode.
+        Regex("^shrink[A-Z].*Res(ources)?$", RegexOption.IGNORE_CASE) to TaskCategory.RESOURCES,
 
         // --- Native ---------------------------------------------------
         Regex("^externalNative.*", RegexOption.IGNORE_CASE) to TaskCategory.NATIVE,
@@ -77,7 +93,12 @@ internal object TaskCategoryClassifier {
         Regex("^(merge|package)[A-Z].*JavaResource$", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
         Regex("^desugar[A-Z].*", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
         Regex("^(dex|mergeDex|minify).*", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
-        Regex("^(r8|proguard).*", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
+        // AGP library-variant artifact-jar packaging — `bundleLib*` is
+        // the LibraryVariant equivalent of the app's dex/jar pipeline
+        // (it packages classes into a jar for AAR consumers), so it
+        // belongs to MANAGED_CODE, not PACKAGING. Placed before the
+        // generic `bundle*` packaging catch-all so it wins.
+        Regex("^bundleLib[A-Z].*(ToCompileJar|ToRuntimeJar|CompileToJar|RuntimeToJar|ToAarMetadata|ToJavaDoc|ToSourcesJar)$", RegexOption.IGNORE_CASE) to TaskCategory.MANAGED_CODE,
 
         // --- Packaging / signing -------------------------------------
         // Catch-all for packaging verbs. Placed last so the resources

@@ -1,0 +1,235 @@
+package com.bugsee.android.gradle.upload
+
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
+
+class DependencyPayloadSerializerTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
+    private fun parseGz(bytes: ByteArray): JSONObject {
+        // The wire blob is gzipped JSON; round-trip to verify the
+        // produced bytes are well-formed.
+        val text = GZIPInputStream(ByteArrayInputStream(bytes)).use {
+            it.readBytes().toString(Charsets.UTF_8)
+        }
+        return JSONObject(text)
+    }
+
+    private val defaultConfig = CollectionConfig(
+        scope = "runtime",
+        includeSelectedReason = false,
+        maxCount = 5000
+    )
+
+    @Test fun `summaryJson surfaces every scalar field`() {
+        val summary = DependenciesSummary(
+            total = 142,
+            direct = 18,
+            transitive = 124,
+            byType = DependenciesSummary.ByType(library = 130, project = 8, file = 4),
+            truncated = true,
+            collectedAtEpochMs = 1_716_192_000_000L,  // 2024-05-20T08:00:00Z
+            collectionConfig = defaultConfig
+        )
+        val out = DependencyPayloadSerializer.summaryJson(summary)
+        assertEquals(142, out.getInt("total"))
+        assertEquals(18, out.getInt("direct"))
+        assertEquals(124, out.getInt("transitive"))
+        assertEquals(130, out.getJSONObject("by_type").getInt("library"))
+        assertEquals(8,   out.getJSONObject("by_type").getInt("project"))
+        assertEquals(4,   out.getJSONObject("by_type").getInt("file"))
+        assertEquals(true, out.getBoolean("truncated"))
+    }
+
+    @Test fun `summaryJson emits collection_config fingerprint`() {
+        // The worker compares this object against the previous build's
+        // `collection_config` to decide whether the two dep lists are
+        // apples-to-apples comparable. Every field must serialise
+        // exactly (no rename, no coercion) so the comparison is
+        // bit-for-bit deterministic on both sides of the wire.
+        val summary = DependenciesSummary(
+            total = 0, direct = 0, transitive = 0,
+            byType = DependenciesSummary.ByType(0, 0, 0),
+            truncated = false,
+            collectedAtEpochMs = 0L,
+            collectionConfig = CollectionConfig(
+                scope = "runtime_direct_only",
+                includeSelectedReason = true,
+                maxCount = 2500
+            )
+        )
+        val cfg = DependencyPayloadSerializer.summaryJson(summary).getJSONObject("collection_config")
+        assertEquals("runtime_direct_only", cfg.getString("scope"))
+        assertEquals(true,  cfg.getBoolean("include_selected_reason"))
+        assertEquals(2500,  cfg.getInt("max_count"))
+    }
+
+    @Test fun `collected_at serialises as ISO-8601 UTC ending in Z`() {
+        // The viewer / appserver expect the `new Date(...)` JS shape;
+        // matching the trailing `Z` keeps round-trips lossless.
+        val summary = DependenciesSummary(
+            total = 0, direct = 0, transitive = 0,
+            byType = DependenciesSummary.ByType(0, 0, 0),
+            truncated = false,
+            collectedAtEpochMs = 1_716_192_000_000L,
+            collectionConfig = defaultConfig
+        )
+        val collectedAt = DependencyPayloadSerializer.summaryJson(summary).getString("collected_at")
+        assertTrue("collected_at must end with Z, was: $collectedAt",
+                   collectedAt.endsWith("Z"))
+        // Pin a known epoch → known ISO form.
+        assertEquals("2024-05-20T08:00:00Z", collectedAt)
+    }
+
+    @Test fun `entries blob carries schema_version and all entries`() {
+        val entries = listOf(
+            DependencyEntry(
+                group = "androidx.core", name = "core-ktx", version = "1.13.1",
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.LIBRARY
+            ),
+            DependencyEntry(
+                group = "com.squareup.okhttp3", name = "okhttp", version = "4.12.0",
+                direct = false, scope = null,
+                type = DependencyEntry.Type.LIBRARY
+            ),
+            DependencyEntry(
+                group = "", name = ":sub", version = null,
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.PROJECT
+            )
+        )
+        val parsed = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries))
+        assertEquals(DependencyPayloadSerializer.SCHEMA_VERSION, parsed.getInt("schema_version"))
+        val arr = parsed.getJSONArray("dependencies")
+        assertEquals(3, arr.length())
+        val first = arr.getJSONObject(0)
+        assertEquals("androidx.core", first.getString("group"))
+        assertEquals("core-ktx", first.getString("name"))
+        assertEquals("1.13.1", first.getString("version"))
+        assertEquals(true, first.getBoolean("direct"))
+        assertEquals("implementation", first.getString("scope"))
+        assertEquals("library", first.getString("type"))
+    }
+
+    @Test fun `null fields are OMITTED on the wire, not serialised as JSON null`() {
+        // The worker's validator accepts absent optional fields. Emitting
+        // `"version": null` would either need the worker to allowlist
+        // null OR the appserver's sanitiser to special-case it.
+        // Cheaper to just omit.
+        val transitive = DependencyEntry(
+            group = "g", name = "n", version = null,
+            direct = false, scope = null,
+            type = DependencyEntry.Type.LIBRARY,
+            selectedReason = null
+        )
+        val parsed = parseGz(DependencyPayloadSerializer.entriesGzBytes(listOf(transitive)))
+        val first = parsed.getJSONArray("dependencies").getJSONObject(0)
+        assertFalse("version must be absent when null", first.has("version"))
+        assertFalse("scope must be absent when null", first.has("scope"))
+        assertFalse("selected_reason must be absent when null", first.has("selected_reason"))
+    }
+
+    @Test fun `selected_reason is included when provided`() {
+        val entry = DependencyEntry(
+            group = "g", name = "n", version = "1",
+            direct = true, scope = "api",
+            type = DependencyEntry.Type.LIBRARY,
+            selectedReason = "forced"
+        )
+        val parsed = parseGz(DependencyPayloadSerializer.entriesGzBytes(listOf(entry)))
+        val first = parsed.getJSONArray("dependencies").getJSONObject(0)
+        assertEquals("forced", first.getString("selected_reason"))
+    }
+
+    @Test fun `writeEntriesGz round-trips bytes through a file`() {
+        val target = tempFolder.newFile("deps.json.gz")
+        val entries = listOf(DependencyEntry(
+            group = "g", name = "n", version = "1",
+            direct = true, scope = "implementation",
+            type = DependencyEntry.Type.LIBRARY
+        ))
+        DependencyPayloadSerializer.writeEntriesGz(entries, target)
+        assertTrue("output must exist", target.exists())
+        val parsed = parseGz(target.readBytes())
+        assertEquals(1, parsed.getJSONArray("dependencies").length())
+    }
+
+    @Test fun `entry blob carries id field for every entry`() {
+        // id is the canonical (type, group, name) identity string —
+        // the same shape the viewer's identityOf + worker's
+        // _identity produce. Always present on the wire so consumers
+        // don't have to re-derive it.
+        val entries = listOf(
+            DependencyEntry(
+                group = "androidx.core", name = "core-ktx", version = "1.13.1",
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.LIBRARY
+            ),
+            DependencyEntry(
+                group = "", name = ":sub", version = null,
+                direct = true, scope = null,
+                type = DependencyEntry.Type.PROJECT
+            )
+        )
+        val arr = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries))
+            .getJSONArray("dependencies")
+        assertEquals("library:androidx.core:core-ktx", arr.getJSONObject(0).getString("id"))
+        // project entry: empty group + name=":sub" → three colons total
+        // (matches the viewer's identityOf shape verbatim).
+        assertEquals("project:::sub",                  arr.getJSONObject(1).getString("id"))
+    }
+
+    @Test fun `parents is omitted when empty and rendered as JSON array otherwise`() {
+        // Direct deps have no parents -> field absent (saves bytes
+        // on the wire — direct deps dominate the entry count on most
+        // projects). Transitives carry the parent id list, preserving
+        // insertion order so the graph can be reconstructed
+        // deterministically.
+        val direct = DependencyEntry(
+            group = "g", name = "a", version = "1",
+            direct = true, scope = "implementation",
+            type = DependencyEntry.Type.LIBRARY
+            // parents defaulted to emptyList
+        )
+        val transitive = DependencyEntry(
+            group = "g", name = "b", version = "1",
+            direct = false, scope = null,
+            type = DependencyEntry.Type.LIBRARY,
+            parents = listOf("library:g:a", "library:g:c")
+        )
+        val arr = parseGz(DependencyPayloadSerializer.entriesGzBytes(listOf(direct, transitive)))
+            .getJSONArray("dependencies")
+
+        val directJson = arr.getJSONObject(0)
+        assertFalse("parents must be absent when empty", directJson.has("parents"))
+
+        val transitiveJson = arr.getJSONObject(1)
+        val parentsArr = transitiveJson.getJSONArray("parents")
+        assertEquals(2, parentsArr.length())
+        assertEquals("library:g:a", parentsArr.getString(0))
+        assertEquals("library:g:c", parentsArr.getString(1))
+    }
+
+    @Test fun `entries blob uses the type wire name verbatim`() {
+        val entries = listOf(
+            DependencyEntry("g", "lib", "1", true, "implementation", DependencyEntry.Type.LIBRARY),
+            DependencyEntry("",  ":a",  null, true, "implementation", DependencyEntry.Type.PROJECT),
+            DependencyEntry("",  "f.jar", null, true, "runtimeOnly", DependencyEntry.Type.FILE)
+        )
+        val arr = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries))
+            .getJSONArray("dependencies")
+        assertEquals("library", arr.getJSONObject(0).getString("type"))
+        assertEquals("project", arr.getJSONObject(1).getString("type"))
+        assertEquals("file",    arr.getJSONObject(2).getString("type"))
+    }
+}

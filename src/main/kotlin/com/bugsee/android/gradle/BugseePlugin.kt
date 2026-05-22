@@ -3,6 +3,7 @@ package com.bugsee.android.gradle
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
@@ -53,7 +54,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 BUILD_TIMING_SERVICE_NAME,
                 BuildTimingService::class.java
             ) { }
-        listenerRegistry.onTaskCompletion(timingService)
+
+        // Single-flight guard for the task-completion listener. See
+        // [registerBuildTimingListenerOnce] for the rationale
+        // (multi-module de-duplication).
+        registerBuildTimingListenerOnce(project, listenerRegistry, timingService)
 
         // Auto-install Bugsee extension modules when matching third-party
         // dependencies are detected. Uses withDependencies to inject before
@@ -394,9 +399,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.requestArtifactUpload.set(extension.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
             wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
+            wireDependenciesCollectionInputs(task, project, variant, extension.buildInfo.dependencies)
             // The timing service is auto-wired on the task via
             // `@ServiceReference(BUILD_TIMING_SERVICE_NAME)`; no
-            // explicit `set`/`usesService` call needed.
+            // explicit `set`/`usesService` call needed. The
+            // user-facing on/off flag still has to be set explicitly.
+            task.timingsEnabled.set(extension.buildInfo.timings.enabled)
         }
 
         project.tasks.configureEach { t ->
@@ -434,7 +442,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.requestArtifactUpload.set(extension.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
             wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
+            wireDependenciesCollectionInputs(task, project, variant, extension.buildInfo.dependencies)
             // Timing service auto-wired via @ServiceReference (see above).
+            task.timingsEnabled.set(extension.buildInfo.timings.enabled)
         }
 
         project.tasks.configureEach { t ->
@@ -714,6 +724,77 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         )
         task.sizeCheckFailBytes.set(
             sizeCheck.failBytes.orElse(envLong("BUGSEE_SIZE_CHECK_FAIL_BYTES"))
+        )
+    }
+
+    /**
+     * Wire the dependencies-collection task inputs from the
+     * `bugsee.buildInfo.dependencies` DSL block.
+     *
+     * The resolution result is set via a Provider chain so the
+     * actual dependency graph walk happens at task execution time,
+     * not at configuration time. Declared-scope and file-dependency
+     * extraction reads `project.configurations` lazily as well —
+     * `project.provider { ... }` defers the closure to execution.
+     */
+    private fun wireDependenciesCollectionInputs(
+        task: BundleUploadTask,
+        project: Project,
+        variant: ApplicationVariant,
+        ext: BugseeDependenciesCollectionExtension,
+    ) {
+        // `requestDependenciesUpload` is the per-sub-feature gate.
+        // The outer `buildInfo.enabled = false` short-circuits the
+        // entire `registerBundleUploadTask` call site upstream, so
+        // this method only runs at all when buildInfo is on. Within
+        // that, the user can independently disable just the deps
+        // sub-feature by setting `dependencies.enabled = false` —
+        // build-info still ships, deps don't.
+        task.requestDependenciesUpload.set(ext.enabled)
+        task.dependenciesScope.set(ext.scope)
+        task.dependenciesIncludeReason.set(ext.includeSelectedReason)
+        task.dependenciesMaxCount.set(ext.maxCount)
+
+        // Runtime classpath resolution result — lazy. The collector
+        // walks it at execution time.
+        task.runtimeRootComponent.set(
+            variant.runtimeConfiguration.incoming.resolutionResult.rootComponent
+        )
+
+        // Declared-scope map + file-deps list. Both are computed at
+        // configuration time (eagerly walking `configurations.findByName`),
+        // which is CC-safe because we only read declared-dependency
+        // names + groups (`ModuleDependency.group / name`) — no resolution
+        // touched here.
+        val scopeNames = listOf("api", "implementation", "runtimeOnly", "compileOnly")
+        task.declaredScopes.set(
+            project.provider {
+                val confs = LinkedHashMap<String, org.gradle.api.artifacts.Configuration>()
+                for (n in scopeNames) {
+                    project.configurations.findByName(n)?.let { confs[n] = it }
+                }
+                DependencyCollector.collectDeclaredScopes(confs)
+            }
+        )
+        task.fileDependencies.set(
+            project.provider {
+                val out = mutableListOf<String>()
+                for (n in scopeNames) {
+                    val conf = project.configurations.findByName(n) ?: continue
+                    for (dep in conf.dependencies) {
+                        if (dep is org.gradle.api.artifacts.FileCollectionDependency) {
+                            // Resolve file names without triggering
+                            // the configuration's full resolution —
+                            // `files` is a FileCollection that
+                            // enumerates raw files only.
+                            for (f in dep.files) {
+                                out.add("$n|${f.name}")
+                            }
+                        }
+                    }
+                }
+                out
+            }
         )
     }
 

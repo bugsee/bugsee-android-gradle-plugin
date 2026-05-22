@@ -73,6 +73,42 @@ class TaskCategoryClassifierTest {
             TaskCategoryClassifier.classify(":app:processReleaseManifestForPackage"))
     }
 
+    @Test fun `AGP 8x manifest-for-bundle variants classify as RESOURCES`() {
+        // Regression: the prior `^process[A-Z].*Manifest(ForPackage)?$`
+        // missed AGP 8.x variants whose suffix is `ForBundle` (per-variant
+        // and per-application-flavor). The generalised pattern now picks
+        // these up alongside the original `ForPackage` cases.
+        assertEquals(TaskCategory.RESOURCES,
+            TaskCategoryClassifier.classify(":app:processApplicationManifestForBundle"))
+        assertEquals(TaskCategory.RESOURCES,
+            TaskCategoryClassifier.classify(":app:processDebugManifestForBundle"))
+        assertEquals(TaskCategory.RESOURCES,
+            TaskCategoryClassifier.classify(":app:processReleaseManifestForBundle"))
+    }
+
+    @Test fun `bundleLib jar packaging classifies as MANAGED_CODE not PACKAGING`() {
+        // Library-variant artifact-jar packaging is the AAR equivalent
+        // of dex/jar packaging in the app pipeline. AGP emits these
+        // for `:library` modules — they belong in MANAGED_CODE, not
+        // PACKAGING. Specific rule sits before the generic
+        // `^(package|bundle|sign|zip)...` packaging catch-all.
+        assertEquals(TaskCategory.MANAGED_CODE,
+            TaskCategoryClassifier.classify(":lib:bundleLibDebugCompileToJar"))
+        assertEquals(TaskCategory.MANAGED_CODE,
+            TaskCategoryClassifier.classify(":lib:bundleLibReleaseRuntimeToJar"))
+        assertEquals(TaskCategory.MANAGED_CODE,
+            TaskCategoryClassifier.classify(":lib:bundleLibReleaseToCompileJar"))
+        assertEquals(TaskCategory.MANAGED_CODE,
+            TaskCategoryClassifier.classify(":lib:bundleLibReleaseToRuntimeJar"))
+    }
+
+    @Test fun `shrink-resources tasks classify as RESOURCES`() {
+        assertEquals(TaskCategory.RESOURCES,
+            TaskCategoryClassifier.classify(":app:shrinkReleaseRes"))
+        assertEquals(TaskCategory.RESOURCES,
+            TaskCategoryClassifier.classify(":app:shrinkDebugResources"))
+    }
+
     @Test fun `jni lib merging classifies as NATIVE`() {
         assertEquals(TaskCategory.NATIVE,
             TaskCategoryClassifier.classify(":app:mergeReleaseNativeLibs"))

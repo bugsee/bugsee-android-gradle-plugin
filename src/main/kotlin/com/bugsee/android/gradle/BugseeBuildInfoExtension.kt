@@ -106,4 +106,66 @@ abstract class BugseeBuildInfoExtension @Inject constructor(objects: ObjectFacto
     fun sizeCheck(action: Action<BugseeSizeCheckExtension>) {
         action.execute(sizeCheck)
     }
+
+    /**
+     * Dependencies-collection configuration. See
+     * [BugseeDependenciesCollectionExtension] for the full option
+     * surface (scope, max count, selected-reason inclusion).
+     *
+     * Lives under `buildInfo` because the resolved dependency list is
+     * conceptually part of basic build provenance — sent alongside
+     * version / commit / machine, irrespective of whether the optional
+     * full size-analysis upload is enabled.
+     */
+    val dependencies: BugseeDependenciesCollectionExtension =
+        objects.newInstance(BugseeDependenciesCollectionExtension::class.java)
+
+    /**
+     * Configure dependencies collection via a DSL block.
+     *
+     * ```kotlin
+     * bugsee {
+     *     buildInfo {
+     *         dependencies {
+     *             enabled.set(true)
+     *             scope.set("runtime")
+     *             maxCount.set(5000)
+     *         }
+     *     }
+     * }
+     * ```
+     */
+    fun dependencies(action: Action<BugseeDependenciesCollectionExtension>) {
+        action.execute(dependencies)
+    }
+
+    /**
+     * Build-timings collection configuration. See
+     * [BugseeTimingsCollectionExtension] for the option surface.
+     *
+     * Lives under `buildInfo` for the same reason as dependencies:
+     * per-task Gradle timings are basic build provenance, captured
+     * alongside version / commit / machine and emitted both as an
+     * inline summary (`build_metadata.timings`) and as a detail
+     * blob PUT to a presigned URL.
+     */
+    val timings: BugseeTimingsCollectionExtension =
+        objects.newInstance(BugseeTimingsCollectionExtension::class.java)
+
+    /**
+     * Configure timings collection via a DSL block.
+     *
+     * ```kotlin
+     * bugsee {
+     *     buildInfo {
+     *         timings {
+     *             enabled.set(true)
+     *         }
+     *     }
+     * }
+     * ```
+     */
+    fun timings(action: Action<BugseeTimingsCollectionExtension>) {
+        action.execute(timings)
+    }
 }

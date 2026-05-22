@@ -4,9 +4,12 @@ import com.bugsee.android.gradle.BugseePlugin
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.artifacts.result.ResolvedComponentResult
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.services.ServiceReference
 import org.gradle.api.tasks.Input
@@ -178,6 +181,81 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Optional
     abstract val sizeCheckFailBytes: Property<Long>
 
+    // ── Dependencies-collection inputs ─────────────────────────────
+    //
+    // Wired from `extension.buildInfo.dependencies` at registration.
+    // The task resolves + serialises the dep graph at execution time
+    // so a configuration-time crash in some other plugin never
+    // bleeds into Bugsee's task graph (collection is best-effort,
+    // mirrors the rest of the build-info path).
+
+    /** Master gate. When `false` / unset, the dep-collection step is
+     *  skipped entirely (no resolution, no PUT, no `dependencies_summary`
+     *  in the metadata POST). */
+    @get:Input
+    @get:Optional
+    abstract val requestDependenciesUpload: Property<Boolean>
+
+    /** One of `"runtime"`, `"runtime_direct_only"`, `"compile_runtime"`.
+     *  Currently informational only — the resolution result wired in
+     *  via [runtimeRootComponent] is the runtime classpath; the
+     *  other scope variants are reserved for a follow-up. */
+    @get:Input
+    @get:Optional
+    abstract val dependenciesScope: Property<String>
+
+    /** Whether to include Gradle's selection reason on each entry. */
+    @get:Input
+    @get:Optional
+    abstract val dependenciesIncludeReason: Property<Boolean>
+
+    /** Cap on the per-entry list. Above this the summary's `truncated`
+     *  flag is set. */
+    @get:Input
+    @get:Optional
+    abstract val dependenciesMaxCount: Property<Int>
+
+    /** `"group:name" → "implementation"/"api"/...` map built from the
+     *  project's declared dependencies at registration. Only direct
+     *  entries receive a scope; transitives stay `null`. */
+    @get:Input
+    @get:Optional
+    abstract val declaredScopes: MapProperty<String, String>
+
+    /** File-collection dependencies (raw .jar / .aar refs) encoded as
+     *  `"scopeOrEmpty|displayName"`. Encoded as strings so the input
+     *  is configuration-cache-safe regardless of the underlying file
+     *  type. */
+    @get:Input
+    @get:Optional
+    abstract val fileDependencies: ListProperty<String>
+
+    /** Resolved root of the variant's runtime classpath — walked by
+     *  [DependencyCollector]. Declared `@Internal`: it's a live
+     *  Gradle computation, not a fingerprintable input, so it must
+     *  not participate in up-to-date checks (Gradle re-runs the task
+     *  whenever the underlying configuration changes via the
+     *  build-script classpath). */
+    @get:Internal
+    abstract val runtimeRootComponent: Property<ResolvedComponentResult>
+
+    // ── Timings-collection inputs ──────────────────────────────────
+    //
+    // Wired from `extension.buildInfo.timings` at registration.
+    // The actual capture happens continuously throughout the build
+    // via the always-on `BuildTimingService`; this flag gates only
+    // whether the upload task USES the captured data. Disabling it
+    // omits both the inline `build_metadata.timings` summary block
+    // and the `request_timings_upload: true` flag (so the server
+    // never signs a presigned PUT URL).
+
+    /** Master gate. When `false` / unset, the inline timings summary
+     *  is omitted from the metadata POST and the detail-blob PUT is
+     *  skipped. */
+    @get:Input
+    @get:Optional
+    abstract val timingsEnabled: Property<Boolean>
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -256,12 +334,21 @@ abstract class BundleUploadTask : DefaultTask() {
             )
         }
 
+        // Single snapshot of the timing service's records — used by
+        // BOTH the inline `build_metadata.timings` summary AND the
+        // detail-blob serializer downstream. Snapshotted ONCE so a
+        // task completing between the two consumers can't make the
+        // inline summary disagree with the detail blob (e.g. inline
+        // shows a task the blob omits, or vice versa). `null` when
+        // the timing service was never wired in (Gradle edge cases).
+        val timingsSnapshot: List<TaskTiming>? = timingService.orNull?.timeline()
+
         // Build-process provenance — best-effort. Caught wide so a
         // misbehaving resolver or a missing BuildService never turns
         // into a failed upload: size analysis is strictly auxiliary
         // and must not kill an otherwise-green CI build.
         val buildMetadata = try {
-            resolveBuildMetadataJson()
+            resolveBuildMetadataJson(timingsSnapshot)
         } catch (e: Exception) {
             if (isDebug) logger.warn("Bugsee: build_metadata resolution failed: ${e.message}")
             null
@@ -293,6 +380,46 @@ abstract class BundleUploadTask : DefaultTask() {
             val artifactSize = artifactFile.length()
 
             val wantsArtifactUpload = requestArtifactUpload.getOrElse(false)
+            val wantsDependenciesUpload = requestDependenciesUpload.getOrElse(false)
+
+            // Run the dependency collector when the user has opted in
+            // (default-on path). All-or-nothing: a resolution failure
+            // (e.g. a misbehaving custom dependency resolver in the
+            // user's project) drops back to "no deps payload" without
+            // failing the metadata POST. Same posture as
+            // `buildMetadata` above — best-effort enrichment.
+            val depsPayload: DepsPayload? = if (wantsDependenciesUpload) {
+                try {
+                    resolveDependenciesPayload()
+                } catch (e: Exception) {
+                    if (isDebug) logger.warn(
+                        "Bugsee: dependency collection failed: ${e.message} — skipping deps upload"
+                    )
+                    null
+                }
+            } else null
+
+            // Build-timings detail blob. Gated by the user-facing
+            // `buildInfo.timings.enabled` DSL flag (default ON,
+            // mirrored by the inline-summary guard in
+            // [resolveBuildMetadataJson]). When disabled, BOTH the
+            // inline `build_metadata.timings` block AND the detail
+            // blob are omitted so the appserver never signs a
+            // presigned timings PUT URL. The `BuildTimingService`
+            // itself stays registered regardless — its per-task
+            // overhead is sub-millisecond — but its data is unused.
+            val timingsPayload: TimingsPayload? = if (
+                timingsEnabled.getOrElse(true)
+            ) {
+                try {
+                    resolveTimingsPayload(timingsSnapshot)
+                } catch (e: Exception) {
+                    if (isDebug) logger.warn(
+                        "Bugsee: timings serialisation failed: ${e.message} — skipping timings upload"
+                    )
+                    null
+                }
+            } else null
 
             // Build JSON metadata
             val json = JSONObject().apply {
@@ -308,6 +435,21 @@ abstract class BundleUploadTask : DefaultTask() {
                 // record at `'unavailable'` (build-info only) or
                 // `'uploading'` (sign + return a presigned PUT URL).
                 put("request_artifact_upload", wantsArtifactUpload)
+                // Independent of artefact upload — opts in to the deps
+                // upload sub-feature and tells the server to sign a
+                // second presigned PUT URL.
+                if (depsPayload != null) {
+                    put("request_dependencies_upload", true)
+                    put("dependencies_summary", depsPayload.summaryJson)
+                }
+                // Independent of artefact + deps uploads — opts in to
+                // the timings detail-blob feature. The inline summary
+                // lives under `build_metadata.timings` already; this
+                // flag tells the server to sign a third presigned PUT
+                // URL that the producer uses for the detail blob.
+                if (timingsPayload != null) {
+                    put("request_timings_upload", true)
+                }
                 if (vcsJson.length() > 0) put("vcs", vcsJson)
                 // Machine + plugin/Gradle versions + per-category
                 // Gradle task timings (see resolveBuildMetadataJson).
@@ -361,11 +503,11 @@ abstract class BundleUploadTask : DefaultTask() {
             }
 
             if (!chunkedSucceeded) {
-                // POST metadata; PUT file too when wantsArtifactUpload.
-                // BundleUploader throws on any failure so the cause is
-                // observable, but the whole flow is best-effort — log
-                // at error level and swallow so a flaky network doesn't
-                // kill an otherwise-green CI build.
+                // POST metadata; PUT file too when wantsArtifactUpload;
+                // PUT deps gz too when depsPayload != null. Each PUT
+                // is independently best-effort inside the uploader —
+                // a failing deps PUT must not fail an otherwise-green
+                // artefact upload, and vice versa.
                 try {
                     BundleUploader.uploadData(
                         file = uploadZip,
@@ -373,6 +515,8 @@ abstract class BundleUploadTask : DefaultTask() {
                         appToken = appToken,
                         endpoint = endpoint.get(),
                         requestArtifactUpload = wantsArtifactUpload,
+                        dependenciesGzFile = depsPayload?.gzFile,
+                        timingsGzFile = timingsPayload?.gzFile,
                         logger = logger,
                         debug = isDebug
                     )
@@ -447,7 +591,7 @@ abstract class BundleUploadTask : DefaultTask() {
      * then omits the field entirely so the server-side sanitizer
      * sees a clean absence rather than an empty object.
      */
-    private fun resolveBuildMetadataJson(): JSONObject? {
+    private fun resolveBuildMetadataJson(timingsSnapshot: List<TaskTiming>?): JSONObject? {
         val obj = JSONObject()
 
         BuildMachineResolver.resolve()?.takeIf { it.isNotBlank() }?.let {
@@ -466,17 +610,140 @@ abstract class BundleUploadTask : DefaultTask() {
         // Timing service is wired from the plugin's `apply()` so it's
         // always present in normal operation. Guard defensively so a
         // Gradle edge case that skips the listener registration (very
-        // short builds, replay-from-cache) doesn't throw here.
-        val service = timingService.orNull
-        if (service != null) {
-            val timings = service.snapshot()
-            val timingsJson = timings.toJson()
-            if (timingsJson.length() > 0) {
-                obj.put("timings", timingsJson)
+        // short builds, replay-from-cache) doesn't throw here. Also
+        // honour `buildInfo.timings.enabled = false` — when timings
+        // are opted out, the inline summary is omitted too so the
+        // wire shape matches the "no timings" contract end-to-end
+        // (no `build_metadata.timings`, no `request_timings_upload`).
+        if (timingsEnabled.getOrElse(true) && timingsSnapshot != null) {
+            val rollup = buildTimings(timingsSnapshot)
+            if (hasUsefulTimings(rollup)) {
+                obj.put("timings", rollup.toJson())
             }
         }
 
         return if (obj.length() == 0) null else obj
+    }
+
+    /**
+     * Tightened inclusion gate for the inline `build_metadata.timings`
+     * summary. The raw `toJson().length() > 0` check used to suffice,
+     * but a cache-replay edge case can produce a rollup where ALL of
+     * `total_ms`, the per-category sums, and every `top_tasks[].duration_ms`
+     * are zero — yet `topTasks` is non-empty (one entry with `duration_ms = 0`).
+     * `toJson()` then emits a non-empty `top_tasks` array, the viewer
+     * sees `hasTimings = true`, and renders an empty Gantt panel. Demand
+     * at least one signal of real work.
+     */
+    private fun hasUsefulTimings(rollup: BuildTimings): Boolean {
+        if (rollup.totalMs > 0L) return true
+        if (rollup.managedCodeMs > 0L) return true
+        if (rollup.nativeMs > 0L) return true
+        if (rollup.resourcesMs > 0L) return true
+        if (rollup.packagingMs > 0L) return true
+        if (rollup.otherMs > 0L) return true
+        return rollup.topTasks.any { it.durationMs > 0L }
+    }
+
+    /**
+     * Carrier for the two outputs of dependency collection: the inline
+     * scalar summary (embedded in the metadata POST) and the gzipped
+     * full per-entry blob (PUT to the dependencies presigned URL).
+     */
+    private data class DepsPayload(val summaryJson: JSONObject, val gzFile: File)
+
+    /**
+     * Carrier for the build-timings detail blob — the full per-task
+     * timeline used by the viewer's Gantt-chart renderer. The inline
+     * summary (totals + per-category cumulative + top-10 tasks) is
+     * already written under `build_metadata.timings` and travels in
+     * the metadata POST; the gz file here is PUT to the presigned URL
+     * the server returns when `request_timings_upload: true`.
+     */
+    private data class TimingsPayload(val gzFile: File)
+
+    /**
+     * Build the timings detail blob if the build collected any task
+     * timings. Returns `null` when the timing service captured zero
+     * tasks (very short builds, replay-from-cache, edge cases the
+     * Gradle listener didn't fire on) — the caller then omits the
+     * `request_timings_upload` flag entirely.
+     */
+    private fun resolveTimingsPayload(timingsSnapshot: List<TaskTiming>?): TimingsPayload? {
+        if (timingsSnapshot == null || timingsSnapshot.isEmpty()) return null
+        val gz = File(temporaryDir, "bugsee-timings.json.gz")
+        TimingsPayloadSerializer.writeGz(timingsSnapshot, gz)
+        return TimingsPayload(gzFile = gz)
+    }
+
+    /**
+     * Runs the [DependencyCollector] against the wired runtime
+     * resolution result + declared-scope map, serialises both outputs.
+     * Returns `null` when collection is enabled but no useful data
+     * could be gathered (e.g. the variant has no resolution result —
+     * exotic projects or unit-test scaffolding).
+     */
+    private fun resolveDependenciesPayload(): DepsPayload? {
+        val root = runtimeRootComponent.orNull ?: return null
+        val maxCount = dependenciesMaxCount.getOrElse(5_000)
+        val includeReason = dependenciesIncludeReason.getOrElse(false)
+        val declared = declaredScopes.getOrElse(emptyMap())
+        val fileDeps = fileDependencies.getOrElse(emptyList()).map { encoded ->
+            // Encoded as "scope|displayName"; an empty scope segment
+            // is permitted and decodes back to `null`.
+            val idx = encoded.indexOf('|')
+            val scope = if (idx >= 0) encoded.substring(0, idx).ifEmpty { null } else null
+            val name = if (idx >= 0) encoded.substring(idx + 1) else encoded
+            DependencyCollector.FileDep(displayName = name, scope = scope)
+        }
+
+        // Scope mode. Unknown / unset values fall back to `"runtime"`
+        // (default). `"compile_runtime"` is reserved — it requires a
+        // second resolved configuration (compileClasspath) wired in
+        // at registration. Until that lands, log a one-line warning
+        // so the user knows their DSL knob is being ignored.
+        val scopeMode = dependenciesScope.getOrElse("runtime").lowercase()
+        val directOnly: Boolean = when (scopeMode) {
+            "runtime_direct_only" -> true
+            "runtime", "" -> false
+            "compile_runtime" -> {
+                logger.warn(
+                    "Bugsee: bugsee.buildInfo.dependencies.scope = " +
+                    "\"compile_runtime\" is not yet implemented — " +
+                    "falling back to runtime classpath."
+                )
+                false
+            }
+            else -> {
+                logger.warn(
+                    "Bugsee: bugsee.buildInfo.dependencies.scope = " +
+                    "\"$scopeMode\" is not a recognised value — " +
+                    "falling back to runtime classpath. " +
+                    "Supported: \"runtime\", \"runtime_direct_only\", \"compile_runtime\"."
+                )
+                false
+            }
+        }
+
+        val collector = DependencyCollector(
+            maxCount = maxCount,
+            includeSelectedReason = includeReason,
+            directOnly = directOnly
+        )
+        val result = collector.collect(root, declared, fileDeps)
+        if (result.entries.isEmpty()) {
+            // Nothing to ship — empty dep set is uncommon (the bugsee
+            // SDK itself is a dep) but legitimate for sample / fixture
+            // projects. Skip the second PUT rather than uploading a
+            // 1-element JSON object the viewer would have to special-
+            // case.
+            return null
+        }
+
+        val summaryJson = DependencyPayloadSerializer.summaryJson(result.summary)
+        val gz = File(temporaryDir, "bugsee-dependencies.json.gz")
+        DependencyPayloadSerializer.writeEntriesGz(result.entries, gz)
+        return DepsPayload(summaryJson = summaryJson, gzFile = gz)
     }
 
     private fun resolveArtifactFile(): File? {
