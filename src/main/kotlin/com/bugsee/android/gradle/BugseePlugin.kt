@@ -395,7 +395,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
-            task.chunkedUpload.set(extension.chunkedUpload)
+            task.chunkedUpload.set(extension.buildInfo.sizeAnalysis.chunkedUpload)
             task.requestArtifactUpload.set(extension.buildInfo.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
             wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
@@ -438,7 +438,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
-            task.chunkedUpload.set(extension.chunkedUpload)
+            task.chunkedUpload.set(extension.buildInfo.sizeAnalysis.chunkedUpload)
             task.requestArtifactUpload.set(extension.buildInfo.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
             wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)

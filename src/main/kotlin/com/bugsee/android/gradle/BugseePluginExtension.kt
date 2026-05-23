@@ -85,17 +85,6 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val feedback: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
-     * Use the chunked upload protocol instead of a single PUT for size-analysis bundles.
-     *
-     * Chunks are deduplicated across builds, so CI runs that only change
-     * a small fraction of the bundle upload much faster on repeat runs.
-     * Disabled by default while the endpoint rolls out; set to `true` to opt in.
-     *
-     * Default: `false`
-     */
-    val chunkedUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
-
-    /**
      * Build-info configuration block. Always-on by default; registers
      * a Bugsee build record on every release variant with metadata
      * (version, build, package_id, VCS, machine, plugin/SDK

@@ -118,9 +118,9 @@ abstract class BundleUploadTask : DefaultTask() {
     abstract val stringResourceFiles: ConfigurableFileCollection
 
     // Feature-flag for the chunked upload path. Wired from
-    // `extension.chunkedUpload` at task registration — reading it
-    // here (rather than at `@TaskAction` time via `project.extensions`)
-    // keeps the task CC-clean.
+    // `extension.buildInfo.sizeAnalysis.chunkedUpload` at task
+    // registration — reading it here (rather than at `@TaskAction`
+    // time via `project.extensions`) keeps the task CC-clean.
     @get:Input
     abstract val chunkedUpload: Property<Boolean>
 

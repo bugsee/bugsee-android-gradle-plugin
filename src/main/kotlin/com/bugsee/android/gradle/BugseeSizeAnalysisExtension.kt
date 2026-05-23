@@ -54,4 +54,25 @@ abstract class BugseeSizeAnalysisExtension @Inject constructor(objects: ObjectFa
      * (e.g. `"release"`, `"freeRelease"`) when not set.
      */
     val buildConfiguration: Property<String> = objects.property(String::class.java)
+
+    /**
+     * Use the chunked upload protocol instead of a single PUT for the
+     * size-analysis artefact bundle.
+     *
+     * Chunks are deduplicated across builds — CI runs that only change
+     * a small fraction of the AAB / APK upload much faster on repeat
+     * runs because unchanged chunks are short-circuited at the appserver.
+     * The chunked path also auto-falls-back to the single-PUT path on
+     * any failure, so enabling this flag never breaks an existing build.
+     *
+     * Disabled by default while the chunked endpoints roll out;
+     * set to `true` to opt in.
+     *
+     * Only has effect when [enabled] is also `true` — the build-info-only
+     * path (no artefact upload) has nothing to chunk.
+     *
+     * Default: `false`
+     */
+    val chunkedUpload: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(false)
 }
