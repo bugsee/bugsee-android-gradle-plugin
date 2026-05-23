@@ -282,7 +282,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.debug.set(extension.debug)
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
-            task.forceUpload.set(extension.ndkForceUpload)
+            task.forceUpload.set(extension.ndkForceDebugSymbolsUpload)
             task.group = "bugsee"
             task.description = "Uploads NDK native debug symbols for $capitalizedVariant"
 
@@ -314,7 +314,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         extension: BugseePluginExtension,
         capitalizedVariant: String
     ) {
-        val buildConfig = extension.sizeAnalysis.buildConfiguration
+        val buildConfig = extension.buildInfo.sizeAnalysis.buildConfiguration
             .orElse(project.provider { variant.name })
         val isDebug = extension.debug.getOrElse(false)
 
@@ -396,7 +396,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.chunkedUpload)
-            task.requestArtifactUpload.set(extension.sizeAnalysis.enabled)
+            task.requestArtifactUpload.set(extension.buildInfo.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
             wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
             wireDependenciesCollectionInputs(task, project, variant, extension.buildInfo.dependencies)
@@ -439,7 +439,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.chunkedUpload)
-            task.requestArtifactUpload.set(extension.sizeAnalysis.enabled)
+            task.requestArtifactUpload.set(extension.buildInfo.sizeAnalysis.enabled)
             task.projectDirectory.set(project.layout.projectDirectory)
             wireSizeCheckInputs(task, project, extension.buildInfo.sizeCheck)
             wireDependenciesCollectionInputs(task, project, variant, extension.buildInfo.dependencies)
@@ -568,7 +568,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         isDebug: Boolean,
     ): Boolean {
         val buildInfoEnabled = extension.buildInfo.enabled.getOrElse(true)
-        val sizeAnalysisEnabled = extension.sizeAnalysis.enabled.getOrElse(false)
+        val sizeAnalysisEnabled = extension.buildInfo.sizeAnalysis.enabled.getOrElse(false)
 
         if (!buildInfoEnabled) {
             // Configuration error: sizeAnalysis is meaningless without

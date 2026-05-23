@@ -33,8 +33,7 @@ import javax.inject.Inject
  *
  * ```kotlin
  * bugsee {
- *     sizeAnalysis {
- *         enabled.set(true)
+ *     buildInfo {
  *         sizeCheck {
  *             enabled.set(true)
  *             warningPercent.set(5.0)

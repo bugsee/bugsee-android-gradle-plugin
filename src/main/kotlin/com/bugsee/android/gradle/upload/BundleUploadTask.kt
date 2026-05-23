@@ -124,7 +124,7 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Input
     abstract val chunkedUpload: Property<Boolean>
 
-    // `true` when the user has enabled `bugsee.sizeAnalysis.enabled`.
+    // `true` when the user has enabled `bugsee.buildInfo.sizeAnalysis.enabled`.
     // The task is registered whenever `buildInfo.enabled` is on (the
     // default); this flag controls whether the metadata POST also
     // requests a presigned URL for the artefact bytes. Mirrors the

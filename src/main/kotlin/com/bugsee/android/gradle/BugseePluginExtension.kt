@@ -15,9 +15,11 @@ import javax.inject.Inject
  *     debug.set(false)
  *     ndk.set(false)
  *     feedback.set(false)
- *     sizeAnalysis {
- *         enabled.set(true)
- *         buildConfiguration.set("release")
+ *     buildInfo {
+ *         sizeAnalysis {
+ *             enabled.set(true)
+ *             buildConfiguration.set("release")
+ *         }
  *     }
  * }
  * ```
@@ -55,17 +57,28 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val ndk: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
-     * Force NDK symbol upload on every build, bypassing the local SHA-1 cache.
+     * Force native debug-symbol upload on every build, bypassing the local
+     * SHA-1 cache.
      *
-     * By default the plugin caches the SHA-1 hash of uploaded native symbols and
-     * skips the upload when the symbols haven't changed. Set this to `true` to
-     * always upload regardless of the cache state (e.g. for CI release builds).
+     * The NDK pipeline's per-variant `uploadBugsee{Variant}Native` task zips
+     * the unstripped `.so` files AGP extracts to
+     * `intermediates/native_debug_metadata/{variant}/out/`, hashes the zip,
+     * and PUTs it to the appserver. The local cache at
+     * `.gradle/bugsee/native-symbol-cache.json` records the SHA-1 of the last
+     * successful upload (keyed by `sha1Hex(appToken):variantName`); a
+     * subsequent build whose zip hashes the same value skips the PUT (the
+     * server already has these exact symbols).
+     *
+     * Set this to `true` to bypass that check and always re-upload — useful
+     * for fresh CI runners (no local cache to short-circuit against), or
+     * recovery scenarios where the server-side store has been wiped and
+     * the local cache no longer reflects reality.
      *
      * Only has effect when [ndk] is also `true`.
      *
      * Default: `false`
      */
-    val ndkForceUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+    val ndkForceDebugSymbolsUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
      * Include the Bugsee in-app feedback module.
@@ -119,33 +132,6 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     }
 
     /**
-     * Size analysis configuration block.
-     *
-     * Sub-feature of `buildInfo`. Disabled by default. When enabled,
-     * the build-info task additionally uploads the artefact bytes
-     * for server-side tree analysis. Requires `buildInfo.enabled =
-     * true` (the default) — the plugin logs a warning and skips both
-     * if `sizeAnalysis` is enabled while `buildInfo` is off.
-     */
-    val sizeAnalysis: BugseeSizeAnalysisExtension = objects.newInstance(BugseeSizeAnalysisExtension::class.java)
-
-    /**
-     * Configure size analysis via a DSL block.
-     *
-     * ```kotlin
-     * bugsee {
-     *     sizeAnalysis {
-     *         enabled.set(true)
-     *         buildConfiguration.set("release")
-     *     }
-     * }
-     * ```
-     */
-    fun sizeAnalysis(action: Action<BugseeSizeAnalysisExtension>) {
-        action.execute(sizeAnalysis)
-    }
-
-    /**
      * Per-feature bytecode instrumentation configuration block.
      *
      * Individual instrumentations (OkHttp, Log, Thread, Compose, etc.) can be
@@ -169,16 +155,6 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     fun instrumentation(action: Action<BugseeInstrumentationExtension>) {
         action.execute(instrumentation)
     }
-
-    /**
-     * Global instrumentation on/off switch.
-     *
-     * Delegates to [BugseeInstrumentationExtension.enabled] for backward compatibility.
-     * Prefer using the `instrumentation { }` block for new code.
-     *
-     * Default: `true`
-     */
-    val instrumentationEnabled: Property<Boolean> get() = instrumentation.enabled
 
     /** Default app token, used when no variant-specific token is provided. */
     internal var defaultAppToken: String? = null

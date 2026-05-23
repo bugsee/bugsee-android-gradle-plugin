@@ -15,23 +15,23 @@ import javax.inject.Inject
  * serve as a baseline for the in-build size-check.
  *
  * Size-analysis (full artefact upload + server-side tree analysis)
- * is a separate, opt-in sub-feature configured under
- * `bugsee.sizeAnalysis` — when enabled it piggybacks on this task and
- * additionally ships the artefact bytes.
+ * is an opt-in sub-feature configured under `buildInfo.sizeAnalysis`
+ * — when enabled it piggybacks on this task and additionally ships
+ * the artefact bytes.
  *
  * ```kotlin
  * bugsee {
  *     buildInfo {
- *         // enabled.set(true)   // default — disable explicitly to opt out
+ *         // enabled.set(true)        // default — disable explicitly to opt out
  *         // allBuildTypes.set(false) // default — only release variants register
+ *         sizeAnalysis {
+ *             enabled.set(true)       // optional artefact upload
+ *         }
  *         sizeCheck {
  *             enabled.set(true)
  *             warningPercent.set(5.0)
  *             failPercent.set(10.0)
  *         }
- *     }
- *     sizeAnalysis {
- *         enabled.set(true)  // optional add-on
  *     }
  * }
  * ```
@@ -73,6 +73,39 @@ abstract class BugseeBuildInfoExtension @Inject constructor(objects: ObjectFacto
      */
     val allBuildTypes: Property<Boolean> =
         objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
+     * Size-analysis (full artefact upload + server-side tree
+     * analysis) configuration. See [BugseeSizeAnalysisExtension] for
+     * the option surface.
+     *
+     * Lives under `buildInfo` because the artefact upload piggybacks
+     * on the build-info task: enabling `sizeAnalysis.enabled = true`
+     * tells that task to additionally request a presigned PUT URL
+     * and ship the artefact bytes. With `buildInfo.enabled = false`
+     * size-analysis has nothing to attach to and is skipped (the
+     * plugin logs a warning if both are configured incompatibly).
+     */
+    val sizeAnalysis: BugseeSizeAnalysisExtension =
+        objects.newInstance(BugseeSizeAnalysisExtension::class.java)
+
+    /**
+     * Configure size analysis via a DSL block.
+     *
+     * ```kotlin
+     * bugsee {
+     *     buildInfo {
+     *         sizeAnalysis {
+     *             enabled.set(true)
+     *             buildConfiguration.set("release")
+     *         }
+     *     }
+     * }
+     * ```
+     */
+    fun sizeAnalysis(action: Action<BugseeSizeAnalysisExtension>) {
+        action.execute(sizeAnalysis)
+    }
 
     /**
      * In-build size-check configuration. See [BugseeSizeCheckExtension]

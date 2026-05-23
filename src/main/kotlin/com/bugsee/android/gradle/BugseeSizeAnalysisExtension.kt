@@ -7,16 +7,19 @@ import javax.inject.Inject
 /**
  * DSL block for configuring the optional size-analysis upload of the
  * build artefact (AAB / APK). Size analysis is a sub-feature of
- * `buildInfo` — it requires `bugsee.buildInfo.enabled = true` and
- * piggybacks on the same per-variant upload task. When enabled, the
- * task additionally requests a presigned PUT URL from the appserver
- * and ships the artefact zip for server-side tree analysis.
+ * `buildInfo` — it lives under `buildInfo.sizeAnalysis`, requires
+ * `bugsee.buildInfo.enabled = true`, and piggybacks on the same
+ * per-variant upload task. When enabled, the task additionally
+ * requests a presigned PUT URL from the appserver and ships the
+ * artefact zip for server-side tree analysis.
  *
  * ```kotlin
  * bugsee {
- *     sizeAnalysis {
- *         enabled.set(true)
- *         buildConfiguration.set("release")
+ *     buildInfo {
+ *         sizeAnalysis {
+ *             enabled.set(true)
+ *             buildConfiguration.set("release")
+ *         }
  *     }
  * }
  * ```
