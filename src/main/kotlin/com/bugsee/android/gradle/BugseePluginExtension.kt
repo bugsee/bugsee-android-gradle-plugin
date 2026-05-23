@@ -13,8 +13,10 @@ import javax.inject.Inject
  *     appToken("your-app-token")
  *     endpoint.set("https://api.bugsee.com")
  *     debug.set(false)
- *     ndk.set(false)
  *     feedback.set(false)
+ *     ndk {
+ *         enabled.set(true)
+ *     }
  *     buildInfo {
  *         sizeAnalysis {
  *             enabled.set(true)
@@ -47,38 +49,29 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val debug: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
-     * Enable NDK native debug symbol upload.
+     * NDK integration configuration block — gates the runtime
+     * native-crash handler dependency and the per-variant debug-symbol
+     * upload task. See [BugseeNdkExtension] for the option surface.
      *
-     * When `true`, the plugin locates native debug symbols produced by the build
-     * and uploads them to the Bugsee backend for native crash symbolication.
-     *
-     * Default: `false`
+     * Disabled by default; opt in for apps that ship native code.
      */
-    val ndk: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+    val ndk: BugseeNdkExtension = objects.newInstance(BugseeNdkExtension::class.java)
 
     /**
-     * Force native debug-symbol upload on every build, bypassing the local
-     * SHA-1 cache.
+     * Configure NDK integration via a DSL block.
      *
-     * The NDK pipeline's per-variant `uploadBugsee{Variant}Native` task zips
-     * the unstripped `.so` files AGP extracts to
-     * `intermediates/native_debug_metadata/{variant}/out/`, hashes the zip,
-     * and PUTs it to the appserver. The local cache at
-     * `.gradle/bugsee/native-symbol-cache.json` records the SHA-1 of the last
-     * successful upload (keyed by `sha1Hex(appToken):variantName`); a
-     * subsequent build whose zip hashes the same value skips the PUT (the
-     * server already has these exact symbols).
-     *
-     * Set this to `true` to bypass that check and always re-upload — useful
-     * for fresh CI runners (no local cache to short-circuit against), or
-     * recovery scenarios where the server-side store has been wiped and
-     * the local cache no longer reflects reality.
-     *
-     * Only has effect when [ndk] is also `true`.
-     *
-     * Default: `false`
+     * ```kotlin
+     * bugsee {
+     *     ndk {
+     *         enabled.set(true)
+     *         forceDebugSymbolsUpload.set(false)
+     *     }
+     * }
+     * ```
      */
-    val ndkForceDebugSymbolsUpload: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+    fun ndk(action: Action<BugseeNdkExtension>) {
+        action.execute(ndk)
+    }
 
     /**
      * Include the Bugsee in-app feedback module.
@@ -194,17 +187,6 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      */
     fun appToken(provider: AppTokenProvider) {
         appTokenProvider = provider
-    }
-
-    /**
-     * Convenience method to enable or disable NDK symbol upload.
-     *
-     * Equivalent to `ndk.set(enabled)`.
-     *
-     * @param enabled `true` to enable NDK symbol upload.
-     */
-    fun ndk(enabled: Boolean) {
-        ndk.set(enabled)
     }
 
     /**

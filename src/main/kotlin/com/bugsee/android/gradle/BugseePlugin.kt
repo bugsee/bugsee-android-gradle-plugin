@@ -117,10 +117,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     }
 
                     // Optional SDK modules driven by user opt-in via the
-                    // `bugsee { ndk(true); feedback(true) }` DSL. Same
-                    // already-declared check as the auto-instrumented
-                    // modules below.
-                    if (extension.ndk.get()) {
+                    // `bugsee { ndk { enabled.set(true) }; feedback(true) }`
+                    // DSL. Same already-declared check as the
+                    // auto-instrumented modules below.
+                    if (extension.ndk.enabled.get()) {
                         autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug)
                     }
                     if (extension.feedback.get()) {
@@ -178,7 +178,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             if (variant is ApplicationVariant) {
                 registerMappingUploadTask(project, variant, extension, capitalizedVariant)
 
-                if (extension.ndk.get()) {
+                if (extension.ndk.enabled.get()) {
                     registerNativeUploadTask(project, variant, extension, capitalizedVariant)
                 }
 
@@ -282,7 +282,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.debug.set(extension.debug)
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
-            task.forceUpload.set(extension.ndkForceDebugSymbolsUpload)
+            task.forceUpload.set(extension.ndk.forceDebugSymbolsUpload)
             task.group = "bugsee"
             task.description = "Uploads NDK native debug symbols for $capitalizedVariant"
 
