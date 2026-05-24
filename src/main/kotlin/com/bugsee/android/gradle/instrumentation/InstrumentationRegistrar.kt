@@ -14,12 +14,18 @@ import org.gradle.api.logging.Logger
 
 /**
  * Iterates all known instrumentations and applies those whose dependencies are present.
+ *
+ * [extras] lets the caller append instrumentations that need construction-time
+ * context the registrar cannot supply on its own (e.g. a [TaskProvider] for
+ * a per-variant manifest task). They participate in the same gate/dependency
+ * filtering as the built-in entries.
  */
 internal class InstrumentationRegistrar(
     private val project: Project,
     private val logger: Logger,
     private val debug: Boolean,
-    private val configResolver: InstrumentationConfigResolver
+    private val configResolver: InstrumentationConfigResolver,
+    extras: List<Instrumentation> = emptyList(),
 ) {
     private val instrumentations: List<Instrumentation> = listOf(
         OkHttpInstrumentation(),
@@ -30,7 +36,7 @@ internal class InstrumentationRegistrar(
         OperationDispatchInstrumentation(),
         ComposeInputInstrumentation(),
         AppStartupTracingInstrumentation(configResolver)
-    )
+    ) + extras
 
     fun applyAll(variant: Variant) {
         for (instrumentation in instrumentations) {

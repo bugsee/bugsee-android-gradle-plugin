@@ -6,6 +6,7 @@ import com.android.build.api.variant.ApplicationVariant
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
+import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
 import com.bugsee.android.gradle.upload.AppTokenResolver
 import com.bugsee.android.gradle.upload.BuildTimingService
@@ -171,8 +172,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
             if (isDebug) project.logger.warn("Bugsee: Configuring variant $variantName")
 
-            // --- Manifest UUID injection ---
-            registerManifestTask(project, variant, extension, capitalizedVariant)
+            // --- Manifest UUID injection + extension provider stripping ---
+            val manifestTaskProvider = registerManifestTask(project, variant, extension, capitalizedVariant)
 
             // --- Application variant specific tasks (upload mapping, NDK symbols, bundle) ---
             if (variant is ApplicationVariant) {
@@ -201,7 +202,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     sourceManifest.takeIf { it.exists() }
                 )
                 if (configResolver.isGloballyEnabled()) {
-                    val registrar = InstrumentationRegistrar(project, project.logger, isDebug, configResolver)
+                    val extras = listOf(
+                        ExtensionsInitInstrumentation(extension, manifestTaskProvider),
+                    )
+                    val registrar = InstrumentationRegistrar(
+                        project, project.logger, isDebug, configResolver, extras
+                    )
                     registrar.applyAll(variant)
                 } else {
                     if (isDebug) project.logger.warn("Bugsee: Bytecode instrumentation is globally disabled")
@@ -215,14 +221,20 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         variant: com.android.build.api.variant.Variant,
         extension: BugseePluginExtension,
         capitalizedVariant: String
-    ) {
+    ): org.gradle.api.tasks.TaskProvider<BugseeManifestTask> {
         val taskProvider = project.tasks.register(
             "createBugsee${capitalizedVariant}ManifestConfig",
             BugseeManifestTask::class.java
         ) { task ->
             task.debug.set(extension.debug)
+            task.optimizeExtensionsLoading.set(extension.optimizeExtensionsLoading)
+            task.detectedExtensions.set(
+                project.layout.buildDirectory.file(
+                    "intermediates/bugsee/${variant.name}/detected-extensions.txt"
+                )
+            )
             task.group = "bugsee"
-            task.description = "Injects Bugsee BUILD_UUID into the merged manifest for $capitalizedVariant"
+            task.description = "Injects Bugsee BUILD_UUID and consolidates extension providers for $capitalizedVariant"
         }
 
         // Wire into the manifest artifact transformation pipeline
@@ -232,6 +244,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 BugseeManifestTask::updatedManifest
             )
             .toTransform(SingleArtifact.MERGED_MANIFEST)
+
+        return taskProvider
     }
 
     private fun registerMappingUploadTask(

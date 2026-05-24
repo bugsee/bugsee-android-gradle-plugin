@@ -138,6 +138,34 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
         action.execute(instrumentation)
     }
 
+    /**
+     * Consolidate every Bugsee extension `ContentProvider` into the SDK's
+     * single `BugseeInitProvider` to shave per-provider cold-start
+     * overhead.
+     *
+     * When `true` (default), the plugin:
+     * 1. Scans the merged `AndroidManifest.xml` for `<provider>` entries
+     *    whose `android:name` matches `Bugsee*InitProvider` (excluding
+     *    the core `BugseeInitProvider`).
+     * 2. Removes those entries from the merged manifest.
+     * 3. Rewrites `BugseeInitProvider.initializeExtensions()` to call
+     *    each matching extension's `register<Name>Extension()` static
+     *    method, so the registrations still happen during the normal SDK
+     *    startup path — just in one process instead of one per
+     *    `ContentProvider`.
+     *
+     * When `false`, every extension keeps its own `ContentProvider` and
+     * the SDK's `initializeExtensions()` remains a no-op.
+     *
+     * ```kotlin
+     * bugsee {
+     *     optimizeExtensionsLoading.set(false)
+     * }
+     * ```
+     */
+    val optimizeExtensionsLoading: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(true)
+
     /** Default app token, used when no variant-specific token is provided. */
     internal var defaultAppToken: String? = null
 
