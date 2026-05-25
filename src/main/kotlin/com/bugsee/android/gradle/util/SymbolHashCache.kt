@@ -3,6 +3,9 @@ package com.bugsee.android.gradle.util
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * LRU cache for native symbol SHA-1 hashes.
@@ -74,11 +77,52 @@ internal object SymbolHashCache {
         val json = JSONObject().apply {
             put("entries", array)
         }
-        // Write to a temp file then atomically rename to prevent corruption
-        // if two variant tasks write the cache concurrently.
-        val tmp = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
-        tmp.writeText(json.toString(2), Charsets.UTF_8)
-        tmp.renameTo(cacheFile)
+        // Atomic-move via NIO instead of `File.renameTo`. The
+        // previous `File.renameTo` was documented as "platform-
+        // dependent" and SILENTLY FAILED on Windows when the
+        // destination already existed — two concurrent variant
+        // tasks writing the cache could corrupt it or lose
+        // writes. Files.move with REPLACE_EXISTING + ATOMIC_MOVE
+        // gives the strong guarantee we want: either the
+        // destination atomically updates to the new bytes, or
+        // the move throws (and we catch + propagate cleanly).
+        //
+        // `Files.createTempFile` produces a name with extra
+        // randomness so concurrent writers don't trample each
+        // other's tmp file (the prior fixed `.tmp` suffix could
+        // overlap on parallel variant builds).
+        val parent = cacheFile.parentFile?.toPath()
+            ?: error("cache file '${cacheFile.path}' has no parent directory; refusing to write")
+        val tmp = Files.createTempFile(parent, cacheFile.nameWithoutExtension, ".tmp.json")
+        try {
+            Files.writeString(tmp, json.toString(2), Charsets.UTF_8)
+            try {
+                Files.move(
+                    tmp, cacheFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Some filesystems (e.g. cross-device renames on
+                // certain Linux configurations, network mounts)
+                // refuse ATOMIC_MOVE. Fall back to a
+                // REPLACE_EXISTING move, which is non-atomic but
+                // still strictly better than the prior
+                // `File.renameTo` behavior — and concurrent-writer
+                // corruption is bounded to the FS rather than
+                // silently producing duplicate-cache state.
+                Files.move(
+                    tmp, cacheFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+        } finally {
+            // If the move succeeded the tmp file was already moved.
+            // If anything threw, clean up the orphan so subsequent
+            // builds don't accumulate `.tmp.json` files in the
+            // gradle directory.
+            Files.deleteIfExists(tmp)
+        }
     }
 
     private data class CacheEntry(
