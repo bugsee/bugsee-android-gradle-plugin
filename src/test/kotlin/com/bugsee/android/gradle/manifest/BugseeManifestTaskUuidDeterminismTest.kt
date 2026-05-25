@@ -9,6 +9,7 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * Pin the BUILD_UUID determinism contract on [BugseeManifestTask].
@@ -59,14 +60,30 @@ class BugseeManifestTaskUuidDeterminismTest {
         manifestContent: String,
         variant: String,
         pluginVer: String,
-    ): String {
-        val tag = "${variant}-${pluginVer}-${++runId}"
+    ): String = runOnceCapturing(manifestContent, variant, pluginVer).first
+
+    /**
+     * Variant of [runOnce] that also returns the raw output-manifest
+     * bytes — for tests that pin both the UUID and the byte-identity
+     * of the rewritten manifest (the latter is what makes Gradle's
+     * up-to-date check propagate correctly to downstream tasks).
+     */
+    private fun runOnceCapturing(
+        manifestContent: String,
+        variant: String,
+        pluginVer: String,
+    ): Pair<String, ByteArray> {
+        // Use a tag based on the index alone (not variant/version) so
+        // unicode variant/version values cannot produce invalid file
+        // names on stricter filesystems.
+        val tag = "${++runId}"
         val project = ProjectBuilder.builder().withProjectDir(tempFolder.newFolder()).build()
         val manifestFile = tempFolder.newFile("AndroidManifest-$tag.xml")
         manifestFile.writeText(manifestContent)
         val outputFile = tempFolder.newFile("AndroidManifest-$tag.out.xml")
         val detectedFile = tempFolder.newFile("detected-$tag.txt")
 
+        val fallbackFile = tempFolder.newFile("fallback-$tag.txt")
         val task = project.tasks.register("manifest-$tag", BugseeManifestTask::class.java) { t ->
             t.debug.set(false)
             t.optimizeExtensionsLoading.set(false)
@@ -75,10 +92,11 @@ class BugseeManifestTaskUuidDeterminismTest {
             t.mergedManifest.set(manifestFile)
             t.updatedManifest.set(outputFile)
             t.detectedExtensions.set(detectedFile)
+            t.fallbackBuildId.set(fallbackFile)
         }.get()
         task.execute()
 
-        return extractBuildUuid(outputFile)
+        return extractBuildUuid(outputFile) to outputFile.readBytes()
     }
 
     /**
@@ -154,11 +172,84 @@ class BugseeManifestTaskUuidDeterminismTest {
     }
 
     @Test
-    fun `derived UUID is a valid RFC 4122 UUID`() {
+    fun `derived UUID is a valid RFC 4122 v3 (MD5-named) UUID`() {
         // Defensive: the value is consumed by viewer / appserver code
         // that parses it as a UUID. Make sure our derivation produces
-        // a string that round-trips through `UUID.fromString`.
+        // a string that round-trips through `UUID.fromString` AND that
+        // it has the version=3 bits set — i.e. it was actually
+        // produced by `UUID.nameUUIDFromBytes` rather than (say) a
+        // hardcoded literal or a `UUID.randomUUID()` slipped back in.
+        //
+        // Pinning the version bits closes a loophole the previous
+        // version of this test left open: a mutation that replaced
+        // the entire `@TaskAction` body with
+        // `outputFile.writeText("<meta-data ... value='00000000-0000-...'/>")`
+        // (or `UUID.randomUUID().toString()`) would have passed the
+        // old "doesn't throw" check, even though it broke the
+        // determinism contract the rest of this test class pins.
         val u = runOnce(sampleManifest, variant = "debug", pluginVer = "7.0.0")
-        UUID.fromString(u)  // throws IllegalArgumentException on malformed
+        val parsed = UUID.fromString(u)  // throws on malformed
+        assertEquals(
+            3,
+            parsed.version(),
+            "BUILD_UUID must be a name-derived (v3) UUID — got version ${parsed.version()} ($u)",
+        )
+    }
+
+    @Test
+    fun `non-ASCII variant and plugin-version names do not overflow the UUID buffer`() {
+        // The UUID-input buffer is sized from UTF-8 byte counts (NOT
+        // String.length). For any non-ASCII character — BMP non-ASCII
+        // (`é`, CJK) or surrogate-pair characters — the UTF-8 encoding
+        // is wider than the char count. A previous revision of this
+        // task sized the buffer from `.length` and would throw
+        // ArrayIndexOutOfBoundsException at execution for any
+        // non-ASCII variant or plugin-version. AGP variant names are
+        // Java identifiers in practice (so this is defence-in-depth),
+        // but we still want a regression guard.
+        //
+        // Run two representative samples:
+        //  - BMP non-ASCII chars (CJK in variant, accented in version)
+        //  - Surrogate pair (emoji)
+        // and just assert that the task doesn't throw and that the
+        // result round-trips as a valid UUID.
+        val cjk = runOnce(sampleManifest, variant = "debug中文", pluginVer = "7.0.0-béta")
+        UUID.fromString(cjk)
+
+        val emoji = runOnce(sampleManifest, variant = "debug🚀", pluginVer = "7.0.0")
+        UUID.fromString(emoji)
+
+        // The two should still be distinct from each other AND from
+        // the ASCII-only baseline — i.e. the variant/version
+        // contributions actually made it into the hash.
+        val ascii = runOnce(sampleManifest, variant = "debug", pluginVer = "7.0.0")
+        assertNotEquals(ascii, cjk, "CJK variant must produce a distinct UUID from ASCII baseline")
+        assertNotEquals(ascii, emoji, "emoji variant must produce a distinct UUID from ASCII baseline")
+        assertNotEquals(cjk, emoji, "CJK and emoji variants must produce distinct UUIDs")
+    }
+
+    @Test
+    fun `same inputs produce byte-identical output manifests`() {
+        // Stronger version of `same inputs produce the same UUID`.
+        // The UUID matching is necessary but not sufficient for the
+        // incremental-build behavior the deterministic-UUID fix
+        // restored. Downstream tasks (bytecode instrumentation,
+        // upload) consume `updatedManifest` as an `@InputFile`. For
+        // those tasks to be marked UP-TO-DATE on a second run, the
+        // entire updated manifest file must hash to the same value —
+        // not just the BUILD_UUID `<meta-data>` value inside it. A
+        // hypothetical future regression that introduced HashMap-
+        // iteration-order in XML attribute serialization (or any
+        // other non-determinism in `ManifestModifier.writeDocument`)
+        // would leave the BUILD_UUID stable but the surrounding bytes
+        // unstable; this test would catch that.
+        val (uuid1, bytes1) = runOnceCapturing(sampleManifest, variant = "debug", pluginVer = "7.0.0")
+        val (uuid2, bytes2) = runOnceCapturing(sampleManifest, variant = "debug", pluginVer = "7.0.0")
+        assertEquals(uuid1, uuid2)
+        assertTrue(
+            bytes1.contentEquals(bytes2),
+            "same-input runs must produce byte-identical output manifests; " +
+                "got ${bytes1.size} vs ${bytes2.size} bytes",
+        )
     }
 }

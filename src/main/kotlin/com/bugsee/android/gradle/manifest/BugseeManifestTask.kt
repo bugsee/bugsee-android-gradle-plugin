@@ -8,7 +8,6 @@ import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import java.io.File
-import java.util.UUID
 
 /**
  * Task that injects a unique BUILD_UUID into the merged AndroidManifest.xml
@@ -72,6 +71,26 @@ abstract class BugseeManifestTask : DefaultTask() {
     @get:OutputFile
     abstract val detectedExtensions: RegularFileProperty
 
+    /**
+     * Output file containing the deterministic fallback BUILD_UUID
+     * this task derived from (mergedManifestBytes + variant + plugin).
+     *
+     * Consumed by [BugseeBuildIdResolveTask]: when R8 is off (no
+     * mapping file available), that task copies this value verbatim
+     * into the `assets/bugsee_build_id.properties` channel. The
+     * side-file plumbing (rather than re-deriving the hash at T2 from
+     * the merged manifest input) is necessary because AGP's artifact
+     * transform replaces the `MERGED_MANIFEST` reference after T1
+     * runs — the bytes T2 would see are the post-mutation manifest
+     * (carrying T1's BUILD_UUID meta-data tag), NOT the pre-mutation
+     * input T1 actually hashed. Without this side file the asset and
+     * manifest channels would carry DIFFERENT UUIDs for the same
+     * non-R8 build, which the SDK's asset-first / manifest-fallback
+     * reader would observe as a regression.
+     */
+    @get:OutputFile
+    abstract val fallbackBuildId: RegularFileProperty
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -85,46 +104,40 @@ abstract class BugseeManifestTask : DefaultTask() {
             return
         }
 
-        // Derive the BUILD_UUID DETERMINISTICALLY from the inputs
-        // (merged manifest bytes + variant name + plugin version)
-        // BEFORE copying / mutating the output. Two reasons:
+        // This is the *fallback* BUILD_UUID — derived deterministically
+        // from (merged manifest bytes + variant + plugin version).
+        // The post-R8 `BugseeBuildIdResolveTask` may later compute a
+        // BETTER UUID (hash of `mapping.txt` content, which reflects
+        // actual bytecode identity) and place it in the
+        // `assets/bugsee_build_id.properties` channel the SDK reads
+        // first. This fallback UUID lands in the manifest meta-data
+        // channel and serves two roles:
+        //   1. Non-R8 builds (debug, or release with
+        //      isMinifyEnabled=false). There's no mapping file to
+        //      hash, so the manifest-derived UUID is the only signal —
+        //      and that's fine because there's also no mapping to
+        //      mis-match against.
+        //   2. Backward compatibility. SDK versions predating the
+        //      asset channel still read the manifest meta-data and
+        //      use this value verbatim.
         //
-        // 1. Cross-invocation stability. `assembleDebug` and
-        //    `bundleDebug` from the same workspace land in this task
-        //    via the same AGP MERGED_MANIFEST transform; within a
-        //    single invocation the task runs once and both downstreams
-        //    consume the same output. But across SEPARATE invocations
-        //    (clean + assemble, later clean + bundle, common in
-        //    Fastlane two-lane CI flows), the task re-runs. Under the
-        //    previous `UUID.randomUUID()` the APK got UUID A, the AAB
-        //    later got UUID B, and mapping/symbol uploads keyed off
-        //    one UUID could not be looked up by crashes keyed off the
-        //    other.
-        //
-        // 2. Up-to-date check correctness. With a deterministic UUID,
-        //    re-running the task with unchanged inputs produces a
-        //    byte-identical updated manifest — so Gradle's incremental
-        //    build correctly marks both this task and downstream
-        //    bytecode-instrumentation steps UP-TO-DATE.
-        //
-        // `UUID.nameUUIDFromBytes` produces a v3 (MD5-based, name-
-        // derived) UUID per RFC 4122; the version bits don't matter
-        // for our use, only that the value is UUID-shaped, stable
-        // across runs of the same inputs, and distinct across inputs.
+        // The exact derivation is centralised in
+        // [BugseeBuildIdDeriver] so the post-R8 task computes the
+        // same fallback byte-for-byte when it needs to.
         val manifestBytes = manifestFile.readBytes()
-        val uuidInput = ByteArray(
-            manifestBytes.size + variantName.get().length + pluginVersion.get().length + 2
-        )
-        System.arraycopy(manifestBytes, 0, uuidInput, 0, manifestBytes.size)
-        var offset = manifestBytes.size
-        uuidInput[offset++] = '|'.code.toByte()
-        val variantBytes = variantName.get().toByteArray(Charsets.UTF_8)
-        System.arraycopy(variantBytes, 0, uuidInput, offset, variantBytes.size)
-        offset += variantBytes.size
-        uuidInput[offset++] = '|'.code.toByte()
-        val pluginVersionBytes = pluginVersion.get().toByteArray(Charsets.UTF_8)
-        System.arraycopy(pluginVersionBytes, 0, uuidInput, offset, pluginVersionBytes.size)
-        val buildUUID = UUID.nameUUIDFromBytes(uuidInput).toString()
+        val buildUUID = BugseeBuildIdDeriver.deriveFromFallbackInputs(
+            mergedManifestBytes = manifestBytes,
+            variantName = variantName.get(),
+            pluginVersion = pluginVersion.get(),
+        ).toString()
+
+        // Stash the fallback UUID in a side file so the post-R8 resolve
+        // task can carry it forward verbatim when no mapping file
+        // exists (R8-off path). See [fallbackBuildId]'s KDoc for why
+        // T2 cannot recompute the same value from its inputs.
+        val fallbackFile = fallbackBuildId.get().asFile
+        fallbackFile.parentFile?.mkdirs()
+        fallbackFile.writeText(buildUUID)
 
         // Copy input to output location if different
         if (manifestFile.absolutePath != outputFile.absolutePath) {
@@ -152,7 +165,47 @@ abstract class BugseeManifestTask : DefaultTask() {
             allDetected.addAll(detected)
         }
 
-        // Handle split APK scenarios: check for nested directories with AndroidManifest.xml
+        // Handle split APK scenarios: check for nested directories
+        // with AndroidManifest.xml.
+        //
+        // **CC-correctness posture.** These nested manifests are AGP-owned
+        // intermediates produced by `processDebugMainManifestForBundle` /
+        // similar AGP manifest tasks. We mutate them in-place but do
+        // NOT declare them as `@OutputFile` of this task — by Gradle's
+        // strict-mode rules that's a CC-correctness gray area. We
+        // accept it intentionally:
+        //
+        //  1. **Declaring static outputs is impossible.** The exact set
+        //     of nested manifest files only exists once AGP has run
+        //     the manifest-merge phase for splits; it's variant +
+        //     splits-DSL dependent and cannot be enumerated at
+        //     registration time.
+        //  2. **AGP tracks them via its own dependency graph.**
+        //     Downstream packaging tasks (`packageDebug*`, `bundleDebug`)
+        //     declare these files as their own inputs. Our mutation
+        //     therefore propagates correctly: AGP's UP-TO-DATE check
+        //     sees the modified bytes and invalidates the packaging
+        //     step accordingly.
+        //  3. **The Bugsee task itself remains correctly UP-TO-DATE-
+        //     gated** on the merged-manifest INPUT (`mergedManifest`)
+        //     and the primary OUTPUT (`updatedManifest`). The merged
+        //     manifest is a stable artifact-transform input, so any
+        //     change to it re-runs this task — which then re-applies
+        //     the nested-manifest mutation. No risk of stale
+        //     side-effect output.
+        //  4. **Coverage:** `BugseeManifestTaskSplitApkTest` (unit-level)
+        //     exercises every code path in this loop with a fixture
+        //     that materialises sibling directories matching AGP's
+        //     real-world split-APK layout.
+        //
+        // If Gradle ever tightens CC checks to forbid undeclared-
+        // file mutation (currently it doesn't catch this pattern),
+        // the right replacement is to declare the parent directory
+        // as an `@OutputDirectory` — that gives Gradle ownership of
+        // the entire intermediate folder, which we'd need to
+        // negotiate with AGP. Until then, the explicit comment above
+        // is the load-bearing piece of documentation for the
+        // intentional posture.
         val parentDir = outputFile.parentFile
         if (parentDir != null && parentDir.isDirectory) {
             parentDir.listFiles()?.filter { dir ->
