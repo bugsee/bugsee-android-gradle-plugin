@@ -186,6 +186,142 @@ class BuildTimingServiceTest {
 
     // ── helpers ────────────────────────────────────────────────────
 
+    // ── Bounded-records (MAX_RECORDS) cap ─────────────────────────
+
+    @Test fun `record stops accumulating past the MAX_RECORDS cap`() {
+        // Pin the upper bound the new cap enforces. Pre-fix the
+        // queue was unbounded; pathological builds could accumulate
+        // megabytes of TaskTiming entries throughout the build
+        // before they were GC'd at build end.
+        val svc = TestService()
+        // Push exactly MAX_RECORDS + 100 records. The first
+        // MAX_RECORDS must land; the trailing 100 must be silently
+        // dropped.
+        val extras = 100
+        for (i in 0 until MAX_RECORDS + extras) {
+            svc.record(":t:$i", 0L, 1L)
+        }
+        // `snapshot(topN = ...)` rolls up everything in the queue.
+        // Using a topN >= MAX_RECORDS makes the size of topTasks
+        // equal the queue size — that's our memoryless probe.
+        val rollup = svc.snapshot(topN = MAX_RECORDS + extras)
+        assertEquals(
+            "queue must have stopped accumulating exactly at MAX_RECORDS records",
+            MAX_RECORDS, rollup.topTasks.size,
+        )
+    }
+
+    @Test fun `record at the cap drops new records (not old ones)`() {
+        // The drop-newest policy is the load-bearing choice — it
+        // preserves the earliestStart for the wall-clock totalMs
+        // computation. Pin the policy: the FIRST record's path
+        // must remain visible in the snapshot after the cap is
+        // exceeded.
+        val svc = TestService()
+        svc.record(":t:first-and-important", 0L, 100L)
+        for (i in 0 until MAX_RECORDS + 50) {
+            svc.record(":t:filler-$i", 0L, 1L)
+        }
+        val rollup = svc.snapshot(topN = MAX_RECORDS + 50)
+        val firstStillPresent = rollup.topTasks.any { it.path == ":t:first-and-important" }
+        assertTrue(
+            "drop-newest policy must preserve early records; the first record was evicted",
+            firstStillPresent,
+        )
+    }
+
+    @Test fun `record below the cap is unconstrained (regression guard)`() {
+        // Pin that the cap doesn't accidentally fire for normal-size
+        // builds. A 1000-record probe is still a small Android build
+        // and must record every entry.
+        val svc = TestService()
+        for (i in 0 until 1000) {
+            svc.record(":t:$i", 0L, 1L)
+        }
+        val rollup = svc.snapshot(topN = 1000)
+        assertEquals(
+            "queue must accumulate every record below the cap",
+            1000, rollup.topTasks.size,
+        )
+    }
+
+    // ── Zero-duration filter in top_tasks ─────────────────────────
+
+    @Test fun `top_tasks excludes zero-duration tasks (UP-TO-DATE noise filter)`() {
+        // On an incremental rebuild most tasks finish in <1ms and
+        // would otherwise fill the top-10 with no-op noise, pushing
+        // real bottleneck signal off the report. Pin the filter:
+        // mix of zero and non-zero durations → top_tasks contains
+        // ONLY the non-zero ones.
+        val svc = TestService()
+        svc.record(":app:assembleDebug",       0L, 5_000L)  // 5s — real work
+        svc.record(":app:compileDebugKotlin",  0L, 3_000L)  // 3s — real work
+        svc.record(":app:up-to-date-1",        0L, 0L)      // UP-TO-DATE
+        svc.record(":app:up-to-date-2",        0L, 0L)      // UP-TO-DATE
+        svc.record(":app:no-source",           500L, 500L)  // 0ms (start==end)
+        svc.record(":app:short-real",          0L, 1L)      // 1ms — real (kept)
+
+        val rollup = svc.snapshot()
+        val paths = rollup.topTasks.map { it.path }.toSet()
+        assertTrue(
+            "real-work tasks must appear; got $paths",
+            ":app:assembleDebug" in paths &&
+                ":app:compileDebugKotlin" in paths &&
+                ":app:short-real" in paths,
+        )
+        assertTrue(
+            "zero-duration tasks must NOT appear in top_tasks; got $paths",
+            ":app:up-to-date-1" !in paths &&
+                ":app:up-to-date-2" !in paths &&
+                ":app:no-source" !in paths,
+        )
+        assertEquals(
+            "exactly 3 non-zero-duration tasks expected in top_tasks",
+            3, rollup.topTasks.size,
+        )
+    }
+
+    @Test fun `top_tasks is empty when every task is zero-duration (full UP-TO-DATE build)`() {
+        // The all-UP-TO-DATE case is the strongest expression of
+        // the filter: a fully-incremental rebuild has zero real
+        // work, and `top_tasks` should reflect that as an empty
+        // list — NOT a list of 10 zero-ms entries which the prior
+        // code would have produced.
+        val svc = TestService()
+        repeat(20) { i -> svc.record(":t:$i", 1000L, 1000L) }
+        val rollup = svc.snapshot()
+        assertTrue(
+            "all-zero-duration build must produce empty top_tasks; got ${rollup.topTasks}",
+            rollup.topTasks.isEmpty(),
+        )
+    }
+
+    @Test fun `category sums still include zero-duration tasks (the filter is rollup-only)`() {
+        // Sanity: the filter is only on top_tasks (the listing).
+        // Per-category sums and totalMs still cover the full
+        // observed graph — a category sum is naturally unaffected
+        // by adding 0 to it, but we pin this so a refactor that
+        // moved the filter earlier in the pipeline doesn't change
+        // the category-sum semantics.
+        val svc = TestService()
+        svc.record(":app:compileDebugKotlin", 0L, 5_000L)  // 5s managed code
+        svc.record(":app:bundleRelease",      6_000L, 6_000L)  // 0ms packaging (UP-TO-DATE)
+
+        val rollup = svc.snapshot()
+        assertEquals(
+            "managed code sum must include the real-work task",
+            5_000L, rollup.managedCodeMs,
+        )
+        // packaging is 0 either way (the zero-duration task
+        // contributes 0); pin the wall-clock total is correctly
+        // computed from earliestStart/latestEnd regardless of the
+        // top_tasks filter.
+        assertEquals(
+            "totalMs is wall-clock span regardless of top_tasks filter",
+            6_000L, rollup.totalMs,
+        )
+    }
+
     /**
      * A minimal [FinishEvent] that is NOT a TaskFinishEvent. Used to
      * exercise the early-return in `onFinish`.

@@ -8,6 +8,8 @@ import org.gradle.tooling.events.task.TaskFinishEvent
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * One executed task's timing record. Immutable; safe to share across
@@ -120,7 +122,14 @@ internal fun buildTimings(
     }
 
     val total = (latestEnd - earliestStart).coerceAtLeast(0L)
+    // Filter zero-duration tasks (UP-TO-DATE, NO-SOURCE, SKIPPED)
+    // out of the top-N rollup. On an incremental rebuild, most tasks
+    // finish in <1ms and would otherwise fill the top-10 with no-op
+    // noise — pushing real bottleneck signal off the report. The
+    // per-category sums still include them (their contribution is
+    // 0ms anyway, so the sums are unchanged).
     val top = timings.asSequence()
+        .filter { it.durationMs > 0L }
         .sortedByDescending { it.durationMs }
         .take(topN)
         .map { TopTaskEntry(it.path, it.durationMs) }
@@ -131,6 +140,16 @@ internal fun buildTimings(
 
 
 internal const val DEFAULT_TOP_N = 10
+
+/**
+ * Maximum task-timing records the [BuildTimingService] retains for a
+ * single build. Defense-in-depth against pathological builds that
+ * produce far more task completions than any realistic CI scenario —
+ * a 200-module multi-flavor Android build tops out around 20K
+ * completions, so 50_000 leaves a 2.5× safety margin while bounding
+ * worst-case in-build memory to ~4MB (50K × ~80 bytes per record).
+ */
+internal const val MAX_RECORDS = 50_000
 
 
 /**
@@ -157,6 +176,21 @@ abstract class BuildTimingService :
 
     private val records = ConcurrentLinkedQueue<TaskTiming>()
 
+    /**
+     * Counter shadow for the queue — `ConcurrentLinkedQueue.size()` is
+     * O(N), so we use a separate atomic count to cheaply gate the
+     * MAX_RECORDS check on the recording hot path.
+     */
+    private val recordCount = AtomicInteger(0)
+
+    /**
+     * One-shot warning flag — the cap-exceeded log fires at most once
+     * per BuildService instance lifetime so a pathological build
+     * doesn't spam the Gradle output with thousands of duplicate
+     * lines.
+     */
+    private val capWarningEmitted = AtomicBoolean(false)
+
     override fun onFinish(event: FinishEvent) {
         if (event !is TaskFinishEvent) return
         val result = event.result
@@ -171,8 +205,60 @@ abstract class BuildTimingService :
     // without constructing a whole tooling-events object graph. The
     // `onFinish` adapter above has a single responsibility: filter
     // non-task events and extract the three fields.
+    //
+    // **Soft-capped** at [MAX_RECORDS] (default 50_000): well above
+    // any realistic Android build's task count (a 200-module
+    // multi-flavor CI build tops out around 20K task completions)
+    // but bounds in-build memory so pathological cases (e.g. a build
+    // script bug that creates task-per-file in a 100K-file repo)
+    // don't accumulate megabytes of records throughout the build.
+    // Past the cap we silently drop the new record and emit a
+    // one-shot warning via Gradle's standard logger (Gradle stitches
+    // BuildService System.err output into the build log).
+    //
+    // **"Soft" cap, not strict.** The check at line 230 below is a
+    // classic check-then-act on the atomic counter — under heavy
+    // concurrent task completion from Gradle's parallel executor,
+    // multiple producer threads can observe `recordCount < MAX_RECORDS`
+    // at the same instant and all proceed to add. The actual queue
+    // size can therefore exceed `MAX_RECORDS` by up to
+    // `(parallelism - 1)` records (Gradle default parallelism is
+    // ~8). This is acceptable in practice because:
+    //   - the 2.5× safety margin (50_000 vs. ~20_000 observed
+    //     real-world max) absorbs the over-fill;
+    //   - the alternative (atomic getAndIncrement + decrement-on-
+    //     overflow) costs an extra CAS per record on the hot path
+    //     for a guarantee that has zero practical value;
+    //   - the counter and queue size cannot drift unboundedly:
+    //     once recordCount catches up to MAX_RECORDS, no further
+    //     increments happen on the dropped path.
+    //
+    // We DROP NEWEST rather than dropping oldest because:
+    //   - per-category sums are equally distorted either way;
+    //   - top_tasks uses sortByDescending(duration) — slow tasks are
+    //     detected regardless of position in the queue, so keeping
+    //     the early ones (which include the always-first
+    //     `:checkKotlinGradlePluginConfigurationErrors` and similar
+    //     baseline tasks the user usually wants to see) is no worse
+    //     than keeping the late ones;
+    //   - dropping oldest would invalidate the `earliestStart` →
+    //     wall-clock `totalMs` computation, undercounting the build
+    //     duration by the time-to-first-dropped-task.
     internal fun record(path: String, startTime: Long, endTime: Long) {
+        if (recordCount.get() >= MAX_RECORDS) {
+            if (capWarningEmitted.compareAndSet(false, true)) {
+                System.err.println(
+                    "Bugsee: BuildTimingService reached the $MAX_RECORDS record cap; " +
+                        "subsequent task timings will be dropped. This is defense-in-depth " +
+                        "against pathological builds; the rolled-up `build_metadata.timings` " +
+                        "shipped to the appserver remains accurate for the first $MAX_RECORDS " +
+                        "task completions."
+                )
+            }
+            return
+        }
         records.add(TaskTiming(path, startTime, endTime))
+        recordCount.incrementAndGet()
     }
 
     /**
