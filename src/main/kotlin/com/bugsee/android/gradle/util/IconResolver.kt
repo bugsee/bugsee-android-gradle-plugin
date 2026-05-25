@@ -1,6 +1,5 @@
 package com.bugsee.android.gradle.util
 
-import org.gradle.api.Project
 import java.io.File
 
 internal object IconResolver {
@@ -9,11 +8,22 @@ internal object IconResolver {
     private const val DRAWABLE_RESOURCE_START = "@drawable/"
 
     /**
-     * Resolves the app icon file from project resources.
-     * Prefers xxhdpi variant (144x144). Falls back to the largest available icon.
-     * Skips XML resources (selectors, etc.).
+     * Resolves the app icon file from a pre-resolved list of `res/`
+     * source files. Prefers xxhdpi (144x144); falls back to the
+     * largest available raster icon. Skips XML resources (selectors,
+     * adaptive-icon configs, etc.).
+     *
+     * Takes the source-file list as `Iterable<File>` rather than
+     * `Project` so the caller can wire it from
+     * `android.sourceSets.main.res.sourceFiles` into a
+     * configuration-cache-friendly task input at registration time.
+     * Reading the Android extension at execution time would be a CC
+     * violation — `project` is explicitly not available when a task
+     * replays from the CC-stored graph. (Mirrors the same pattern
+     * `AppTokenResolver.resolveFromManifest` uses for the
+     * `@string/foo`-fallback path.)
      */
-    fun getIcon(project: Project, resourceIdString: String): File? {
+    fun getIcon(stringResourceFiles: Iterable<File>, resourceIdString: String): File? {
         val resourceStart = when {
             resourceIdString.startsWith(MIPMAP_RESOURCE_START) -> MIPMAP_RESOURCE_START
             resourceIdString.startsWith(DRAWABLE_RESOURCE_START) -> DRAWABLE_RESOURCE_START
@@ -26,14 +36,7 @@ internal object IconResolver {
         // e.g. "mipmap" or "drawable"
         val resourceFolderType = resourceStart.substring(1, resourceStart.length - 1)
 
-        val android = project.extensions.findByName("android") ?: return null
-        val sourceSets = android.javaClass.getMethod("getSourceSets").invoke(android)
-        val mainSourceSet = sourceSets.javaClass.getMethod("getByName", String::class.java).invoke(sourceSets, "main")
-        val res = mainSourceSet.javaClass.getMethod("getRes").invoke(mainSourceSet)
-        @Suppress("UNCHECKED_CAST")
-        val sourceFiles = res.javaClass.getMethod("getSourceFiles").invoke(res) as Iterable<File>
-
-        val iconFiles = sourceFiles.filter { file ->
+        val iconFiles = stringResourceFiles.filter { file ->
             val baseName = file.nameWithoutExtension
             val ext = file.extension
             baseName == resourceId

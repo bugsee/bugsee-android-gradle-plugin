@@ -261,6 +261,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         extension: BugseePluginExtension,
         capitalizedVariant: String
     ) {
+        val ccInputs = resolveCcSafeInputs(project, extension, variant)
+
         val mappingUploadTaskProvider = project.tasks.register(
             "uploadBugsee${capitalizedVariant}Mapping",
             MappingUploadTask::class.java
@@ -280,6 +282,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.manifestFile.set(
                 variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
             )
+
+            // CC-safe inputs — see resolveCcSafeInputs / the task's
+            // KDoc for the full rationale.
+            ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            task.stringResourceFiles.from(ccInputs.stringResFiles)
+            task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
         }
 
         // Finalize after assemble and bundle tasks
@@ -296,6 +304,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         extension: BugseePluginExtension,
         capitalizedVariant: String
     ) {
+        val ccInputs = resolveCcSafeInputs(project, extension, variant)
+
         val nativeUploadTaskProvider = project.tasks.register(
             "uploadBugsee${capitalizedVariant}Native",
             NativeUploadTask::class.java
@@ -312,6 +322,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
             )
 
+            // CC-safe inputs — see resolveCcSafeInputs / the task's
+            // KDoc for the full rationale. `buildDirectory` is
+            // task-private (per-project, not shared with other tasks).
+            ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            task.stringResourceFiles.from(ccInputs.stringResFiles)
+            task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
+            task.buildDirectory.set(project.layout.buildDirectory)
+
             // Ensure native debug metadata is extracted before upload.
             // Uses tasks.matching (live filter) to avoid task realization during configuration.
             task.dependsOn(
@@ -327,6 +345,65 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 t.finalizedBy(nativeUploadTaskProvider)
             }
         }
+    }
+
+    /**
+     * Resolve the shared CC-safe inputs (pre-resolved app token +
+     * `res/` source files) once per upload-task registration. Two
+     * registration paths today (mapping + native) and a third inlined
+     * in `registerBundleUploadTask` all need the same plumbing; this
+     * helper bottle-necks the reflection-based Android-DSL lookup in
+     * one place so a future regression that flips the wrong field
+     * surfaces once, not three times.
+     *
+     * The pre-resolved token chain mirrors `AppTokenResolver.resolve`'s
+     * first two layers (DSL → properties file). The third layer
+     * (manifest meta-data → `@string/foo` resource resolution) lives
+     * in the task action — the merged manifest only exists at
+     * execution time. The wired `stringResFiles` lets the action walk
+     * the resource tree without re-entering the Android DSL.
+     */
+    private data class CcSafeUploadInputs(
+        val preResolvedToken: String?,
+        val stringResFiles: List<File>,
+    )
+
+    private fun resolveCcSafeInputs(
+        project: Project,
+        extension: BugseePluginExtension,
+        variant: com.android.build.api.variant.Variant,
+    ): CcSafeUploadInputs {
+        val isDebug = extension.debug.getOrElse(false)
+
+        val preResolvedToken: String? = AppTokenResolver.resolveFromExtension(
+            extension, variant.name, project.logger, isDebug,
+        ) ?: AppTokenResolver.resolveFromPropertiesFile(
+            project.rootProject.projectDir, project.logger, isDebug,
+        )
+
+        val stringResFiles: List<File> = try {
+            val android = project.extensions.findByName("android")
+            if (android != null) {
+                val sourceSets = android.javaClass.getMethod("getSourceSets").invoke(android)
+                val mainSourceSet = sourceSets.javaClass
+                    .getMethod("getByName", String::class.java)
+                    .invoke(sourceSets, "main")
+                val res = mainSourceSet.javaClass.getMethod("getRes").invoke(mainSourceSet)
+                @Suppress("UNCHECKED_CAST")
+                (res.javaClass.getMethod("getSourceFiles").invoke(res) as Iterable<File>).toList()
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            project.logger.warn(
+                "Bugsee: could not enumerate string-resource source files — " +
+                    "`@string/foo` tokens in AndroidManifest meta-data + launcher-icon " +
+                    "resolution will not work: ${e.message}"
+            )
+            emptyList()
+        }
+
+        return CcSafeUploadInputs(preResolvedToken, stringResFiles)
     }
 
     private fun registerBundleUploadTask(
@@ -352,44 +429,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         )?.compileSdk?.toString()
 
         // Configuration-time app-token resolution. Invokes the
-        // extension-level sources (closure, provider, defaultAppToken)
-        // and falls through to the dedicated `bugsee.properties` file at
-        // the project root. Both run here so the task can receive a
-        // plain `@Input String` instead of reaching into
-        // `project.extensions.getByType(...)` at execution — a
-        // configuration-cache violation.
-        val preResolvedToken: String? = AppTokenResolver.resolveFromExtension(
-            extension, variant.name, project.logger, isDebug,
-        ) ?: AppTokenResolver.resolveFromPropertiesFile(
-            project.rootProject.projectDir, project.logger, isDebug,
-        )
-
-        // Pre-resolve the `res/` source files for the
-        // `@string/foo`-fallback path inside
-        // `AppTokenResolver.resolveFromManifest`. Passing the files
-        // via a `ConfigurableFileCollection` task input lets the
-        // resolver walk them at execution time without needing to
-        // reach back into the Android DSL (a CC leak).
-        val stringResFiles: List<File> = try {
-            val android = project.extensions.findByName("android")
-            if (android != null) {
-                val sourceSets = android.javaClass.getMethod("getSourceSets").invoke(android)
-                val mainSourceSet = sourceSets.javaClass
-                    .getMethod("getByName", String::class.java)
-                    .invoke(sourceSets, "main")
-                val res = mainSourceSet.javaClass.getMethod("getRes").invoke(mainSourceSet)
-                @Suppress("UNCHECKED_CAST")
-                (res.javaClass.getMethod("getSourceFiles").invoke(res) as Iterable<File>).toList()
-            } else {
-                emptyList()
-            }
-        } catch (e: Exception) {
-            project.logger.warn(
-                "Bugsee: could not enumerate string-resource source files — " +
-                    "`@string/foo` tokens in AndroidManifest meta-data will not resolve: ${e.message}"
-            )
-            emptyList()
-        }
+        // CC-safe inputs (pre-resolved token + `res/` source files).
+        // Same plumbing is needed by the mapping + native upload
+        // tasks, so the lookup lives in `resolveCcSafeInputs` —
+        // bottlenecking the reflection-based Android-DSL traversal
+        // in one place keeps a future regression from drifting
+        // across three call sites.
+        val ccInputs = resolveCcSafeInputs(project, extension, variant)
+        val preResolvedToken = ccInputs.preResolvedToken
+        val stringResFiles = ccInputs.stringResFiles
 
         // AAB upload task — wired to bundle output
         val bundleUploadTaskProvider = project.tasks.register(

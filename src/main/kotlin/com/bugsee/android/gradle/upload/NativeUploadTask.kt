@@ -1,15 +1,18 @@
 package com.bugsee.android.gradle.upload
 
-import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import com.bugsee.android.gradle.util.HashUtils
 import com.bugsee.android.gradle.util.SymbolHashCache
 import com.bugsee.android.gradle.util.ZipUtils
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +23,11 @@ import java.io.File
  * Checks two locations for symbols:
  * 1. build/intermediates/native_debug_metadata/{variant}/out (intermediate symbols)
  * 2. build/outputs/native-debug-symbols/{output}/native-debug-symbols.zip (final package)
+ *
+ * Configuration-cache safe: every value the action needs is wired into
+ * an `@Input` / `@Internal` task property at registration time. The
+ * action MUST NOT reach into `project.extensions` or `project.layout`
+ * at execution — `project` is unavailable on CC replay.
  */
 abstract class NativeUploadTask : DefaultTask() {
 
@@ -38,18 +46,65 @@ abstract class NativeUploadTask : DefaultTask() {
     @get:InputFile
     abstract val manifestFile: RegularFileProperty
 
+    /**
+     * App token resolved via the DSL / properties-file chain at
+     * registration time. Same shape + rationale as
+     * `MappingUploadTask.preResolvedAppToken`. See
+     * `BundleUploadTask.preResolvedAppToken` for the shared notes.
+     */
+    @get:Input
+    @get:Optional
+    abstract val preResolvedAppToken: Property<String>
+
+    /**
+     * `res/` source files for the `@string/foo`-fallback path inside
+     * `AppTokenResolver.resolveFromManifest`. Wired at registration
+     * from `android.sourceSets.main.res.getSourceFiles()`. Same
+     * `@Internal` rationale as `MappingUploadTask.stringResourceFiles`.
+     */
+    @get:Internal
+    abstract val stringResourceFiles: ConfigurableFileCollection
+
+    /**
+     * Root-project directory for `bugsee.properties` fallback. Same
+     * shape + rationale as `MappingUploadTask.rootProjectDirectory`.
+     */
+    @get:Internal
+    abstract val rootProjectDirectory: DirectoryProperty
+
+    /**
+     * Per-project build directory (`project.layout.buildDirectory`),
+     * pre-resolved at registration. The task action walks this to
+     * find native debug-metadata folders that AGP wrote during the
+     * build. Reading `project.layout.buildDirectory` at execution
+     * would be a CC violation; using a wired DirectoryProperty
+     * keeps the resolver pure file I/O.
+     *
+     * Declared `@Internal` rather than `@InputDirectory` — the
+     * native-debug-symbol intermediates are not real inputs to this
+     * task (we don't want a content-snapshot of every `.so` file
+     * gating up-to-date checks). The folder layout is the contract;
+     * the actual symbol bytes are uploaded but never themselves
+     * change THIS task's identity.
+     */
+    @get:Internal
+    abstract val buildDirectory: DirectoryProperty
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
         val manifest = manifestFile.get().asFile
-        val extension = project.extensions.getByType(BugseePluginExtension::class.java)
 
         if (isDebug) logger.warn("Bugsee: Upload native symbols task for variant ${variantName.get()}")
 
-        // Resolve app token
-        val appToken = AppTokenResolver.resolve(
-            project, extension, variantName.get(), manifest, logger, isDebug
-        )
+        val appToken = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
+            ?: AppTokenResolver.resolveFromPropertiesFile(
+                rootProjectDirectory.get().asFile, logger, isDebug
+            )
+            ?: AppTokenResolver.resolveFromManifest(
+                manifest, stringResourceFiles.files, logger, isDebug
+            )
+
         if (appToken == null) {
             logger.warn("Bugsee: Could not resolve appToken. Skipping native upload.")
             return
@@ -70,9 +125,9 @@ abstract class NativeUploadTask : DefaultTask() {
             return
         }
 
-        val basePath = project.layout.buildDirectory.get().asFile.absolutePath
+        val basePath = buildDirectory.get().asFile.absolutePath
         val skipCache = forceUpload.get()
-        val cacheFile = File(project.rootDir, ".gradle/bugsee/native-symbol-cache.json")
+        val cacheFile = File(rootProjectDirectory.get().asFile, ".gradle/bugsee/native-symbol-cache.json")
         val cacheKey = "${HashUtils.sha1Hex(appToken)}:${variantName.get()}"
 
         // Check for intermediate symbols folder first

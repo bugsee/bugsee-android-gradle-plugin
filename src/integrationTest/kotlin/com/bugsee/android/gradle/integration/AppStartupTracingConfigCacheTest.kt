@@ -34,24 +34,23 @@ class AppStartupTracingConfigCacheTest {
         val first = temp.newFolder("first")
         val second = temp.newFolder("second")
 
-        // Exclude the unrelated `:app:uploadBugsee*` tasks — they have
-        // pre-existing CC incompatibilities (they read the plugin extension
-        // at execution time, which CC has serialized out) that are out of
-        // scope for the app-startup tracing test layer. The narrow
-        // regression this test guards against — the AppStartupTracing
-        // visitor factory failing to serialize across the transform
-        // isolation boundary — surfaces during the assemble pipeline,
-        // well before the upload tasks would run.
-        // Only uploadBugseeDebugMapping registers in this fixture (no NDK,
-        // no buildInfo). The mapping task is the one with the CC issue.
-        val excludeUploads = arrayOf("-x", ":app:uploadBugseeDebugMapping")
+        // Previously this test excluded `:app:uploadBugseeDebugMapping`
+        // via `-x` because the mapping upload task read the plugin
+        // extension at execution time — a CC violation that would
+        // trip `--configuration-cache-problems=fail` even though the
+        // narrow regression this test guards against is in the
+        // app-startup-tracing visitor-factory serialization. The
+        // mapping task has since been refactored to wire all its
+        // execution-time inputs at registration (the same pattern
+        // BundleUploadTask uses), so the exclusion is no longer
+        // needed — and removing it means a future CC regression in
+        // the mapping task surfaces immediately on this test.
 
         val fixture1 = FixtureProject.materialize("app-startup-tracing", first)
         val firstResult = fixture1.build(
             tier = "STANDARD",
             "--configuration-cache",
             "--configuration-cache-problems=fail",
-            *excludeUploads,
         )
         val task1 = firstResult.task(":app:assembleDebug")
         assertNotNull(task1)
@@ -68,7 +67,6 @@ class AppStartupTracingConfigCacheTest {
             tier = "STANDARD",
             "--configuration-cache",
             "--configuration-cache-problems=fail",
-            *excludeUploads,
         )
         val task2 = secondResult.task(":app:assembleDebug")
         assertNotNull(task2)
