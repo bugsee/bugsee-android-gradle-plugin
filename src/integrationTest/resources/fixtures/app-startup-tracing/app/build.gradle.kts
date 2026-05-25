@@ -16,6 +16,8 @@ android {
     defaultConfig {
         minSdk = 21
         targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -27,6 +29,21 @@ android {
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
+        }
+    }
+
+    // Optional product-flavor wiring. When the
+    // `bugseeFixtureMultiFlavor` property is `true` the fixture
+    // exposes two flavors (`free`, `paid`) so multi-variant
+    // integration tests can assert per-variant BUILD_UUID
+    // discrimination + end-to-end manifest behavior. Default-off so
+    // existing tier-matrix tests are unaffected.
+    val multiFlavor = project.findProperty("bugseeFixtureMultiFlavor")?.toString() == "true"
+    if (multiFlavor) {
+        flavorDimensions += "tier"
+        productFlavors {
+            create("free") { dimension = "tier" }
+            create("paid") { dimension = "tier" }
         }
     }
 }
@@ -66,5 +83,15 @@ bugsee {
         instrumentation {
             startupTier.set(StartupTier.valueOf(tier))
         }
+    }
+
+    // Optional opt-out for the extension-stripping path. Defaults to
+    // the plugin's default (`true`) when the property is absent. Used
+    // by the manifest-stripping integration test to exercise BOTH
+    // sides of the `optimizeExtensionsLoading` switch from the same
+    // fixture.
+    val optimizeExt = project.findProperty("bugseeFixtureOptimizeExtensions")?.toString()
+    if (optimizeExt != null) {
+        optimizeExtensionsLoading.set(optimizeExt == "true")
     }
 }

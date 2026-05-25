@@ -61,6 +61,111 @@ internal class FixtureProject private constructor(
     }
 
     /**
+     * Variant of [build] that runs an arbitrary list of Gradle tasks
+     * instead of the hardcoded `:app:assembleDebug`. Used by
+     * integration tests that need to drive `:app:bundleDebug` (AAB),
+     * multiple flavor variants, etc. — anything beyond the standard
+     * APK assembly path.
+     */
+    fun buildTasks(
+        tasks: List<String>,
+        tier: String? = null,
+        vararg extraArgs: String,
+    ): BuildResult {
+        require(tasks.isNotEmpty()) { "must run at least one task" }
+        val args = mutableListOf<String>().apply {
+            addAll(tasks)
+            add("-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}")
+            add("-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}")
+            add("--stacktrace")
+            if (tier != null) add("-PbugseeStartupTier=$tier")
+            addAll(extraArgs)
+        }
+        val runner = GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withArguments(args)
+            .withEnvironment(testKitEnvironment())
+            .forwardOutput()
+        return runner.build()
+    }
+
+    /**
+     * Read the POST-TRANSFORM merged manifest for the given variant
+     * — i.e. the [com.bugsee.android.gradle.manifest.BugseeManifestTask]
+     * output, NOT AGP's pre-transform `processDebugMainManifest`
+     * input. Returns `null` if no such manifest can be located.
+     *
+     * The plugin wires the manifest task via
+     * `artifacts.use(...).wiredWithFiles(...).toTransform(SingleArtifact.MERGED_MANIFEST)`.
+     * AGP picks the on-disk output location for the transform; it
+     * doesn't necessarily overwrite the pre-transform input. So we
+     * scan every `AndroidManifest.xml` under
+     * `app/build/intermediates/` (and `app/build/outputs/`) and return
+     * the first one that carries the `com.bugsee.android.BUILD_UUID`
+     * meta-data we know the transform injects. If no such file is
+     * present, return whichever AGP wrote pre-transform — that
+     * answers "did the transform run at all?" with a `null`
+     * BUILD_UUID, which is itself a useful failure mode for tests
+     * to assert against.
+     *
+     * The variant name is used to disambiguate when multiple
+     * variants build into the same project (multi-flavor matrix):
+     * we restrict the search to manifests whose intermediate path
+     * contains the variant name. Falls back to "any manifest with
+     * the marker" when no variant-tagged match is found.
+     */
+    fun readMergedManifest(variant: String): String? {
+        val variantLower = variant.lowercase()
+        val buildRoots = listOf(
+            projectDir.resolve("app/build/intermediates"),
+            projectDir.resolve("app/build/outputs"),
+        ).filter { it.isDirectory }
+
+        val candidates = buildRoots.asSequence()
+            .flatMap { it.walk() }
+            .filter { it.isFile && it.name == "AndroidManifest.xml" }
+            .toList()
+
+        // Prefer transform outputs that match the variant AND carry
+        // the BUILD_UUID marker (post-transform).
+        val markered = candidates.filter { f ->
+            f.path.lowercase().contains("/$variantLower/") &&
+                f.readText().contains("com.bugsee.android.BUILD_UUID")
+        }
+        if (markered.isNotEmpty()) return markered.first().readText()
+
+        // Fallback 1: any manifest under the variant subtree
+        // (pre-transform — the transform didn't run, or wrote
+        // somewhere we don't search).
+        val variantTagged = candidates.firstOrNull { f ->
+            f.path.lowercase().contains("/$variantLower/")
+        }
+        if (variantTagged != null) return variantTagged.readText()
+
+        // Fallback 2: any AndroidManifest under intermediates with
+        // BUILD_UUID — better than nothing for tests that don't
+        // care about the variant tag.
+        val anyMarkered = candidates.firstOrNull { f ->
+            f.readText().contains("com.bugsee.android.BUILD_UUID")
+        }
+        return anyMarkered?.readText()
+    }
+
+    /**
+     * Extract the BUILD_UUID `<meta-data>` value out of a merged
+     * manifest text. Returns `null` if the meta-data is absent — the
+     * task didn't run, or the optimization-options short-circuit
+     * fired before injection. Mirrors the parser used in the
+     * unit-level determinism tests.
+     */
+    fun extractBuildUuid(manifestText: String): String? {
+        val re = Regex(
+            "<meta-data\\s+android:name=\"com\\.bugsee\\.android\\.BUILD_UUID\"\\s+android:value=\"([^\"]+)\""
+        )
+        return re.find(manifestText)?.groupValues?.get(1)
+    }
+
+    /**
      * Same as [build] but allows the build to fail and returns the
      * [BuildResult] for failure-path assertions.
      */
