@@ -65,8 +65,18 @@ internal object SymbolUploader {
             val response = client.execute(httpPost)
             val statusCode = response.statusLine.statusCode
 
-            if (statusCode != 200) {
-                logger.warn("Bugsee upload failed: ${EntityUtils.toString(response.entity, "utf-8")}")
+            // Accept the full 2xx range. S3 and CDN proxies routinely
+            // normalize successful responses to 201 Created or 204 No
+            // Content; the prior strict `!= 200` check made those
+            // appear as failed uploads even though the symbol was
+            // accepted server-side. `BundleUploader.uploadData` (the
+            // sibling uploader on the chunked path) already used the
+            // 200..299 range; this aligns the two.
+            if (statusCode !in 200..299) {
+                logger.warn(
+                    "Bugsee upload failed (status=$statusCode): " +
+                        EntityUtils.toString(response.entity, "utf-8"),
+                )
                 return@use false
             }
 
@@ -79,7 +89,31 @@ internal object SymbolUploader {
             val contentText = EntityUtils.toString(resEntity, "utf-8")
             if (debug) logger.warn("Bugsee: Upload step 2. Response: $contentText")
 
-            val responseBody = JSONObject(contentText)
+            // Parse the body defensively. The 2xx range covers
+            // 201 Created / 202 Accepted / 204 No Content responses
+            // that CDN proxies and some appserver deployments
+            // return with non-JSON bodies (text/plain "Accepted",
+            // HTML error pages from intermediate proxies, empty
+            // body, etc.). The prior strict `JSONObject(contentText)`
+            // call threw `JSONException` on any of those, escaping
+            // through `httpClient.use { }` and crashing the Gradle
+            // task with a stacktrace instead of cleanly logging
+            // a warn and returning false.
+            //
+            // The contract this guards: status-range relaxation
+            // (Item 1) widened the set of "successful POST"
+            // responses; the body parser must keep pace or the
+            // widened range becomes a crash hazard.
+            val responseBody = try {
+                JSONObject(contentText)
+            } catch (e: Exception) {
+                logger.warn(
+                    "Bugsee upload failed: response body is not valid JSON " +
+                        "(status=$statusCode): ${e.message}. Body preview: " +
+                        contentText.take(200),
+                )
+                return@use false
+            }
 
             // Check for SymbolAlreadyExistsError
             if (responseBody.optInt("code") == 16004) {
@@ -110,8 +144,17 @@ internal object SymbolUploader {
             httpPut.entity = FileEntity(file)
             val putResponse = client.execute(httpPut)
 
-            if (putResponse.statusLine.statusCode != 200) {
-                logger.warn("Bugsee upload failed: ${EntityUtils.toString(putResponse.entity, "utf-8")}")
+            // Same 2xx-range relaxation as the POST step above —
+            // presigned-URL PUTs land on S3 (or whichever CDN the
+            // appserver minted), and those return 200/201/204
+            // interchangeably depending on multipart vs single-PUT
+            // and storage-class settings.
+            val putStatus = putResponse.statusLine.statusCode
+            if (putStatus !in 200..299) {
+                logger.warn(
+                    "Bugsee upload failed (status=$putStatus): " +
+                        EntityUtils.toString(putResponse.entity, "utf-8"),
+                )
                 return@use false
             }
 
