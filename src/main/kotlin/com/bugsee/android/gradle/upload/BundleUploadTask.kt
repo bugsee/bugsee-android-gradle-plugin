@@ -17,6 +17,8 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.util.GradleVersion
 import org.json.JSONObject
@@ -71,6 +73,18 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:InputFile
     @get:Optional
     abstract val mappingFile: RegularFileProperty
+
+    /**
+     * The resolved BUILD_UUID for this variant, written by
+     * [com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask].
+     * See [MappingUploadTask.resolvedBuildIdFile] for the full
+     * rationale; the bundle upload must key off the same UUID so the
+     * server-side bundle, mapping, native-symbol, and runtime crash
+     * records all share one identity per build.
+     */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val resolvedBuildIdFile: RegularFileProperty
 
     // Shared BuildService that collects per-task timings across the
     // whole build. `@ServiceReference(name)` declaratively auto-wires
@@ -279,10 +293,13 @@ abstract class BundleUploadTask : DefaultTask() {
             return
         }
 
-        // Get BUILD_UUID from manifest
-        val buildUUID = ManifestModifier.getMetaDataValue(manifest, "com.bugsee.android.BUILD_UUID")
-        if (buildUUID.isNullOrEmpty()) {
-            logger.warn("Bugsee: Could not find 'com.bugsee.android.BUILD_UUID' in AndroidManifest.xml")
+        // Source of truth: the resolve task's output. See
+        // resolvedBuildIdFile KDoc — uploading under the manifest
+        // meta-data would mismatch the SDK's runtime UUID for every
+        // R8-minified build.
+        val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
+        if (buildUUID.isEmpty()) {
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping bundle upload.")
             return
         }
 

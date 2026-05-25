@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.manifest
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
@@ -50,6 +51,7 @@ import java.io.File
  * (`com.bugsee.android.BUILD_UUID`) when the asset is absent — older
  * builds, or any consumer that builds the SDK without our plugin.
  */
+@CacheableTask
 abstract class BugseeAssetInjectionTask : DefaultTask() {
 
     /**
@@ -105,9 +107,11 @@ abstract class BugseeAssetInjectionTask : DefaultTask() {
             // of an opaque UUID. Trailing newline because the SDK
             // reader uses Properties.load which is newline-tolerant
             // either way, but POSIX text-file convention is to end on
-            // one.
-            "# Bugsee build identifier — auto-generated, do not edit.\n" +
-                "bugsee.build_id=$buildId\n"
+            // one. ASCII-only — the file is read on the device with
+            // ISO_8859_1 by Properties.load and we don't want
+            // non-Latin-1 bytes drifting into the header.
+            "# Bugsee build identifier - auto-generated, do not edit.\n" +
+                "$BUILD_ID_ASSET_KEY=$buildId\n"
         )
     }
 
@@ -130,5 +134,13 @@ abstract class BugseeAssetInjectionTask : DefaultTask() {
          * `Context.getAssets().open(BUILD_ID_ASSET_NAME)`).
          */
         internal const val BUILD_ID_ASSET_NAME = "bugsee_build_id.properties"
+
+        /**
+         * Property key inside the asset file. The SDK's reader
+         * (`BugseeEnvironment.ASSET_BUILD_ID_KEY`) MUST match this
+         * string exactly; a silent rename on either side would
+         * break the asset channel for every build.
+         */
+        internal const val BUILD_ID_ASSET_KEY = "bugsee.build_id"
     }
 }

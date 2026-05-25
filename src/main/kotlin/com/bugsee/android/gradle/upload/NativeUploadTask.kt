@@ -13,6 +13,8 @@ import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.json.JSONObject
 import java.io.File
@@ -45,6 +47,18 @@ abstract class NativeUploadTask : DefaultTask() {
 
     @get:InputFile
     abstract val manifestFile: RegularFileProperty
+
+    /**
+     * The resolved BUILD_UUID for this variant, written by
+     * [com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask].
+     * See [MappingUploadTask.resolvedBuildIdFile] for the full
+     * rationale; native debug-symbols must key off the same UUID the
+     * SDK reports at runtime — otherwise NDK crashes never resolve
+     * to symbolicated frames.
+     */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val resolvedBuildIdFile: RegularFileProperty
 
     /**
      * App token resolved via the DSL / properties-file chain at
@@ -118,10 +132,13 @@ abstract class NativeUploadTask : DefaultTask() {
             return
         }
 
-        // Get BUILD_UUID from manifest
-        val buildUUID = ManifestModifier.getMetaDataValue(manifest, "com.bugsee.android.BUILD_UUID")
-        if (buildUUID.isNullOrEmpty()) {
-            logger.warn("Bugsee: Could not find 'com.bugsee.android.BUILD_UUID' in AndroidManifest.xml. Skipping native upload.")
+        // Source of truth: the resolve task's output. See
+        // resolvedBuildIdFile KDoc — uploading under the manifest
+        // meta-data would silently mismatch the runtime UUID in
+        // every R8-minified build, breaking NDK symbolication.
+        val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
+        if (buildUUID.isEmpty()) {
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping native upload.")
             return
         }
 

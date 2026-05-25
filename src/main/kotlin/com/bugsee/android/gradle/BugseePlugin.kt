@@ -221,15 +221,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // runtime. When R8 is off, both tasks observe the absent
             // mapping and fall back to the same UUID the manifest task
             // already wrote — asset and manifest stay in sync.
-            registerBuildIdResolveAndAssetTasks(
+            val resolveTaskProvider = registerBuildIdResolveAndAssetTasks(
                 project, variant, manifestTaskProvider, capitalizedVariant
             )
 
             // --- Application variant specific tasks (upload mapping, NDK symbols, bundle) ---
-            registerMappingUploadTask(project, variant, extension, capitalizedVariant)
+            registerMappingUploadTask(
+                project, variant, extension, capitalizedVariant, resolveTaskProvider
+            )
 
             if (extension.ndk.enabled.get()) {
-                registerNativeUploadTask(project, variant, extension, capitalizedVariant)
+                registerNativeUploadTask(
+                    project, variant, extension, capitalizedVariant, resolveTaskProvider
+                )
             }
 
             // Build-info registration runs by default for every
@@ -238,7 +242,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // active, the task additionally requests a presigned
             // PUT URL and ships the artefact bytes.
             if (shouldRegisterBuildInfoFor(project, variant, extension, isDebug)) {
-                registerBundleUploadTask(project, variant, extension, capitalizedVariant)
+                registerBundleUploadTask(
+                    project, variant, extension, capitalizedVariant, resolveTaskProvider
+                )
             }
 
             // --- Bytecode instrumentation (application modules only) ---
@@ -336,7 +342,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         variant: com.android.build.api.variant.Variant,
         manifestTaskProvider: org.gradle.api.tasks.TaskProvider<BugseeManifestTask>,
         capitalizedVariant: String,
-    ) {
+    ): org.gradle.api.tasks.TaskProvider<BugseeBuildIdResolveTask> {
         // Resolve task — derives the final UUID from mapping.txt when
         // present, otherwise from the manifest fallback. Writes a
         // single-line text file consumed by the asset task.
@@ -393,13 +399,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 BugseeAssetInjectionTask::outputAssetsDir,
             )
             .toTransform(SingleArtifact.ASSETS)
+
+        return resolveTaskProvider
     }
 
     private fun registerMappingUploadTask(
         project: Project,
         variant: ApplicationVariant,
         extension: BugseePluginExtension,
-        capitalizedVariant: String
+        capitalizedVariant: String,
+        resolveTaskProvider: org.gradle.api.tasks.TaskProvider<BugseeBuildIdResolveTask>,
     ) {
         val ccInputs = resolveCcSafeInputs(project, extension, variant)
 
@@ -423,6 +432,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
             )
 
+            // Resolved BUILD_UUID — the same UUID the SDK reports at
+            // runtime via the asset channel. Wiring the resolve task's
+            // output makes the upload-side identity match the
+            // runtime-side identity for both R8 and non-R8 builds.
+            task.resolvedBuildIdFile.set(
+                resolveTaskProvider.flatMap { it.resolvedBuildIdFile }
+            )
+
             // CC-safe inputs — see resolveCcSafeInputs / the task's
             // KDoc for the full rationale.
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
@@ -442,7 +459,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project: Project,
         variant: ApplicationVariant,
         extension: BugseePluginExtension,
-        capitalizedVariant: String
+        capitalizedVariant: String,
+        resolveTaskProvider: org.gradle.api.tasks.TaskProvider<BugseeBuildIdResolveTask>,
     ) {
         val ccInputs = resolveCcSafeInputs(project, extension, variant)
 
@@ -460,6 +478,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // Wire the merged manifest
             task.manifestFile.set(
                 variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
+            )
+
+            // Resolved BUILD_UUID — see MappingUploadTask wiring.
+            task.resolvedBuildIdFile.set(
+                resolveTaskProvider.flatMap { it.resolvedBuildIdFile }
             )
 
             // CC-safe inputs — see resolveCcSafeInputs / the task's
@@ -550,7 +573,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project: Project,
         variant: ApplicationVariant,
         extension: BugseePluginExtension,
-        capitalizedVariant: String
+        capitalizedVariant: String,
+        resolveTaskProvider: org.gradle.api.tasks.TaskProvider<BugseeBuildIdResolveTask>,
     ) {
         val buildConfig = extension.buildInfo.sizeAnalysis.buildConfiguration
             .orElse(project.provider { variant.name })
@@ -601,6 +625,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.mappingFile.set(
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
             )
+            task.resolvedBuildIdFile.set(
+                resolveTaskProvider.flatMap { it.resolvedBuildIdFile }
+            )
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             task.stringResourceFiles.from(stringResFiles)
@@ -643,6 +670,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
             task.mappingFile.set(
                 variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+            )
+            task.resolvedBuildIdFile.set(
+                resolveTaskProvider.flatMap { it.resolvedBuildIdFile }
             )
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }

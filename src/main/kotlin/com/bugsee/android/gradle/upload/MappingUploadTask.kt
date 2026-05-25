@@ -13,6 +13,8 @@ import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.json.JSONObject
 
@@ -41,6 +43,26 @@ abstract class MappingUploadTask : DefaultTask() {
     @get:InputFile
     @get:Optional
     abstract val mappingFile: RegularFileProperty
+
+    /**
+     * The resolved BUILD_UUID for this variant, written by
+     * [com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask]:
+     *   - R8 enabled: a hash of the mapping.txt content. Bytecode-
+     *     identical builds get the same UUID; any bytecode change
+     *     flips it. This is the UUID the SDK reports at runtime via
+     *     the asset channel, so the server MUST key the mapping
+     *     under it — otherwise crash symbolication never resolves.
+     *   - R8 disabled: the same fallback UUID the manifest meta-data
+     *     carries (merged-manifest + variant + plugin-version hash).
+     *     Stays in sync with the SDK's manifest-fallback reader.
+     *
+     * Reading the manifest meta-data here directly would defeat the
+     * whole asset-channel design — in any minified release build the
+     * upload-side UUID and the runtime-side UUID would diverge.
+     */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val resolvedBuildIdFile: RegularFileProperty
 
     /**
      * App token resolved via the DSL / properties-file chain
@@ -111,10 +133,14 @@ abstract class MappingUploadTask : DefaultTask() {
             return
         }
 
-        // Get BUILD_UUID from manifest
-        val buildUUID = ManifestModifier.getMetaDataValue(manifest, "com.bugsee.android.BUILD_UUID")
-        if (buildUUID.isNullOrEmpty()) {
-            logger.warn("Bugsee: Could not find 'com.bugsee.android.BUILD_UUID' in AndroidManifest.xml")
+        // Source of truth: the resolve task's output. In R8 builds
+        // this is the mapping-derived UUID the SDK reports at runtime;
+        // in non-R8 builds it is byte-equal to the manifest fallback.
+        // Reading the manifest meta-data here would silently mismatch
+        // the runtime UUID in every minified release build.
+        val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
+        if (buildUUID.isEmpty()) {
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping mapping upload.")
             return
         }
 

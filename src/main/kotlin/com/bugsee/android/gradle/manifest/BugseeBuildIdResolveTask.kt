@@ -2,6 +2,7 @@ package com.bugsee.android.gradle.manifest
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
@@ -40,6 +41,7 @@ import org.gradle.api.tasks.TaskAction
  * `SentryGenerateProguardUuidTask` plus
  * `InjectSentryMetaPropertiesIntoAssetsTask`.
  */
+@CacheableTask
 abstract class BugseeBuildIdResolveTask : DefaultTask() {
 
     /**
