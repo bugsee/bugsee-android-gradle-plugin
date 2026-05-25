@@ -37,6 +37,26 @@ abstract class BugseeManifestTask : DefaultTask() {
     @get:Input
     abstract val optimizeExtensionsLoading: Property<Boolean>
 
+    /**
+     * AGP variant name (`debug`, `freeRelease`, etc.) for this task's
+     * variant. Mixed into the deterministic BUILD_UUID derivation so
+     * `assembleDebug` and `assembleRelease` of the same workspace
+     * produce DIFFERENT UUIDs — they're different artefacts and must
+     * round-trip to different crash/mapping uploads.
+     */
+    @get:Input
+    abstract val variantName: Property<String>
+
+    /**
+     * Plugin version (`PLUGIN_VERSION` constant). Mixed into the UUID
+     * derivation so a plugin upgrade applied to the same workspace
+     * produces a fresh UUID — the upload pipeline's wire shape and
+     * symbol-extraction rules can change across plugin releases, and
+     * the safest contract is "new plugin = new build identity."
+     */
+    @get:Input
+    abstract val pluginVersion: Property<String>
+
     @get:InputFile
     abstract val mergedManifest: RegularFileProperty
 
@@ -65,12 +85,51 @@ abstract class BugseeManifestTask : DefaultTask() {
             return
         }
 
+        // Derive the BUILD_UUID DETERMINISTICALLY from the inputs
+        // (merged manifest bytes + variant name + plugin version)
+        // BEFORE copying / mutating the output. Two reasons:
+        //
+        // 1. Cross-invocation stability. `assembleDebug` and
+        //    `bundleDebug` from the same workspace land in this task
+        //    via the same AGP MERGED_MANIFEST transform; within a
+        //    single invocation the task runs once and both downstreams
+        //    consume the same output. But across SEPARATE invocations
+        //    (clean + assemble, later clean + bundle, common in
+        //    Fastlane two-lane CI flows), the task re-runs. Under the
+        //    previous `UUID.randomUUID()` the APK got UUID A, the AAB
+        //    later got UUID B, and mapping/symbol uploads keyed off
+        //    one UUID could not be looked up by crashes keyed off the
+        //    other.
+        //
+        // 2. Up-to-date check correctness. With a deterministic UUID,
+        //    re-running the task with unchanged inputs produces a
+        //    byte-identical updated manifest — so Gradle's incremental
+        //    build correctly marks both this task and downstream
+        //    bytecode-instrumentation steps UP-TO-DATE.
+        //
+        // `UUID.nameUUIDFromBytes` produces a v3 (MD5-based, name-
+        // derived) UUID per RFC 4122; the version bits don't matter
+        // for our use, only that the value is UUID-shaped, stable
+        // across runs of the same inputs, and distinct across inputs.
+        val manifestBytes = manifestFile.readBytes()
+        val uuidInput = ByteArray(
+            manifestBytes.size + variantName.get().length + pluginVersion.get().length + 2
+        )
+        System.arraycopy(manifestBytes, 0, uuidInput, 0, manifestBytes.size)
+        var offset = manifestBytes.size
+        uuidInput[offset++] = '|'.code.toByte()
+        val variantBytes = variantName.get().toByteArray(Charsets.UTF_8)
+        System.arraycopy(variantBytes, 0, uuidInput, offset, variantBytes.size)
+        offset += variantBytes.size
+        uuidInput[offset++] = '|'.code.toByte()
+        val pluginVersionBytes = pluginVersion.get().toByteArray(Charsets.UTF_8)
+        System.arraycopy(pluginVersionBytes, 0, uuidInput, offset, pluginVersionBytes.size)
+        val buildUUID = UUID.nameUUIDFromBytes(uuidInput).toString()
+
         // Copy input to output location if different
         if (manifestFile.absolutePath != outputFile.absolutePath) {
             manifestFile.copyTo(outputFile, overwrite = true)
         }
-
-        val buildUUID = UUID.randomUUID().toString()
 
         if (isDebug) logger.warn("Bugsee: Adding buildUUID $buildUUID to ${outputFile.path}")
 

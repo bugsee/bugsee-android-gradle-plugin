@@ -228,6 +228,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         ) { task ->
             task.debug.set(extension.debug)
             task.optimizeExtensionsLoading.set(extension.optimizeExtensionsLoading)
+            // Variant + plugin version feed the deterministic BUILD_UUID
+            // derivation in the task action (see BugseeManifestTask
+            // KDoc). Pre-resolved here at registration time so the
+            // task action stays CC-safe and the @Input annotations
+            // make Gradle's up-to-date check key on the right state.
+            task.variantName.set(variant.name)
+            task.pluginVersion.set(PLUGIN_VERSION)
             task.detectedExtensions.set(
                 project.layout.buildDirectory.file(
                     "intermediates/bugsee/${variant.name}/detected-extensions.txt"
