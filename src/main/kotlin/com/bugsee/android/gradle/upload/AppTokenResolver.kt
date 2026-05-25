@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.upload
 
 import com.bugsee.android.gradle.BugseePluginExtension
+import com.bugsee.android.gradle.config.BUGSEE_PROPERTIES_FILENAME
 import com.bugsee.android.gradle.util.StringResourceResolver
 import org.gradle.api.Project
 import org.gradle.api.logging.Logger
@@ -9,7 +10,6 @@ import java.io.File
 internal object AppTokenResolver {
 
     private const val APP_TOKEN_TAG = "com.bugsee.android.APP_TOKEN"
-    private const val PROPERTIES_FILE_NAME = "bugsee.properties"
     private const val PROPERTIES_TOKEN_KEY = "app_token"
 
     private fun maskToken(token: String): String {
@@ -84,7 +84,7 @@ internal object AppTokenResolver {
         logger: Logger,
         debug: Boolean,
     ): String? {
-        val file = File(rootProjectDir, PROPERTIES_FILE_NAME)
+        val file = File(rootProjectDir, BUGSEE_PROPERTIES_FILENAME)
         if (!file.isFile) return null
         val props = java.util.Properties()
         try {

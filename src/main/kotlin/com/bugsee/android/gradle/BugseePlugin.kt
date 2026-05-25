@@ -3,6 +3,7 @@ package com.bugsee.android.gradle
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.bugsee.android.gradle.config.PluginPropertiesApplier
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
@@ -42,6 +43,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     override fun apply(project: Project) {
         val extension = project.extensions.create(PLUGIN_NAME, BugseePluginExtension::class.java)
         pluginExtension = extension
+
+        // Apply <rootProject>/bugsee.properties `plugin.*` overrides as
+        // Gradle Property conventions BEFORE the user's `bugsee { … }`
+        // DSL block evaluates. Convention precedence then naturally
+        // yields:
+        //   DSL .set(...)  >  bugsee.properties plugin.X  >  built-in default
+        // because every extension property is initialised with
+        // `objects.property(...).convention(default)`, the applier
+        // calls `.convention(propsValue)` which supersedes the default,
+        // and the user's DSL `.set(...)` later supersedes both.
+        PluginPropertiesApplier.applyTo(project, extension)
 
         // Register the per-build timing service once per Gradle build.
         // The shared-services container deduplicates across subprojects
