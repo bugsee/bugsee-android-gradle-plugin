@@ -105,8 +105,17 @@ abstract class AppStartupTracingClassVisitorFactory :
         // Recompute class kinds for this specific class (isInstrumentable
         // was a coarse opt-in; we still need the kind set here to pick
         // the right candidate methods).
+        //
+        // Then gate the kind set by tier — at MINIMAL only APPLICATION
+        // and CONTENT_PROVIDER are active; INITIALIZER /
+        // COMPONENT_REGISTRAR / CONFIGURATION_PROVIDER kick in at
+        // STANDARD and above. Filtering kinds (rather than methods)
+        // means a class that ONLY qualifies as one of the STANDARD+
+        // kinds gets `candidates.isEmpty()` at MINIMAL and bails out
+        // cheaply at [shouldInstantiateVisitor] — no visitor allocation,
+        // no per-method overhead.
         val current = classContext.currentClassData
-        val kinds = classifyKinds(current)
+        val kinds = kindsActiveAtTier(classifyKinds(current), tier)
         val candidates = StartupMethodFilter.candidateMethodsFor(kinds)
 
         if (!shouldInstantiateVisitor(candidates, tier)) {
@@ -126,7 +135,8 @@ abstract class AppStartupTracingClassVisitorFactory :
         if (isInDenylist(classData.className)) {
             return false
         }
-        if (classifyKinds(classData).isNotEmpty()) {
+        val tier = resolveTier()
+        if (kindsActiveAtTier(classifyKinds(classData), tier).isNotEmpty()) {
             return true
         }
         // FULL tier extends instrumentability to ANY non-denylisted
@@ -142,7 +152,7 @@ abstract class AppStartupTracingClassVisitorFactory :
         // pre-scan optimization (skip classes whose raw bytecode
         // doesn't contain the literal string "BugseeTrace") to cut
         // this cost by 10-100× depending on annotation density.
-        return resolveTier().picksUpAnnotated()
+        return tier.picksUpAnnotated()
     }
 
     /**
@@ -408,3 +418,53 @@ internal fun shouldInstantiateVisitor(
     candidates: Set<MethodKey>,
     tier: StartupTier,
 ): Boolean = candidates.isNotEmpty() || tier.picksUpAnnotated()
+
+/**
+ * Returns the subset of [kinds] that are active at [tier], per the
+ * tier ladder documented on [StartupTier]:
+ *
+ *  - [StartupTier.MINIMAL] covers `Application` + `ContentProvider`.
+ *  - [StartupTier.STANDARD] and above additionally cover AndroidX
+ *    `Initializer`, Firebase `ComponentRegistrar`, and WorkManager
+ *    `Configuration.Provider`.
+ *
+ * Filtering kinds (rather than methods, or rather than gating per-kind
+ * inside the visitor) means a class that ONLY qualifies for one of the
+ * STANDARD+ kinds returns an empty candidate set at MINIMAL — no
+ * [AppStartupTracingClassVisitor] is allocated and no per-method wrap
+ * overhead is paid. Likewise [AsmClassVisitorFactory.isInstrumentable]
+ * returns `false` for such classes at MINIMAL, so AGP doesn't even
+ * route them through the factory.
+ *
+ * Extracted as a top-level internal function for the same reason as
+ * [shouldInstantiateVisitor] — unit-testable without instantiating the
+ * AGP machinery.
+ *
+ * Regression history: an earlier revision evaluated kinds without tier
+ * gating, so MINIMAL silently paid the wrap cost for every Initializer
+ * / ComponentRegistrar / Configuration.Provider on the classpath even
+ * though the documented contract restricts MINIMAL to Application +
+ * ContentProvider. See `AppStartupTracingClassVisitorFactoryGatingTest`.
+ */
+internal fun kindsActiveAtTier(
+    kinds: Set<ClassKind>,
+    tier: StartupTier,
+): Set<ClassKind> {
+    if (kinds.isEmpty()) return kinds
+    // STANDARD and above: all kinds are active. Hot path; return the
+    // same Set reference so the caller's downstream code (membership
+    // tests) hits the immutable per-kind table without an extra copy.
+    if (tier >= StartupTier.STANDARD) return kinds
+    // MINIMAL (and OFF, though OFF is short-circuited by the caller):
+    // keep only the kinds covered by the MINIMAL contract. Iterate
+    // once; the kind set has at most 5 elements so the overhead is
+    // trivial.
+    var minimal: HashSet<ClassKind>? = null
+    for (k in kinds) {
+        if (k == ClassKind.APPLICATION || k == ClassKind.CONTENT_PROVIDER) {
+            if (minimal == null) minimal = HashSet(2)
+            minimal.add(k)
+        }
+    }
+    return minimal ?: emptySet()
+}

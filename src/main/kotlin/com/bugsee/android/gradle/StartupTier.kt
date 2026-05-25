@@ -10,7 +10,13 @@ package com.bugsee.android.gradle
  *  - [OFF] — instrumentation disabled. No bytecode rewriting.
  *  - [MINIMAL] — Application + ContentProvider init methods wrapped at the
  *    method level only (one start/end pair per `attachBaseContext`,
- *    `onCreate`, `attachInfo`).
+ *    `onCreate`, `attachInfo`). The AndroidX startup pass is invisible at
+ *    this tier: `androidx.startup.InitializationProvider` is excluded
+ *    by exact-FQN short-circuit (to avoid double-counting against
+ *    individual Initializer spans at STANDARD+), and user-defined
+ *    `Initializer.create()` methods are out of scope. Choose this tier
+ *    when you want startup spans on YOUR own Application / ContentProvider
+ *    only.
  *  - [STANDARD] — adds AndroidX `Initializer.create`, Firebase
  *    `ComponentRegistrar.getComponents`, WorkManager
  *    `Configuration.Provider.getWorkManagerConfiguration` to the scope,

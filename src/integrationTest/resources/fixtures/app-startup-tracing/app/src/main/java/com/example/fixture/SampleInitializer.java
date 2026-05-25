@@ -9,7 +9,10 @@ import java.util.List;
 
 /**
  * Subject under test for the INITIALIZER kind. The plugin should wrap the
- * `create()` method with a method span at MINIMAL+ tiers.
+ * {@code create()} method with a method span at {@code STANDARD+} tiers.
+ * At {@code MINIMAL} the Initializer kind is intentionally excluded
+ * (only Application + ContentProvider qualify); at {@code OFF} no kind
+ * is wrapped.
  *
  * Written in Java (not Kotlin) on purpose: Kotlin's compilation of
  * {@code Initializer<Unit>} emits two `create` methods — a `Unit`-typed

@@ -115,14 +115,20 @@ class AppStartupTracingTierMatrixTest(private val tier: String) {
     }
 
     private fun assertMinimalTier(idx: InstrumentedBytecodeIndex.Index) {
-        // Method wraps in each kind-candidate; no calls/loops. Per
-        // issue 2, each kind routes to its specific dispatcher pair.
+        // Method wraps in Application + ContentProvider only; no
+        // calls/loops. Per issue 2, each kind routes to its specific
+        // dispatcher pair.
         assertHasMethodWrap(idx, SAMPLE_APP, "onCreate", APPLICATION_PAIR)
         assertHasMethodWrap(idx, SAMPLE_APP, "attachBaseContext", APPLICATION_PAIR)
         assertHasMethodWrap(idx, SAMPLE_PROVIDER, "attachInfo", PROVIDER_PAIR)
         assertHasMethodWrap(idx, SAMPLE_PROVIDER, "onCreate", PROVIDER_PAIR)
-        // Initializer falls back to the generic METHOD pair.
-        assertHasMethodWrap(idx, SAMPLE_INITIALIZER, "create", METHOD_PAIR)
+        // MINIMAL drops Initializer / ComponentRegistrar /
+        // Configuration.Provider per the [StartupTier.MINIMAL]
+        // contract — actively pin the exclusion so a future
+        // tier-ladder regression that re-included them at MINIMAL
+        // would fail this test (not just produce a silent
+        // performance regression).
+        assertNoDispatcherCalls(idx, SAMPLE_INITIALIZER, "create")
         assertNoCallWraps(idx, SAMPLE_APP, "onCreate")
         assertNoLoopWraps(idx, SAMPLE_APP, "onCreate")
         // TracedHelper.tracedWork is not picked up below FULL.

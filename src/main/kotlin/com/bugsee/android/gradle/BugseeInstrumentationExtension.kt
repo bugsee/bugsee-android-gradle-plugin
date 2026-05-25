@@ -164,13 +164,44 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      * Returns the DSL property for the given instrumentation key, or `null`
      * if the key does not match any known boolean property.
      *
-     * Tier-driven instrumentations (currently only `appStartupTracing` via
-     * [startupTier]) are intentionally absent — they own their own enum-typed
-     * DSL surface and bypass the boolean gate in `InstrumentationRegistrar`.
+     * **Intentionally absent keys (return null by design):**
+     *  - `appStartupTracing` — tier-driven via [startupTier]; bypasses
+     *    the boolean gate in `InstrumentationRegistrar` because the
+     *    enum-typed DSL surface owns its own disable logic.
+     *  - `extensionsInit` — non-toggleable; the extension-stripping
+     *    bytecode rewrite is load-bearing for the manifest-task
+     *    contract (the manifest task strips extension providers from
+     *    the merged manifest and inserts the compensating
+     *    `register*Extension()` calls via this bytecode rewrite —
+     *    they MUST run as a paired unit). Marked `isTierDriven = true`
+     *    in `ExtensionsInitInstrumentation` so the registrar bypasses
+     *    the boolean gate.
+     *
+     * **Why both snake_case and camelCase variants of certain keys?**
+     * The historical `Instrumentation.key` of the HttpEngine instrumentation
+     * is `"http_engine"` (snake_case) for compatibility with existing
+     * `gradle.properties` / manifest-meta-data entries that already use that
+     * form. The DSL surface, however, exposes the property as
+     * [httpEngine] (camelCase). Without an alias here, a key-based lookup
+     * with the camelCase form (`isFeatureEnabled("httpEngine")` — which a
+     * future call site or a user-typed Gradle-property + matching manifest
+     * lookup could plausibly use) would fall through to the next source
+     * and silently bypass the typed DSL setting. The same kind of
+     * future-proofing applies to [ktor] and [cronet], which today are
+     * read only via direct property access (auto-install code path) but
+     * may pick up keyed lookups in future revisions.
+     *
+     * Maintaining both forms is cheap; the lookup is exhaustive over the
+     * DSL's boolean properties so a future addition that forgets to wire
+     * the new property here will be caught by
+     * `BugseeInstrumentationExtensionPropertyForKeyTest` rather than
+     * silently disabling the DSL switch on the new feature.
      */
     internal fun propertyForKey(key: String): Property<Boolean>? = when (key) {
         "okhttp" -> okhttp
-        "http_engine" -> httpEngine
+        // HttpEngine: snake_case is the canonical registrar key; camelCase
+        // alias matches the DSL property name.
+        "http_engine", "httpEngine" -> httpEngine
         "log" -> log
         "thread" -> thread
         "mainThreadMisuse" -> mainThreadMisuse
@@ -178,6 +209,12 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
         "compose" -> compose
         "composeSecure" -> composeSecure
         "composeInput" -> composeInput
+        // Ktor / Cronet: today read only via direct property access in
+        // the auto-install flow, but the keyed path is wired so a future
+        // bytecode-instrumentation addition that uses these keys honors
+        // the DSL setting on day one.
+        "ktor" -> ktor
+        "cronet" -> cronet
         else -> null
     }
 }
