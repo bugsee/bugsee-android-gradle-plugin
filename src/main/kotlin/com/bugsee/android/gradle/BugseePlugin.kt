@@ -7,6 +7,8 @@ import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
+import com.bugsee.android.gradle.manifest.BugseeAssetInjectionTask
+import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
 import com.bugsee.android.gradle.upload.AppTokenResolver
 import com.bugsee.android.gradle.upload.BuildTimingService
@@ -172,46 +174,90 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
             if (isDebug) project.logger.warn("Bugsee: Configuring variant $variantName")
 
+            // Gate every plugin-side wiring on `variant is
+            // ApplicationVariant`. The bugsee plugin's contract is
+            // application-scoped — crash + mapping + symbol upload
+            // is meaningful per APK/AAB build, not per library AAR.
+            //
+            // Critically, this also prevents a quiet correctness bug
+            // on library variants: the manifest task strips Bugsee
+            // extension `<provider>` entries (under the default
+            // `optimizeExtensionsLoading=true`) and writes their FQNs
+            // to a sidecar file consumed by the **bytecode** visitor
+            // that inlines `register<Name>Extension()` calls into the
+            // SDK's `BugseeInitProvider.initializeExtensions()`. That
+            // bytecode rewrite is itself application-scoped (it
+            // modifies `BugseeInitProvider`, which lives in the
+            // consumer app, not in any library). So if the manifest
+            // task ran on a library variant, it would strip the
+            // provider AND there'd be no compensating bytecode in the
+            // AAR — the resulting library, consumed by an app, would
+            // ship a `<provider>` stripped from the merged manifest
+            // and with no auto-registration replacement, breaking the
+            // extension at runtime. The narrow fix is to scope every
+            // plugin side-effect to `ApplicationVariant`, which is
+            // also what the README has always documented.
+            if (variant !is ApplicationVariant) {
+                if (isDebug) {
+                    project.logger.warn(
+                        "Bugsee: skipping plugin wiring for non-application variant " +
+                            "$variantName (${variant.javaClass.simpleName}). " +
+                            "The bugsee plugin only configures application modules; " +
+                            "see README on consuming the SDK in a library module."
+                    )
+                }
+                return@onVariants
+            }
+
             // --- Manifest UUID injection + extension provider stripping ---
+            // Pre-R8 manifest transform writes a deterministic *fallback*
+            // BUILD_UUID into the manifest meta-data.
             val manifestTaskProvider = registerManifestTask(project, variant, extension, capitalizedVariant)
 
+            // --- BUILD_UUID resolve + asset injection (post-R8) ---
+            // Post-R8 task hashes mapping.txt content for the real
+            // BUILD_UUID; asset-injection transform writes it into
+            // `assets/bugsee_build_id.properties` for the SDK to read at
+            // runtime. When R8 is off, both tasks observe the absent
+            // mapping and fall back to the same UUID the manifest task
+            // already wrote — asset and manifest stay in sync.
+            registerBuildIdResolveAndAssetTasks(
+                project, variant, manifestTaskProvider, capitalizedVariant
+            )
+
             // --- Application variant specific tasks (upload mapping, NDK symbols, bundle) ---
-            if (variant is ApplicationVariant) {
-                registerMappingUploadTask(project, variant, extension, capitalizedVariant)
+            registerMappingUploadTask(project, variant, extension, capitalizedVariant)
 
-                if (extension.ndk.enabled.get()) {
-                    registerNativeUploadTask(project, variant, extension, capitalizedVariant)
-                }
+            if (extension.ndk.enabled.get()) {
+                registerNativeUploadTask(project, variant, extension, capitalizedVariant)
+            }
 
-                // Build-info registration runs by default for every
-                // matching variant. Size analysis is a sub-feature
-                // that piggybacks on the same task — when both are
-                // active, the task additionally requests a presigned
-                // PUT URL and ships the artefact bytes.
-                if (shouldRegisterBuildInfoFor(project, variant, extension, isDebug)) {
-                    registerBundleUploadTask(project, variant, extension, capitalizedVariant)
-                }
+            // Build-info registration runs by default for every
+            // matching variant. Size analysis is a sub-feature
+            // that piggybacks on the same task — when both are
+            // active, the task additionally requests a presigned
+            // PUT URL and ships the artefact bytes.
+            if (shouldRegisterBuildInfoFor(project, variant, extension, isDebug)) {
+                registerBundleUploadTask(project, variant, extension, capitalizedVariant)
             }
 
             // --- Bytecode instrumentation (application modules only) ---
-            if (variant is ApplicationVariant) {
-                val sourceManifest = project.file("src/main/AndroidManifest.xml")
-                val configResolver = InstrumentationConfigResolver(
-                    extension.instrumentation,
-                    project,
-                    sourceManifest.takeIf { it.exists() }
+            val sourceManifest = project.file("src/main/AndroidManifest.xml")
+            val configResolver = InstrumentationConfigResolver(
+                extension.instrumentation,
+                project,
+                sourceManifest.takeIf { it.exists() }
+            )
+            if (configResolver.isGloballyEnabled()) {
+                val extras = listOf(
+                    ExtensionsInitInstrumentation(extension, manifestTaskProvider),
                 )
-                if (configResolver.isGloballyEnabled()) {
-                    val extras = listOf(
-                        ExtensionsInitInstrumentation(extension, manifestTaskProvider),
-                    )
-                    val registrar = InstrumentationRegistrar(
-                        project, project.logger, isDebug, configResolver, extras
-                    )
-                    registrar.applyAll(variant)
-                } else {
-                    if (isDebug) project.logger.warn("Bugsee: Bytecode instrumentation is globally disabled")
-                }
+                val registrar = InstrumentationRegistrar(
+                    project, project.logger, isDebug, configResolver, extras
+                )
+                registrar.applyAll(variant)
+            } else {
+                if (isDebug) project.logger.warn("Bugsee: Bytecode instrumentation is globally disabled")
             }
         }
     }
@@ -240,6 +286,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     "intermediates/bugsee/${variant.name}/detected-extensions.txt"
                 )
             )
+            // Side-file carrying the fallback UUID forward to the
+            // post-R8 resolve task. See KDoc on
+            // BugseeManifestTask.fallbackBuildId / BugseeBuildIdResolveTask
+            // for why this isn't recomputed downstream.
+            task.fallbackBuildId.set(
+                project.layout.buildDirectory.file(
+                    "intermediates/bugsee/${variant.name}/fallback-build-id.txt"
+                )
+            )
             task.group = "bugsee"
             task.description = "Injects Bugsee BUILD_UUID and consolidates extension providers for $capitalizedVariant"
         }
@@ -253,6 +308,91 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             .toTransform(SingleArtifact.MERGED_MANIFEST)
 
         return taskProvider
+    }
+
+    /**
+     * Registers the post-R8 BUILD_UUID resolve task and the assets-
+     * stage injection task that writes the resolved value into
+     * `assets/bugsee_build_id.properties`.
+     *
+     * The contract:
+     *   - The resolve task listens to AGP's `OBFUSCATION_MAPPING_FILE`
+     *     artifact. When R8 produces it, AGP sequences the resolve
+     *     task to run AFTER. When R8 is off, the listener fires
+     *     without a mapping file present — fallback derivation kicks in.
+     *   - The asset injection task transforms AGP's `ASSETS` artifact.
+     *     It additionally depends on the resolve task's output file,
+     *     which transitively pulls the post-R8 ordering through the
+     *     assets pipeline.
+     *
+     * Together: the SDK at runtime reads a UUID that's either
+     * mapping-derived (when R8 ran) or manifest-derived (when R8
+     * didn't), and the build pipeline produces it without ever
+     * trying to mutate the manifest after R8 — which AGP doesn't
+     * support and Sentry's plugin specifically routes around.
+     */
+    private fun registerBuildIdResolveAndAssetTasks(
+        project: Project,
+        variant: com.android.build.api.variant.Variant,
+        manifestTaskProvider: org.gradle.api.tasks.TaskProvider<BugseeManifestTask>,
+        capitalizedVariant: String,
+    ) {
+        // Resolve task — derives the final UUID from mapping.txt when
+        // present, otherwise from the manifest fallback. Writes a
+        // single-line text file consumed by the asset task.
+        val resolveTaskProvider = project.tasks.register(
+            "resolveBugsee${capitalizedVariant}BuildId",
+            BugseeBuildIdResolveTask::class.java,
+        ) { task ->
+            // T1's side file: the fallback UUID it already derived
+            // from (manifest + variant + plugin). Re-deriving here
+            // wouldn't match — see [BugseeBuildIdResolveTask.fallbackBuildId]
+            // KDoc for the AGP-artifact-replacement reason.
+            task.fallbackBuildId.set(
+                manifestTaskProvider.flatMap { it.fallbackBuildId }
+            )
+            task.resolvedBuildIdFile.set(
+                project.layout.buildDirectory.file(
+                    "intermediates/bugsee/${variant.name}/build-id.txt"
+                )
+            )
+            task.group = "bugsee"
+            task.description =
+                "Resolves the Bugsee BUILD_UUID for $capitalizedVariant from mapping.txt (post-R8)"
+        }
+
+        // `toListenTo(OBFUSCATION_MAPPING_FILE)` (AGP 8.3+) places this
+        // task downstream of R8 when R8 runs for the variant. AGP
+        // wires the artifact into the task's `mappingFile` property
+        // and orders the task graph accordingly — no manual
+        // `dependsOn(:minifyXxxWithR8)`, which would be fragile across
+        // AGP versions and configurations like DexGuard.
+        variant.artifacts.use(resolveTaskProvider)
+            .wiredWith(BugseeBuildIdResolveTask::mappingFile)
+            .toListenTo(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+
+        // Asset injection task — copies AGP's merged assets, drops
+        // our build-id file in. The `resolvedBuildIdFile` input creates
+        // the transitive ordering: assets pipeline now flows through
+        // the resolve task, which itself depends on R8.
+        val assetTaskProvider = project.tasks.register(
+            "injectBugsee${capitalizedVariant}BuildId",
+            BugseeAssetInjectionTask::class.java,
+        ) { task ->
+            task.resolvedBuildIdFile.set(
+                resolveTaskProvider.flatMap { it.resolvedBuildIdFile }
+            )
+            task.group = "bugsee"
+            task.description =
+                "Injects Bugsee BUILD_UUID asset for $capitalizedVariant"
+        }
+
+        variant.artifacts.use(assetTaskProvider)
+            .wiredWithDirectories(
+                BugseeAssetInjectionTask::inputAssetsDir,
+                BugseeAssetInjectionTask::outputAssetsDir,
+            )
+            .toTransform(SingleArtifact.ASSETS)
     }
 
     private fun registerMappingUploadTask(

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Bugsee extension provider declared in a LIBRARY manifest.
+             If the plugin were to apply its manifest-stripping
+             transform to this library variant, this provider would
+             be removed from the merged AAR manifest — but the
+             compensating bytecode that inlines
+             `registerFeedbackExtension()` into
+             `BugseeInitProvider.initializeExtensions()` is
+             application-only. So a consumer app pulling in the
+             AAR would inherit a stripped manifest (no provider)
+             AND no compensating bytecode (the inlining never ran
+             on the library). The extension would silently never
+             auto-register at runtime.
+
+             The plugin's fix is to gate every wiring (including
+             this manifest transform) on `variant is ApplicationVariant`
+             in the `onVariants` callback, so library variants are
+             a no-op. This test asserts the AAR ships with the
+             provider intact. -->
+        <provider
+            android:name="com.bugsee.library.BugseeFeedbackInitProvider"
+            android:authorities="${applicationId}.bugseefeedbackinitprovider"
+            android:exported="false" />
+    </application>
+
+</manifest>
