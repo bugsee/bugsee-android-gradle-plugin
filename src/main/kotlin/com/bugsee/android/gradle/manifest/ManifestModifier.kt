@@ -16,6 +16,68 @@ internal object ManifestModifier {
     private const val BUILD_UUID_TAG = "com.bugsee.android.BUILD_UUID"
 
     /**
+     * Returns a [DocumentBuilderFactory] hardened against XML External
+     * Entity (XXE) attacks per OWASP guidance.
+     *
+     * The threat surface here is build-time only — the parsers consume
+     * AndroidManifest.xml files that come from the user's own project
+     * sources or AGP intermediates. A practical attack requires
+     * either (a) the build author intentionally putting malicious XML
+     * into their own manifest, or (b) an upstream dependency's AAR
+     * manifest including a DOCTYPE / external entity. Case (b) is the
+     * realistic one in a compromised-dependency scenario, where a
+     * malicious library could exfiltrate local files via DTD-resolution
+     * side effects when the BugseeManifestTask parses the merged
+     * manifest. Defense-in-depth is cheap; turn off every feature an
+     * AndroidManifest does not legitimately need.
+     *
+     * Wrap each `setFeature` in try/catch: not every JAXP parser
+     * implementation supports every flag (XInclude support, in
+     * particular, varies). Failing to set one feature should not break
+     * the build — we set as many as we can and proceed.
+     */
+    internal fun secureDocumentBuilderFactory(): DocumentBuilderFactory {
+        val factory = DocumentBuilderFactory.newInstance()
+        // Block DOCTYPE entirely. AndroidManifest.xml never legitimately
+        // uses one. With doctype blocked the rest of the XXE feature
+        // matrix is mostly moot — entities require a doctype to declare
+        // them — but we set the remainder for belt-and-braces against
+        // any non-standard parser that interprets entities outside the
+        // doctype.
+        runCatching {
+            factory.setFeature(
+                "http://apache.org/xml/features/disallow-doctype-decl",
+                true,
+            )
+        }
+        runCatching {
+            factory.setFeature(
+                "http://xml.org/sax/features/external-general-entities",
+                false,
+            )
+        }
+        runCatching {
+            factory.setFeature(
+                "http://xml.org/sax/features/external-parameter-entities",
+                false,
+            )
+        }
+        runCatching {
+            factory.setFeature(
+                "http://apache.org/xml/features/nonvalidating/load-external-dtd",
+                false,
+            )
+        }
+        // XInclude can pull in arbitrary URLs even without a doctype.
+        runCatching { factory.isXIncludeAware = false }
+        // Expand-entity-references is a separate switch from external
+        // entities; closing both narrows the parser's behaviour to
+        // exactly what an Android manifest needs.
+        runCatching { factory.isExpandEntityReferences = false }
+        return factory
+    }
+
+    /**
      * Fully-qualified name of the core SDK init provider. We never strip
      * this one — it's the consolidation target, not a consolidation
      * source.
@@ -40,7 +102,7 @@ internal object ManifestModifier {
      * @return true if the application element was found and modified, false otherwise
      */
     fun addBuildUuidToManifest(manifestFile: File, buildUuid: String): Boolean {
-        val docFactory = DocumentBuilderFactory.newInstance().apply {
+        val docFactory = secureDocumentBuilderFactory().apply {
             isNamespaceAware = true
         }
         val doc = docFactory.newDocumentBuilder().parse(manifestFile)
@@ -93,7 +155,7 @@ internal object ManifestModifier {
     fun removeExtensionInitProviders(manifestFile: File): List<String> {
         if (!manifestFile.isFile) return emptyList()
 
-        val docFactory = DocumentBuilderFactory.newInstance().apply {
+        val docFactory = secureDocumentBuilderFactory().apply {
             isNamespaceAware = true
         }
         val doc = docFactory.newDocumentBuilder().parse(manifestFile)
@@ -120,7 +182,23 @@ internal object ManifestModifier {
         if (toRemove.isEmpty()) return emptyList()
 
         for (node in toRemove) {
-            application.removeChild(node)
+            // Remove via the node's actual parent rather than
+            // hardcoding `application.removeChild(node)`. The
+            // `getElementsByTagName("provider")` walk above
+            // returns descendants at ANY depth (DOM Level 1
+            // contract), so a `<provider>` nested inside an
+            // intermediate wrapping element — possible under
+            // unusual AGP manifest-merger output for build-type /
+            // flavor overlays — would yield a match whose parent
+            // is NOT `application`. The prior
+            // `application.removeChild(node)` would throw
+            // `DOMException.NOT_FOUND_ERR` in that case, taking
+            // the build down with a confusing stack trace. The
+            // null-safe parent-removal handles ALL parents
+            // correctly and silently no-ops if the node was
+            // already detached during iteration (which can't
+            // currently happen but is harmless to guard against).
+            node.parentNode?.removeChild(node)
         }
         writeDocument(doc, manifestFile)
         return removed
@@ -130,7 +208,7 @@ internal object ManifestModifier {
      * Extracts the value of a specific meta-data tag from the manifest.
      */
     fun getMetaDataValue(manifestFile: File, metaDataName: String): String? {
-        val docFactory = DocumentBuilderFactory.newInstance().apply {
+        val docFactory = secureDocumentBuilderFactory().apply {
             isNamespaceAware = true
         }
         val doc = docFactory.newDocumentBuilder().parse(manifestFile)
@@ -187,7 +265,7 @@ internal object ManifestModifier {
     }
 
     private fun parseManifest(manifestFile: File): Document {
-        val docFactory = DocumentBuilderFactory.newInstance().apply {
+        val docFactory = secureDocumentBuilderFactory().apply {
             isNamespaceAware = true
         }
         val doc = docFactory.newDocumentBuilder().parse(manifestFile)
@@ -196,12 +274,38 @@ internal object ManifestModifier {
     }
 
     private fun writeDocument(doc: Document, file: File) {
-        val transformer = TransformerFactory.newInstance().newTransformer().apply {
+        val factory = TransformerFactory.newInstance()
+        // XSLT hardening — symmetric with [secureDocumentBuilderFactory]
+        // on the parsing side. While the Transformer's threat surface
+        // is narrower (it serialises an already-parsed DOM, no entity
+        // resolution by default), it can still honour XSLT-level
+        // directives if a malicious DOM somehow injected an
+        // `xsl:import-schema` / `document(...)` /
+        // `system-property(...)` reference. FEATURE_SECURE_PROCESSING
+        // is the JAXP-standard switch the Java specification mandates
+        // every TransformerFactory honor — when true, the factory
+        // imposes XSLT/XPath processing limits documented in JEP
+        // (since Java 8). The ACCESS_EXTERNAL_DTD /
+        // ACCESS_EXTERNAL_STYLESHEET properties further lock down
+        // external-resource resolution.
+        //
+        // Wrap each setter in `runCatching` — the same
+        // implementation-portability concern as the parser-side
+        // hardening applies: not every JAXP TransformerFactory
+        // supports every attribute. Falling through silently for an
+        // unsupported attribute is acceptable defense-in-depth.
+        // Use the literal JAXP property strings instead of
+        // `XMLConstants.*` — `ACCESS_EXTERNAL_*` constants resolve
+        // inconsistently across some plugin-compile classpaths.
+        // The strings are part of the public JAXP contract and
+        // stable since JDK 7 / 8.
+        runCatching { factory.setFeature("http://javax.xml.XMLConstants/feature/secure-processing", true) }
+        runCatching { factory.setAttribute("http://javax.xml.XMLConstants/property/accessExternalDTD", "") }
+        runCatching { factory.setAttribute("http://javax.xml.XMLConstants/property/accessExternalStylesheet", "") }
+        val transformer = factory.newTransformer().apply {
             setOutputProperty(OutputKeys.INDENT, "yes")
             setOutputProperty(OutputKeys.ENCODING, "utf-8")
             setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "4")
-            // Preserve the XML declaration if present
-            val xmlDecl = doc.xmlStandalone
             setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no")
         }
 

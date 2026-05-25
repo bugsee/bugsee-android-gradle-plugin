@@ -2,7 +2,6 @@ package com.bugsee.android.gradle.util
 
 import org.gradle.api.logging.Logger
 import java.io.File
-import javax.xml.parsers.DocumentBuilderFactory
 
 internal object StringResourceResolver {
 
@@ -37,7 +36,14 @@ internal object StringResourceResolver {
 
         val stringResourceFiles = sourceFiles.filter { it.name == "strings.xml" }
 
-        val docBuilderFactory = DocumentBuilderFactory.newInstance()
+        // XXE-hardened factory — see [ManifestModifier.secureDocumentBuilderFactory]
+        // for the OWASP rationale. Threat surface is build-time only;
+        // defense-in-depth against a malicious or compromised
+        // dependency that ships a `<resources>` file with external
+        // entities. Shared accessor keeps the OWASP feature matrix
+        // maintained in exactly one location.
+        val docBuilderFactory =
+            com.bugsee.android.gradle.manifest.ManifestModifier.secureDocumentBuilderFactory()
         for (xmlFile in stringResourceFiles) {
             val doc = docBuilderFactory.newDocumentBuilder().parse(xmlFile)
             val strings = doc.getElementsByTagName("string")

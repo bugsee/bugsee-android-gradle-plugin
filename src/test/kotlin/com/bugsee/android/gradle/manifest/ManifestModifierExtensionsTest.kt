@@ -174,6 +174,71 @@ class ManifestModifierExtensionsTest {
         assertFalse("BugseeStyleInitProvider" in updated)
     }
 
+    @Test
+    fun `provider nested inside a deeper wrapping element is still removed without DOMException`() {
+        // Defensive: `getElementsByTagName("provider")` returns
+        // descendants at ANY depth (DOM Level 1 contract). The prior
+        // implementation called `application.removeChild(node)` which
+        // throws `DOMException.NOT_FOUND_ERR` when `node`'s actual
+        // parent isn't `<application>` directly. Realistic manifests
+        // don't nest providers, but AGP's manifest merger can produce
+        // odd shapes under build-type / flavor overlay scenarios.
+        // The fix routes via `node.parentNode?.removeChild(node)` —
+        // pin that the no-throw contract holds and the nested
+        // provider is still detected and removed.
+        //
+        // The fixture is contrived (Android manifests legitimately
+        // can't have `<application>` inside `<application>`), but it
+        // exercises exactly the bytecode path that handles the case
+        // when `getElementsByTagName` finds a deeper descendant.
+        // Any future shape where AGP nests providers under wrapping
+        // elements is covered by this same path.
+        val manifest = writeManifest("""
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application>
+                    <!-- Direct child: normal path. -->
+                    <provider
+                        android:name="com.bugsee.library.BugseeFeedbackInitProvider"
+                        android:authorities="example.bugseefeedbackinitprovider"
+                        android:exported="false" />
+                    <!-- Nested inside a hypothetical wrapping element.
+                         `getElementsByTagName("provider")` walks the
+                         entire subtree; this provider would have been
+                         a NOT_FOUND_ERR pre-fix. -->
+                    <queries>
+                        <provider
+                            android:name="com.bugsee.library.BugseeNestedInitProvider"
+                            android:authorities="example.bugseenestedinitprovider"
+                            android:exported="false" />
+                    </queries>
+                </application>
+            </manifest>
+        """.trimIndent())
+        // Must NOT throw — pre-fix this would have crashed with
+        // `DOMException: NOT_FOUND_ERR: An attempt was made to
+        // reference a node in a context where it does not exist.`
+        val removed = ManifestModifier.removeExtensionInitProviders(manifest)
+
+        assertEquals(
+            "both extension providers must be detected (direct + nested)",
+            listOf(
+                "com.bugsee.library.BugseeFeedbackInitProvider",
+                "com.bugsee.library.BugseeNestedInitProvider",
+            ),
+            removed,
+        )
+        val updated = manifest.readText()
+        assertFalse(
+            "direct-child extension provider must be stripped",
+            updated.contains("BugseeFeedbackInitProvider"),
+        )
+        assertFalse(
+            "nested extension provider must ALSO be stripped (the load-bearing claim)",
+            updated.contains("BugseeNestedInitProvider"),
+        )
+    }
+
     private fun writeManifest(content: String): File {
         val f = tempFolder.newFile("AndroidManifest.xml")
         f.writeText(content)
