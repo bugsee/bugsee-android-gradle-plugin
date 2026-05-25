@@ -325,6 +325,143 @@ class ChunkedBundleUploaderHttpTest {
         assertEquals(3, chunks.length())
     }
 
+    // ── Auxiliary blob follow-up PUTs (deps + timings) ────────────
+
+    @Test fun `deps + timings PUTs fire after submit when flags are set and URLs returned`() {
+        // The chunked path used to silently drop the deps + timings
+        // detail blobs even when the caller had collected them: the
+        // submit response came back, but the follow-up PUTs were
+        // never made. This test pins the corrected contract — when
+        // the metadata carries `request_*_upload: true` AND the
+        // caller provides a gz file, the auxiliary PUT fires and
+        // the body bytes match what was handed in.
+        val zip = tempZipOfSize(chunkSize.toLong())
+        val depsBytes = "fake-deps-gz-bytes".toByteArray()
+        val timingsBytes = "fake-timings-gz-bytes".toByteArray()
+        val depsFile = tempFileOf(depsBytes)
+        val timingsFile = tempFileOf(timingsBytes)
+
+        val metadata = JSONObject().apply {
+            put("package_id", "com.x")
+            put("uuid", "u-1")
+            // Same flag-coercion the appserver uses; the mock checks
+            // these to decide whether to return upload URLs.
+            put("request_dependencies_upload", true)
+            put("request_timings_upload", true)
+        }
+
+        ChunkedBundleUploader.upload(
+            uploadZip = zip,
+            metadata = metadata,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+            dependenciesGzFile = depsFile,
+            timingsGzFile = timingsFile,
+        )
+
+        // Both PUTs landed in the mock's aux-blob store, in addition
+        // to the chunk PUT for the artefact.
+        val aux = server.storedAuxBlobs()
+        assertEquals(2, aux.size)
+        assertTrue(depsBytes.contentEquals(aux.getValue("dependencies")), "deps bytes round-trip")
+        assertTrue(timingsBytes.contentEquals(aux.getValue("timings")), "timings bytes round-trip")
+
+        // And the request log contains the two PUTs at the expected paths.
+        val reqs = server.recordedRequests()
+        assertEquals(1, reqs.countMatching("PUT", "/aux-blob-store/dependencies"))
+        assertEquals(1, reqs.countMatching("PUT", "/aux-blob-store/timings"))
+    }
+
+    @Test fun `no aux PUTs when flags are absent — chunked submit is the only POST`() {
+        // Default flow: caller doesn't ask for the aux uploads.
+        // The mock-server only returns upload URLs when the
+        // `request_*_upload` flags are set, so the client correctly
+        // sees an empty URL and never fires a PUT. This pins the
+        // negative side of the contract (paired with the positive
+        // assertion above) so a future regression where the client
+        // PUTs unconditionally would surface here.
+        val zip = tempZipOfSize(chunkSize.toLong())
+        val metadata = JSONObject().put("package_id", "com.x").put("uuid", "u-2")
+
+        ChunkedBundleUploader.upload(
+            uploadZip = zip,
+            metadata = metadata,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+            dependenciesGzFile = null,
+            timingsGzFile = null,
+        )
+
+        assertEquals(0, server.storedAuxBlobs().size)
+        assertEquals(0, server.recordedRequests().countMatching("PUT", "/aux-blob-store/*"))
+    }
+
+    @Test fun `flag set but gz file null is a silent skip (no warn-trigger noise)`() {
+        // Edge case: the caller flipped on the flag in metadata but
+        // didn't actually produce a gz blob (collection step
+        // produced nothing or was skipped late). The aux-PUT helper
+        // short-circuits on `gzFile == null` without consulting the
+        // server-returned URL — silent skip, no PUT, no warning.
+        // Captured here so a future maintainer doesn't decide to
+        // treat the absent-gz case as a server bug.
+        val zip = tempZipOfSize(chunkSize.toLong())
+        val metadata = JSONObject().apply {
+            put("package_id", "com.x")
+            put("uuid", "u-3")
+            put("request_dependencies_upload", true)
+        }
+
+        ChunkedBundleUploader.upload(
+            uploadZip = zip,
+            metadata = metadata,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+            dependenciesGzFile = null,   // flag set but no payload
+        )
+
+        assertEquals(0, server.storedAuxBlobs().size)
+    }
+
+    @Test fun `transient failure on deps PUT does NOT unwind the chunked submit`() {
+        // The submit landed the build doc; the artefact stitch is
+        // committed; an HTTP 500 on the follow-up deps PUT is
+        // recorded as a logger.warn but cannot bubble out of
+        // `upload()` and trigger the caller's fallback-to-single-PUT
+        // path. The contract is "aux PUTs are best-effort enrichment;
+        // a failure leaves the build_id valid."
+        val zip = tempZipOfSize(chunkSize.toLong())
+        server.overrideTimes("PUT", "/aux-blob-store/dependencies", status = 500, count = 1)
+
+        val depsFile = tempFileOf("deps".toByteArray())
+        val metadata = JSONObject().apply {
+            put("uuid", "u-4")
+            put("request_dependencies_upload", true)
+        }
+
+        val buildId = ChunkedBundleUploader.upload(
+            uploadZip = zip,
+            metadata = metadata,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+            dependenciesGzFile = depsFile,
+        )
+
+        // Submit + build_id intact even though deps PUT 500'd.
+        assertEquals("build-from-mock", buildId)
+        // The PUT did fire (the mock recorded the attempted request
+        // BEFORE returning 500 — confirms the helper attempted the
+        // upload rather than skipping it).
+        assertEquals(1, server.recordedRequests().countMatching("PUT", "/aux-blob-store/dependencies"))
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
 
     /**
@@ -336,6 +473,15 @@ class ChunkedBundleUploaderHttpTest {
      * (5 MiB ≡ 0 mod 256), so multi-chunk tests silently degenerated
      * into single-unique-hash files.
      */
+    /** Write [bytes] to a fresh temp file marked `deleteOnExit`. Used
+     *  to materialise auxiliary-blob payloads in the aux-PUT tests. */
+    private fun tempFileOf(bytes: ByteArray): File {
+        val f = File.createTempFile("bugsee-aux", ".bin")
+        f.deleteOnExit()
+        f.writeBytes(bytes)
+        return f
+    }
+
     private fun tempZipOfSize(size: Long): File {
         val f = File.createTempFile("bugsee-test", ".zip")
         f.deleteOnExit()

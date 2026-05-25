@@ -238,90 +238,82 @@ internal object BundleUploader {
                 }
             }
 
-            // Best-effort deps PUT — runs whether or not the artefact
-            // PUT happened, but only when the caller provided a gz
-            // blob to upload AND the server returned an endpoint for
-            // it. Wrapped in its own try/catch so a transient deps
-            // PUT failure cannot break the (successful) artefact PUT
-            // or vice versa.
-            if (dependenciesGzFile != null) {
-                if (depsPresignedEndpoint.isEmpty()) {
-                    logger.warn(
-                        "Bugsee: dependencies blob ready but server did not return a presigned URL — skipping."
-                    )
-                } else {
-                    try {
-                        if (debug) logger.warn(
-                            "Bugsee: Uploading dependencies blob to endpoint: " +
-                            redactPresignedUrl(depsPresignedEndpoint)
-                        )
-                        // Content-Type matches the server-side sign
-                        // (`application/octet-stream`) — anything
-                        // else and SigV2 mismatches.
-                        val depsPut = HttpPut(depsPresignedEndpoint)
-                        val depsEntity = FileEntity(dependenciesGzFile)
-                        depsEntity.contentType = BasicHeader(
-                            HTTP.CONTENT_TYPE, "application/octet-stream"
-                        )
-                        depsPut.entity = depsEntity
-                        val depsResp = client.execute(depsPut)
-                        if (depsResp.statusLine.statusCode !in 200..299) {
-                            val body = EntityUtils.toString(depsResp.entity, "utf-8")
-                            logger.warn(
-                                "Bugsee: dependencies upload failed " +
-                                "(status=${depsResp.statusLine.statusCode}): $body"
-                            )
-                        } else if (debug) {
-                            logger.warn("Bugsee: Dependencies upload complete.")
-                        }
-                    } catch (e: Exception) {
-                        logger.warn("Bugsee: dependencies upload failed: ${e.message}")
-                    }
-                }
-            }
+            // Auxiliary blobs — deps + timings — independent of each
+            // other AND of the artefact PUT above. Each is a
+            // best-effort PUT to a server-supplied presigned URL,
+            // wrapped in its own try/catch so a transient failure
+            // here cannot break a (successful) artefact upload, and
+            // vice versa. The inline summaries live in the build doc
+            // (deps_summary on the POST body; build_metadata.timings
+            // inside the same body); these are the detail blobs the
+            // viewer lazy-fetches.
+            uploadAuxiliaryBlob(client, "dependencies", depsPresignedEndpoint, dependenciesGzFile, logger, debug)
+            uploadAuxiliaryBlob(client, "timings", timingsPresignedEndpoint, timingsGzFile, logger, debug)
+        }
+    }
 
-            // Best-effort timings PUT — same posture as the deps PUT
-            // above. Independent of artefact and deps PUTs: a
-            // failure here cannot break either of those, and vice
-            // versa. The inline timings summary is already in the
-            // build doc (via `build_metadata.timings`); the detail
-            // blob is what the viewer's Gantt-chart renderer
-            // lazy-fetches.
-            if (timingsGzFile != null) {
-                if (timingsPresignedEndpoint.isEmpty()) {
-                    logger.warn(
-                        "Bugsee: timings blob ready but server did not return a presigned URL — skipping."
-                    )
-                } else {
-                    try {
-                        if (debug) logger.warn(
-                            "Bugsee: Uploading timings blob to endpoint: " +
-                            redactPresignedUrl(timingsPresignedEndpoint)
-                        )
-                        // Content-Type matches the server-side sign
-                        // (`application/octet-stream`) — anything
-                        // else and SigV2 mismatches.
-                        val timingsPut = HttpPut(timingsPresignedEndpoint)
-                        val timingsEntity = FileEntity(timingsGzFile)
-                        timingsEntity.contentType = BasicHeader(
-                            HTTP.CONTENT_TYPE, "application/octet-stream"
-                        )
-                        timingsPut.entity = timingsEntity
-                        val timingsResp = client.execute(timingsPut)
-                        if (timingsResp.statusLine.statusCode !in 200..299) {
-                            val body = EntityUtils.toString(timingsResp.entity, "utf-8")
-                            logger.warn(
-                                "Bugsee: timings upload failed " +
-                                "(status=${timingsResp.statusLine.statusCode}): $body"
-                            )
-                        } else if (debug) {
-                            logger.warn("Bugsee: Timings upload complete.")
-                        }
-                    } catch (e: Exception) {
-                        logger.warn("Bugsee: timings upload failed: ${e.message}")
-                    }
-                }
+    /**
+     * Best-effort PUT of an auxiliary blob (deps or timings gz) to a
+     * server-supplied presigned URL. Shared between the single-PUT
+     * and chunked-upload paths so both ingress flows produce the
+     * same wire contract (and so a future blob type slots in with
+     * one more call here, not a second copy of the block).
+     *
+     * Contract: independent of every other PUT in the upload flow.
+     * A failure or absence here MUST NOT affect the caller; the
+     * function logs and returns regardless of outcome. The caller is
+     * responsible for keeping `client` alive across all calls.
+     *
+     * @param client an already-built http client to reuse (saves
+     *   re-establishing the TLS connection pool per-blob).
+     * @param label "dependencies" / "timings" — used verbatim in
+     *   log messages so warning lines are greppable.
+     * @param presignedUrl the server-returned PUT URL. Empty string
+     *   means the server didn't ask us to upload — log + skip.
+     * @param gzFile the gzipped blob to PUT. `null` means the
+     *   collection step on the client side produced nothing — silent
+     *   skip (a deps-collection-disabled run shouldn't WARN about a
+     *   missing URL it never asked for).
+     */
+    internal fun uploadAuxiliaryBlob(
+        client: org.apache.http.impl.client.CloseableHttpClient,
+        label: String,
+        presignedUrl: String,
+        gzFile: File?,
+        logger: Logger,
+        debug: Boolean,
+    ) {
+        if (gzFile == null) return
+        if (presignedUrl.isEmpty()) {
+            logger.warn(
+                "Bugsee: $label blob ready but server did not return a presigned URL — skipping."
+            )
+            return
+        }
+        try {
+            if (debug) logger.warn(
+                "Bugsee: Uploading $label blob to endpoint: " +
+                redactPresignedUrl(presignedUrl)
+            )
+            // Content-Type matches the server-side sign
+            // (`application/octet-stream`) — anything else and SigV2
+            // mismatches.
+            val put = HttpPut(presignedUrl)
+            val entity = FileEntity(gzFile)
+            entity.contentType = BasicHeader(HTTP.CONTENT_TYPE, "application/octet-stream")
+            put.entity = entity
+            val resp = client.execute(put)
+            if (resp.statusLine.statusCode !in 200..299) {
+                val body = EntityUtils.toString(resp.entity, "utf-8")
+                logger.warn(
+                    "Bugsee: $label upload failed " +
+                    "(status=${resp.statusLine.statusCode}): $body"
+                )
+            } else if (debug) {
+                logger.warn("Bugsee: $label upload complete.")
             }
+        } catch (e: Exception) {
+            logger.warn("Bugsee: $label upload failed: ${e.message}")
         }
     }
 }

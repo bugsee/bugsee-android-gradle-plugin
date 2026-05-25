@@ -493,6 +493,8 @@ abstract class BundleUploadTask : DefaultTask() {
                         metadata  = JSONObject(json),
                         appToken  = appToken,
                         endpoint  = endpoint.get(),
+                        dependenciesGzFile = depsPayload?.gzFile,
+                        timingsGzFile = timingsPayload?.gzFile,
                         logger    = logger,
                         debug     = isDebug,
                     )

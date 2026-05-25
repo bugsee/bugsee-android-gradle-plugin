@@ -48,6 +48,11 @@ internal class MockBuildsServer(
     private val requestLog = ConcurrentLinkedQueue<Recorded>()
     private val presentChunks = mutableSetOf<String>()
     private val chunkStore = mutableMapOf<String, ByteArray>()
+    // Captured bodies from the auxiliary-blob PUTs (deps / timings).
+    // Keyed by label ("dependencies" / "timings") so tests can assert
+    // that the chunked-upload follow-up PUTs landed AND that the body
+    // bytes match what the client uploaded.
+    private val auxBlobStore = mutableMapOf<String, ByteArray>()
     // Map of "<METHOD> <pathSuffix>" → override stack. pathSuffix may
     // be the literal trailing path or a prefix ending in `*`.
     private val overrides = mutableMapOf<String, ArrayDeque<Override>>()
@@ -70,6 +75,13 @@ internal class MockBuildsServer(
 
     /** Chunk bytes captured by the PUT handler, keyed by sha1. */
     fun storedChunks(): Map<String, ByteArray> = chunkStore.toMap()
+
+    /** Auxiliary-blob bytes captured by the deps / timings PUT handlers,
+     *  keyed by label ("dependencies" / "timings"). Empty when the
+     *  chunked-submit body didn't carry the corresponding
+     *  `request_*_upload` flag (mock won't return a URL, client
+     *  won't PUT, store stays empty). */
+    fun storedAuxBlobs(): Map<String, ByteArray> = auxBlobStore.toMap()
 
     /** Override chunk-options response values. */
     fun setChunkOptions(chunkSize: Int, maxChunks: Int) {
@@ -165,6 +177,8 @@ internal class MockBuildsServer(
                         handleChunksCheck(exchange, body)
                     method == "PUT" && path.startsWith("/chunk-store/") ->
                         handleChunkPut(exchange, path, body)
+                    method == "PUT" && path.startsWith("/aux-blob-store/") ->
+                        handleAuxBlobPut(exchange, path, body)
                     method == "POST" && path.endsWith("/builds/chunked") ->
                         handleSubmitChunked(exchange, body)
                     else -> sendString(exchange, 404, "no handler for $method $path")
@@ -209,9 +223,33 @@ internal class MockBuildsServer(
         sendString(exchange, 200, "")
     }
 
+    private fun handleAuxBlobPut(exchange: HttpExchange, path: String, body: ByteArray) {
+        val label = path.removePrefix("/aux-blob-store/")
+        auxBlobStore[label] = body
+        sendString(exchange, 200, "")
+    }
+
     private fun handleSubmitChunked(exchange: HttpExchange, body: ByteArray) {
-        // Body is recorded; assertions read it from requestLog.
-        val result = JSONObject().apply { put("build_id", buildId) }
+        // Body is recorded for assertion; we additionally inspect
+        // it here to mirror the appserver's gating of the
+        // auxiliary-blob presigned URLs on the client's
+        // `request_*_upload` flags. Without the gate the chunked
+        // path would receive URLs it never asked for and treat the
+        // unexpected presence as a server bug.
+        val req = try {
+            JSONObject(String(body, Charsets.UTF_8))
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val result = JSONObject().apply {
+            put("build_id", buildId)
+            if (req.optBoolean("request_dependencies_upload", false)) {
+                put("dependencies_upload_endpoint", "$baseUrl/aux-blob-store/dependencies")
+            }
+            if (req.optBoolean("request_timings_upload", false)) {
+                put("timings_upload_endpoint", "$baseUrl/aux-blob-store/timings")
+            }
+        }
         sendJsonResult(exchange, 200, result)
     }
 

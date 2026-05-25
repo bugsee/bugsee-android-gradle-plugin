@@ -66,9 +66,22 @@ internal object ChunkedBundleUploader {
      * Upload `uploadZip` via the chunked protocol. Returns the server's
      * `build_id` for logging.
      *
+     * After the chunked submit lands the build doc, this function
+     * also follows up with best-effort PUTs of the optional
+     * dependencies and timings detail blobs (the gz files produced
+     * by the plugin's deps + timings collection passes). The server
+     * returns presigned URLs for each in the submit response, gated
+     * by the corresponding `request_*_upload` flag inside `metadata`.
+     *
      * @param metadata JSON describing the build (uuid, package_id, vcs
      *                 fields, etc.). `chunks` is injected by this
      *                 function; callers should not include it.
+     * @param dependenciesGzFile gzipped deps blob to PUT after submit
+     *                 succeeds, or `null` to skip. The submit
+     *                 response's `dependencies_upload_endpoint`
+     *                 field is consulted only when this is non-null.
+     * @param timingsGzFile gzipped timings blob, same posture as
+     *                 [dependenciesGzFile].
      */
     fun upload(
         uploadZip: File,
@@ -77,6 +90,8 @@ internal object ChunkedBundleUploader {
         endpoint: String,
         logger: Logger,
         debug: Boolean,
+        dependenciesGzFile: File? = null,
+        timingsGzFile: File? = null,
     ): String {
         val http = newHttpClient()
         try {
@@ -142,13 +157,45 @@ internal object ChunkedBundleUploader {
                 }
             }
 
-            val buildId = submitChunked(http, endpoint, appToken, metadata, chunkHashes)
-            if (debug) logger.warn("Bugsee: chunked upload complete build_id=$buildId")
-            return buildId
+            val submitResult = submitChunked(http, endpoint, appToken, metadata, chunkHashes)
+            if (debug) logger.warn("Bugsee: chunked upload complete build_id=${submitResult.buildId}")
+
+            // Follow-up auxiliary blob PUTs. Mirror the single-PUT
+            // path's contract: gated on the caller having supplied a
+            // gz file AND the server having returned a corresponding
+            // presigned URL (which itself is gated on the
+            // `request_*_upload` flag inside `metadata`, decided by
+            // the caller). Reuses the same `http` client so the TLS
+            // connection pool is shared with the chunk PUTs above.
+            // Each PUT is best-effort and independent — a transient
+            // failure here does not unwind the (already-committed)
+            // chunked artefact submission.
+            BundleUploader.uploadAuxiliaryBlob(
+                http, "dependencies", submitResult.depsUploadEndpoint,
+                dependenciesGzFile, logger, debug,
+            )
+            BundleUploader.uploadAuxiliaryBlob(
+                http, "timings", submitResult.timingsUploadEndpoint,
+                timingsGzFile, logger, debug,
+            )
+
+            return submitResult.buildId
         } finally {
             http.close()
         }
     }
+
+    /** Parsed `/builds/chunked` response — `build_id` plus any
+     *  presigned URLs for the optional auxiliary blob PUTs. The URL
+     *  fields are empty strings when the corresponding
+     *  `request_*_upload` flag wasn't set in the submit body (server
+     *  contract).
+     */
+    private data class ChunkedSubmitResult(
+        val buildId: String,
+        val depsUploadEndpoint: String,
+        val timingsUploadEndpoint: String,
+    )
 
     // ── Chunk hashing ─────────────────────────────────────────────
 
@@ -290,7 +337,7 @@ internal object ChunkedBundleUploader {
 
     private fun submitChunked(http: CloseableHttpClient,
                               endpoint: String, appToken: String,
-                              metadata: JSONObject, hashes: List<String>): String {
+                              metadata: JSONObject, hashes: List<String>): ChunkedSubmitResult {
         val post = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken, "/chunked"))
         post.setHeader("Content-Type", "application/json")
         // Clone so we don't mutate the caller's object. The doc on
@@ -316,7 +363,19 @@ internal object ChunkedBundleUploader {
                 // loud so the caller falls back to single-PUT.
                 throw RuntimeException("/builds/chunked returned 2xx without build_id: $responseBody")
             }
-            return buildId
+            // Optional auxiliary URLs. Empty when the caller didn't
+            // ask for them (via `request_*_upload` flags inside
+            // `metadata`); the auxiliary-PUT helper treats an empty
+            // URL paired with a non-null gz file as a server-side
+            // bug and warns. Either way, we don't fail the submit
+            // on a missing URL — the artefact stitch has already
+            // landed and the build doc exists; aux blobs are
+            // best-effort enrichment.
+            return ChunkedSubmitResult(
+                buildId = buildId,
+                depsUploadEndpoint = payload.optString("dependencies_upload_endpoint", ""),
+                timingsUploadEndpoint = payload.optString("timings_upload_endpoint", ""),
+            )
         }
     }
 }
