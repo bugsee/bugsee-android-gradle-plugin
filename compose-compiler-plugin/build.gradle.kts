@@ -33,6 +33,14 @@ repositories {
 
 dependencies {
     compileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.1.0")
+
+    // The Kotlin compiler API is normally `compileOnly` because the
+    // host compiler provides it at plugin load time. Tests need it
+    // available at runtime to construct CompilerConfiguration and
+    // ExtensionStorage instances, so wire it in via testImplementation.
+    testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.1.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation(kotlin("test"))
 }
 
 // --- Publishing ---

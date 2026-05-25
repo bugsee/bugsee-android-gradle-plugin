@@ -47,13 +47,25 @@ class AppStartupTracingFailureModeTest {
             task?.outcome in setOf(TaskOutcome.SUCCESS, TaskOutcome.UP_TO_DATE)
         )
 
-        // Build output should mention the rejection somewhere. We use a
-        // permissive contains() — the exact warning string is the plugin's
-        // implementation detail and not contract.
-        assertTrue(
-            "expected the build output to mention the invalid tier value",
-            result.output.contains("BLERG") || result.output.contains("Invalid")
-                    || result.output.contains("startupTier")
+        // Build output must include the resolver's exact warn shape:
+        // "Bugsee: Invalid startupTier 'BLERG' for Gradle property '...'".
+        // The earlier permissive `contains("BLERG") || contains("Invalid")
+        // || contains("startupTier")` was too loose: the string
+        // `"startupTier"` appears in normal plugin output (Gradle's task
+        // configuration log mentions the typed Property name during
+        // configuration), so the OR-chain trivially passed on virtually
+        // any build, including builds where the resolver had silently
+        // accepted the invalid value or never logged anything. Tighten to
+        // the joint contract: BOTH the warn prefix AND the rejected token
+        // must appear, AND the warn line as a whole must mention
+        // "startupTier" (not just the same letters elsewhere in build
+        // log). Matches `InstrumentationConfigResolver.kt:82`.
+        val warnLine = result.output.lineSequence().firstOrNull { line ->
+            line.contains("Bugsee: Invalid startupTier") && line.contains("'BLERG'")
+        }
+        assertNotNull(
+            "expected a warn matching `Bugsee: Invalid startupTier 'BLERG'`; full output:\n${result.output}",
+            warnLine,
         )
 
         // The transform must still have produced bytecode at the default

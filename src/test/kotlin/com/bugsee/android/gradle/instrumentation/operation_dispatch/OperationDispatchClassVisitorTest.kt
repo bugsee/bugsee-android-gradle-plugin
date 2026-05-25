@@ -252,4 +252,72 @@ class OperationDispatchClassVisitorTest {
             "Both <init> calls paired with NEWs must be remapped (got $inits)",
         )
     }
+
+    @Test
+    fun `nested news of MISMATCHED types pop in LIFO order (FIS inside FOS)`() {
+        // `new FileOutputStream(new FileInputStream(f).getFD())` —
+        // stack push order: outer FOS, then inner FIS. LIFO pop order
+        // must be inner-first: the inner <init> (a FileInputStream
+        // constructor) consumes the inner pendingRemaps entry, leaving
+        // only the outer FOS entry for the outer <init>. A FIFO
+        // mutation (`removeFirst()` / `first()` in the matcher) would
+        // try to pair the inner FIS <init> against the FRONT of the
+        // deque — which is the outer FOS entry — and the type-equality
+        // check would fail, leaving the inner <init> dispatched
+        // through the regular operation-dispatch wrap (owner stays
+        // `java/io/FileInputStream`, not remapped to
+        // `BugseeFileInputStream`).
+        //
+        // This is the test that genuinely distinguishes LIFO from FIFO.
+        // The same-types nested test above cannot, because both deque
+        // entries are identical so `first() == last()`.
+        val source = """
+            import java.io.File;
+            import java.io.FileInputStream;
+            import java.io.FileOutputStream;
+            import java.io.IOException;
+            public class NestMixed {
+                public static void chain(File f) throws IOException {
+                    FileOutputStream fos = new FileOutputStream(new FileInputStream(f).getFD());
+                    fos.close();
+                }
+            }
+        """.trimIndent()
+
+        val compiled = JavaSourceCompiler.compile("NestMixed.java", source)
+        val transformed = transformOpDispatch(compiled.getValue("NestMixed"))
+        // verify() omitted — references BugseeFileInputStream and BugseeFileOutputStream.
+
+        val news = newOwners(transformed, "chain")
+        val inits = initOwners(transformed, "chain")
+
+        // Source-code order is: NEW FileOutputStream first (outer),
+        // then NEW FileInputStream (inner argument-expression). javac
+        // emits them in that order.
+        assertEquals(
+            listOf(
+                "com/bugsee/library/adapters/BugseeFileOutputStream",
+                "com/bugsee/library/adapters/BugseeFileInputStream",
+            ),
+            news,
+            "Both NEWs must be remapped to their wrapper types in source order",
+        )
+
+        // Bytecode order of the <init> calls is reversed: the inner
+        // FIS is constructed first (its `getFD()` is the arg to the
+        // outer FOS constructor), then the outer FOS. So inits[0] is
+        // the inner FIS init, inits[1] is the outer FOS init. Under
+        // LIFO both are remapped; under FIFO, inits[0] would be the
+        // raw `java/io/FileInputStream` because the matcher would
+        // (incorrectly) consult the deque's front entry, which is the
+        // outer FOS remap.
+        assertEquals(
+            listOf(
+                "com/bugsee/library/adapters/BugseeFileInputStream",
+                "com/bugsee/library/adapters/BugseeFileOutputStream",
+            ),
+            inits,
+            "LIFO order: inner FIS <init> pairs with inner NEW; outer FOS <init> pairs with outer NEW",
+        )
+    }
 }

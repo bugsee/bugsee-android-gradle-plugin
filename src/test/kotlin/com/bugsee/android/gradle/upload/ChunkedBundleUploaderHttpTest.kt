@@ -408,6 +408,17 @@ class ChunkedBundleUploaderHttpTest {
         // server-returned URL — silent skip, no PUT, no warning.
         // Captured here so a future maintainer doesn't decide to
         // treat the absent-gz case as a server bug.
+        //
+        // Pinning BOTH (a) the absent PUT AND (b) the absence of a
+        // `logger.warn` call closes a coverage gap the prior
+        // assertion left open: a mutation that removed the
+        // `if (gzFile == null) return` short-circuit would still
+        // produce zero PUTs (because `FileEntity(null)` would NPE
+        // inside the `try` and the catch would suppress it), but
+        // would emit a warn — silently turning a clean path into a
+        // noisy one. Asserting `recordingLogger.warnMessages.isEmpty()`
+        // catches that mutation directly.
+        val recordingLogger = RecordingLogger()
         val zip = tempZipOfSize(chunkSize.toLong())
         val metadata = JSONObject().apply {
             put("package_id", "com.x")
@@ -420,12 +431,16 @@ class ChunkedBundleUploaderHttpTest {
             metadata = metadata,
             appToken = appToken,
             endpoint = server.baseUrl,
-            logger = logger,
+            logger = recordingLogger,
             debug = false,
             dependenciesGzFile = null,   // flag set but no payload
         )
 
         assertEquals(0, server.storedAuxBlobs().size)
+        assertTrue(
+            recordingLogger.warnMessages.isEmpty(),
+            "absent gz file must be a clean short-circuit; got warns: ${recordingLogger.warnMessages}",
+        )
     }
 
     @Test fun `transient failure on deps PUT does NOT unwind the chunked submit`() {
@@ -599,6 +614,100 @@ private class SilentLogger : Logger {
     override fun error(marker: org.slf4j.Marker?, format: String?, vararg arguments: Any?) {}
     override fun error(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
     // Gradle Logger-specific methods (LogLevel-based).
+    override fun isLifecycleEnabled(): Boolean = false
+    override fun lifecycle(msg: String?) {}
+    override fun lifecycle(msg: String?, vararg arguments: Any?) {}
+    override fun lifecycle(msg: String?, t: Throwable?) {}
+    override fun isQuietEnabled(): Boolean = false
+    override fun quiet(msg: String?) {}
+    override fun quiet(msg: String?, vararg arguments: Any?) {}
+    override fun quiet(msg: String?, t: Throwable?) {}
+    override fun isEnabled(level: org.gradle.api.logging.LogLevel?): Boolean = false
+    override fun log(level: org.gradle.api.logging.LogLevel?, message: String?) {}
+    override fun log(level: org.gradle.api.logging.LogLevel?, message: String?, vararg objects: Any?) {}
+    override fun log(level: org.gradle.api.logging.LogLevel?, message: String?, throwable: Throwable?) {}
+}
+
+/**
+ * Captures every `warn(...)` call's message text so a test can assert
+ * exactly which warns fired (or that none did). Other log levels
+ * remain no-ops — we only need warn-level introspection to
+ * disambiguate "clean short-circuit" from "exception swallowed in
+ * catch" code paths.
+ *
+ * Why isWarnEnabled returns `true`: code under test (`BundleUploader.
+ * uploadAuxiliaryBlob`) may guard `warn` calls on
+ * `if (logger.isWarnEnabled())`. Returning `true` ensures the warn
+ * would land if production code emits one, so a missing assertion
+ * line in the test never silently passes due to the message being
+ * gated off.
+ */
+private class RecordingLogger : Logger {
+    val warnMessages: MutableList<String> = mutableListOf()
+    private fun recordWarn(msg: String?) {
+        if (msg != null) warnMessages.add(msg)
+    }
+    override fun getName(): String = "recording"
+    override fun isTraceEnabled(): Boolean = false
+    override fun isTraceEnabled(p: org.slf4j.Marker?): Boolean = false
+    override fun trace(msg: String?) {}
+    override fun trace(format: String?, arg: Any?) {}
+    override fun trace(format: String?, arg1: Any?, arg2: Any?) {}
+    override fun trace(format: String?, vararg arguments: Any?) {}
+    override fun trace(msg: String?, t: Throwable?) {}
+    override fun trace(marker: org.slf4j.Marker?, msg: String?) {}
+    override fun trace(marker: org.slf4j.Marker?, format: String?, arg: Any?) {}
+    override fun trace(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) {}
+    override fun trace(marker: org.slf4j.Marker?, format: String?, vararg arguments: Any?) {}
+    override fun trace(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
+    override fun isDebugEnabled(): Boolean = false
+    override fun isDebugEnabled(p: org.slf4j.Marker?): Boolean = false
+    override fun debug(msg: String?) {}
+    override fun debug(format: String?, arg: Any?) {}
+    override fun debug(format: String?, arg1: Any?, arg2: Any?) {}
+    override fun debug(format: String?, vararg arguments: Any?) {}
+    override fun debug(msg: String?, t: Throwable?) {}
+    override fun debug(marker: org.slf4j.Marker?, msg: String?) {}
+    override fun debug(marker: org.slf4j.Marker?, format: String?, arg: Any?) {}
+    override fun debug(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) {}
+    override fun debug(marker: org.slf4j.Marker?, format: String?, vararg arguments: Any?) {}
+    override fun debug(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
+    override fun isInfoEnabled(): Boolean = false
+    override fun isInfoEnabled(p: org.slf4j.Marker?): Boolean = false
+    override fun info(msg: String?) {}
+    override fun info(format: String?, arg: Any?) {}
+    override fun info(format: String?, arg1: Any?, arg2: Any?) {}
+    override fun info(format: String?, vararg arguments: Any?) {}
+    override fun info(msg: String?, t: Throwable?) {}
+    override fun info(marker: org.slf4j.Marker?, msg: String?) {}
+    override fun info(marker: org.slf4j.Marker?, format: String?, arg: Any?) {}
+    override fun info(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) {}
+    override fun info(marker: org.slf4j.Marker?, format: String?, vararg arguments: Any?) {}
+    override fun info(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
+    override fun isWarnEnabled(): Boolean = true
+    override fun isWarnEnabled(p: org.slf4j.Marker?): Boolean = true
+    override fun warn(msg: String?) { recordWarn(msg) }
+    override fun warn(format: String?, arg: Any?) { recordWarn(format) }
+    override fun warn(format: String?, arg1: Any?, arg2: Any?) { recordWarn(format) }
+    override fun warn(format: String?, vararg arguments: Any?) { recordWarn(format) }
+    override fun warn(msg: String?, t: Throwable?) { recordWarn(msg) }
+    override fun warn(marker: org.slf4j.Marker?, msg: String?) { recordWarn(msg) }
+    override fun warn(marker: org.slf4j.Marker?, format: String?, arg: Any?) { recordWarn(format) }
+    override fun warn(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) { recordWarn(format) }
+    override fun warn(marker: org.slf4j.Marker?, format: String?, vararg arguments: Any?) { recordWarn(format) }
+    override fun warn(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) { recordWarn(msg) }
+    override fun isErrorEnabled(): Boolean = false
+    override fun isErrorEnabled(p: org.slf4j.Marker?): Boolean = false
+    override fun error(msg: String?) {}
+    override fun error(format: String?, arg: Any?) {}
+    override fun error(format: String?, arg1: Any?, arg2: Any?) {}
+    override fun error(format: String?, vararg arguments: Any?) {}
+    override fun error(msg: String?, t: Throwable?) {}
+    override fun error(marker: org.slf4j.Marker?, msg: String?) {}
+    override fun error(marker: org.slf4j.Marker?, format: String?, arg: Any?) {}
+    override fun error(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) {}
+    override fun error(marker: org.slf4j.Marker?, format: String?, vararg arguments: Any?) {}
+    override fun error(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
     override fun isLifecycleEnabled(): Boolean = false
     override fun lifecycle(msg: String?) {}
     override fun lifecycle(msg: String?, vararg arguments: Any?) {}
