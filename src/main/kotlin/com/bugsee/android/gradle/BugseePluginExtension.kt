@@ -25,6 +25,14 @@ import javax.inject.Inject
  *     }
  * }
  * ```
+ *
+ * Every property below is also settable via
+ * `<rootProject>/bugsee.properties` using the matching `plugin.<path>`
+ * key (e.g. `plugin.debug=true`, `plugin.buildInfo.sizeAnalysis.enabled=true`).
+ * DSL `.set(…)` calls take precedence over the properties file, which
+ * itself takes precedence over the built-in defaults. See the
+ * plugin's README and [com.bugsee.android.gradle.config.PluginPropertiesApplier]
+ * for the full key reference and precedence rules.
  */
 
 abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory) {

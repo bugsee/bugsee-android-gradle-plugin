@@ -55,6 +55,9 @@ import javax.inject.Inject
  * viewer can warn the user that the displayed list is partial. The
  * appserver also enforces a defensive cap on the server side
  * regardless of this value.
+ *
+ * Each property is also settable via
+ * `plugin.buildInfo.dependencies.<name>` in `bugsee.properties`.
  */
 abstract class BugseeDependenciesCollectionExtension @Inject constructor(objects: ObjectFactory) {
 

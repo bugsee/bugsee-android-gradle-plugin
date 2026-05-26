@@ -42,6 +42,9 @@ import javax.inject.Inject
  *     }
  * }
  * ```
+ *
+ * Each property is also settable via
+ * `plugin.buildInfo.sizeCheck.<name>` in `bugsee.properties`.
  */
 abstract class BugseeSizeCheckExtension @Inject constructor(objects: ObjectFactory) {
 

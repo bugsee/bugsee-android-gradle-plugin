@@ -36,6 +36,9 @@ import javax.inject.Inject
  *
  * Mirrors [BugseeDependenciesCollectionExtension] in shape and intent so
  * the two sub-features can be reasoned about together.
+ *
+ * `enabled` is also settable via `plugin.buildInfo.timings.enabled`
+ * in `bugsee.properties`.
  */
 abstract class BugseeTimingsCollectionExtension @Inject constructor(objects: ObjectFactory) {
 

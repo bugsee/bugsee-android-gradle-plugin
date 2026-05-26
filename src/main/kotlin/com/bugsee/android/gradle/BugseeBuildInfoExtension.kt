@@ -35,6 +35,10 @@ import javax.inject.Inject
  *     }
  * }
  * ```
+ *
+ * Every nested property is also settable via
+ * `plugin.buildInfo.<path>` in `<rootProject>/bugsee.properties`;
+ * DSL `.set(…)` wins. See the plugin README for the full key list.
  */
 abstract class BugseeBuildInfoExtension @Inject constructor(objects: ObjectFactory) {
 

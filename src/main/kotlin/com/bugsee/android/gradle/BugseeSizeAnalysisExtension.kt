@@ -28,6 +28,9 @@ import javax.inject.Inject
  * live under [BugseeBuildInfoExtension.sizeCheck], NOT here — the
  * check only needs the recorded `artifact_size` scalar (always sent
  * as part of build-info), not the full size-tree analysis.
+ *
+ * Each property is also settable via
+ * `plugin.buildInfo.sizeAnalysis.<name>` in `bugsee.properties`.
  */
 abstract class BugseeSizeAnalysisExtension @Inject constructor(objects: ObjectFactory) {
 
