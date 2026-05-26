@@ -77,7 +77,7 @@ class AppStartupTracingInstrumentationTest {
         // because no dependency was present. Add a real bugsee-android
         // external dependency to the project so the probe would succeed,
         // and assert OFF still wins.
-        addBugseeAndroidDependency(project)
+        addBugseeAndroidDependency(project, COMPATIBLE_SDK_VERSION)
         extension.startupTier.set(StartupTier.OFF)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         org.junit.Assert.assertFalse(instrumentation.shouldApply(project))
@@ -88,7 +88,46 @@ class AppStartupTracingInstrumentationTest {
         // actually returns true when a matching dep is present at a
         // non-OFF tier. Combined with the OFF-with-dep test above, this
         // pair distinguishes the OFF gate from the dependency gate.
-        addBugseeAndroidDependency(project)
+        addBugseeAndroidDependency(project, COMPATIBLE_SDK_VERSION)
+        extension.startupTier.set(StartupTier.STANDARD)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
+    }
+
+    @Test fun `tier STANDARD with too-old bugsee-android version returns false`() {
+        // Version-gate test: a `com.bugsee:bugsee-android` declared at a
+        // version that predates `BugseeAppStartupDispatcher` MUST cause
+        // `shouldApply` to refuse instrumentation, otherwise the plugin
+        // injects INVOKESTATIC calls against a missing class and the
+        // host app crashes at launch with NoClassDefFoundError.
+        addBugseeAndroidDependency(project, "6.5.0")
+        extension.startupTier.set(StartupTier.STANDARD)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertFalse(instrumentation.shouldApply(project))
+    }
+
+    @Test fun `tier STANDARD with unparseable version still returns true`() {
+        // Dynamic / range versions (e.g. `7.+`, version catalogs that
+        // haven't resolved at config time) parse to null and the gate
+        // must be permissive: proceed with instrumentation rather than
+        // refuse. Catches a regression that flips the null branch to
+        // "fail-closed", which would silently disable APM for anyone
+        // using version catalogs.
+        addBugseeAndroidDependency(project, "7.+")
+        extension.startupTier.set(StartupTier.STANDARD)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
+    }
+
+    @Test fun `tier STANDARD with one-tick-above-min version returns true`() {
+        // Boundary test on the integration side: a version that's
+        // strictly newer than MIN_SDK_VERSION_WITH_DISPATCHER (which
+        // is 7.0.0-beta11 today) must pass the gate. Catches a
+        // mutation that bumps the MIN constant to a stricter value
+        // — `COMPATIBLE_SDK_VERSION` (exact-min) and `6.5.0` (clearly
+        // below) wouldn't catch a one-tick-too-strict shift, but
+        // 7.0.0-beta12 here will.
+        addBugseeAndroidDependency(project, "7.0.0-beta12")
         extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
@@ -101,8 +140,15 @@ class AppStartupTracingInstrumentationTest {
      * actually resolve the artifacts — the detector only walks declared
      * dependency metadata, not the resolved classpath.
      */
-    private fun addBugseeAndroidDependency(project: Project) {
+    private fun addBugseeAndroidDependency(project: Project, version: String) {
         val config = project.configurations.maybeCreate("bugseeProbe")
-        project.dependencies.add(config.name, "com.bugsee:bugsee-android:1.0.0")
+        project.dependencies.add(config.name, "com.bugsee:bugsee-android:$version")
+    }
+
+    private companion object {
+        // Any version >= MIN_SDK_VERSION_WITH_DISPATCHER. Pinned to the
+        // current SDK release so the positive-control tests test against
+        // the same surface the SDK ships today.
+        const val COMPATIBLE_SDK_VERSION = "7.0.0-beta11"
     }
 }

@@ -5,7 +5,6 @@ import com.bugsee.android.gradle.StartupTier
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import org.objectweb.asm.ClassVisitor
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * ASM class visitor factory for app-startup tracing.
@@ -45,18 +44,19 @@ import java.util.concurrent.ConcurrentHashMap
  *    `superClasses` / `interfaces`. At FULL tier the result is widened
  *    to include any non-denylisted class so per-method annotation
  *    pickup can run on it.
- *  - **[createClassVisitor]** is the SDK-side fine filter: refuses to
- *    emit bytecode that references `BugseeAppStartupDispatcher` if
- *    that class is missing from the runtime classpath visible to the
- *    current AGP transform context. Misses are silent — they happen
- *    legitimately for transitive third-party classes processed via
- *    AGP's artifact-transform isolation boundary where the consumer's
- *    `:library` dep isn't on the classpath. After this gate the
- *    factory re-classifies kinds, picks the candidate method set,
- *    and instantiates the tier-aware [AppStartupTracingClassVisitor].
- *    The bare class-name check via [ClassContext.loadClassData] is
- *    intentionally simple — no version parsing, just "is the type
- *    resolvable?".
+ *  - **[createClassVisitor]** re-classifies kinds, picks the candidate
+ *    method set, and instantiates the tier-aware
+ *    [AppStartupTracingClassVisitor]. SDK-presence gating is NOT done
+ *    here per-class — see [AppStartupTracingInstrumentation.shouldApply],
+ *    which checks `bugsee-android` is declared AND meets the
+ *    minimum version that ships `BugseeAppStartupDispatcher` once at
+ *    configuration time. The previous per-class
+ *    `ClassContext.loadClassData` probe was unreliable across AGP's
+ *    artifact-transform isolation boundaries (it spuriously returned
+ *    `null` for third-party JARs whose transform context didn't see
+ *    the consumer's `:library` dep, causing non-deterministic skip of
+ *    valid instrumentation targets like `androidx.startup.InitializationProvider`
+ *    and `io.sentry.android.core.SentryInitProvider`).
  */
 abstract class AppStartupTracingClassVisitorFactory :
     AsmClassVisitorFactory<AppStartupTracingParameters> {
@@ -73,34 +73,24 @@ abstract class AppStartupTracingClassVisitorFactory :
             return nextClassVisitor
         }
 
-        // SDK presence probe — refuse to inject calls against a class
-        // that is not on the runtime classpath. Without this, an older
-        // SDK paired with this plugin would produce NoClassDefFoundError
-        // at every wrapped method's first call.
-        //
-        // The probe is a per-class no-op once we've seen the SDK at
-        // least once on this dispatcher FQN (cached in the static
-        // [sSdkPresenceConfirmed]); see [isSdkPresent]'s KDoc for the
-        // PRESENT-only caching rationale.
-        //
-        // Misses are silent. They legitimately happen for transitive
-        // third-party JAR classes (`androidx.viewbinding.*`,
-        // `androidx.databinding.*`, `org.intellij.lang.annotations.*`,
-        // etc.) at FULL tier when AGP processes them via the artifact-
-        // transform isolation boundary — the dispatcher class lives in
-        // the consumer's `:library` dep which is not on the artifact
-        // transform's classpath. Skipping those is correct (we never
-        // want to instrument arbitrary `androidx.*` code anyway) but
-        // they're indistinguishable at probe time from a genuine
-        // SDK-absent build. If the SDK is truly missing the plugin
-        // simply emits no instrumentation calls and the user notices
-        // the empty waterfall — a `NoClassDefFoundError` would have
-        // been louder but is not needed for any current consumer
-        // scenario (the SDK + plugin are version-coupled and shipped
-        // together).
-        if (!isSdkPresent(classContext, dispatcherClassFqn)) {
-            return nextClassVisitor
-        }
+        // SDK presence is verified once at plugin apply() time via
+        // [AppStartupTracingInstrumentation.shouldApply]'s
+        // DependencyDetector.hasBugseeDependency check. We deliberately
+        // do NOT re-probe per-class via [ClassContext.loadClassData]
+        // here: AGP processes project classes and external-JAR classes
+        // through DIFFERENT artifact-transform isolation boundaries,
+        // each with its own classpath. Third-party JARs (e.g.
+        // `androidx.startup`, `io.sentry.android.core`) run in
+        // isolation boundaries where the consumer's `:library` dep is
+        // NOT visible — a per-class probe would spuriously return
+        // false for those JARs and silently skip valid instrumentation
+        // targets, producing different waterfalls across otherwise
+        // identical builds depending on AGP's transform-pipeline
+        // ordering. The SDK + plugin are version-coupled and shipped
+        // together (per the apply-time DependencyDetector contract);
+        // SDK version skew would surface as a `NoClassDefFoundError`
+        // at runtime with an obvious stack trace pointing at the
+        // dispatcher FQN, which is sufficient.
 
         // Recompute class kinds for this specific class (isInstrumentable
         // was a coarse opt-in; we still need the kind set here to pick
@@ -186,17 +176,15 @@ abstract class AppStartupTracingClassVisitorFactory :
 
     private fun computeKinds(classData: ClassData): Set<ClassKind> {
         // AndroidX `InitializationProvider` is itself a `ContentProvider`
-        // — its `onCreate` / `attachInfo` would match the
-        // CONTENT_PROVIDER kind set. But that same method calls each
-        // user-defined `Initializer.create()` which is independently
-        // instrumented at STANDARD+ via the INITIALIZER kind. Wrapping
-        // both yields a double-counted parent span for the entire
-        // AndroidX-startup pass. Skip the AndroidX provider itself by
-        // exact FQN so user-defined `Initializer` instrumentation stays
-        // intact and the startup waterfall remains clean.
-        if (classData.className == "androidx.startup.InitializationProvider") {
-            return emptySet()
-        }
+        // and is intentionally NOT excluded — its `onCreate` is the
+        // umbrella span under which each user-defined
+        // `Initializer.create()` (independently instrumented at
+        // STANDARD+ via the INITIALIZER kind) appears as a nested
+        // child. This matches Sentry's behavior and gives the startup
+        // waterfall the proper parent/child structure for the
+        // AndroidX-startup pass (and surfaces a span even when an app
+        // pulls in `androidx.startup` transitively without registering
+        // any Initializers itself).
         val kinds = HashSet<ClassKind>(2)
         val supers = classData.superClasses
         // superClasses is the transitive chain (immediate parent first,
@@ -222,65 +210,6 @@ abstract class AppStartupTracingClassVisitorFactory :
             kinds += ClassKind.CONFIGURATION_PROVIDER
         }
         return kinds
-    }
-
-    /**
-     * Returns whether the dispatcher class is on the runtime classpath
-     * visible to the current AGP transform context. Probes via
-     * {@link ClassContext#loadClassData(String)} on each call until a
-     * PRESENT result is observed; thereafter, the result is cached in
-     * the static [sSdkPresenceConfirmed] and the probe is skipped.
-     *
-     * <p><b>Why we only cache PRESENT, not MISSING.</b> AGP processes
-     * project classes and external-JAR classes via DIFFERENT classpath
-     * contexts. The dispatcher class lives in the consumer's
-     * `:library` dep, which is visible from the {@code :app} module's
-     * own class-transform context but NOT from the artifact transforms
-     * applied to transitive third-party JARs (e.g. {@code androidx.*}
-     * classes). At FULL tier, [isInstrumentable] passes any non-
-     * denylisted class through to {@link #createClassVisitor} so that
-     * the visitor can scan for {@code @BugseeTrace} method
-     * annotations — but the probe will legitimately return {@code null}
-     * for the third-party path. Skipping those classes is the right
-     * call (we never want to instrument arbitrary external code), so
-     * a MISSING cache would be wrong: it would lock in the third-party
-     * answer and skip project classes too.
-     *
-     * <p>Caching PRESENT is still useful: once we see the SDK from any
-     * context (typically the {@code :app} module's own transform), all
-     * subsequent probes for the same FQN short-circuit on the fast
-     * path. The cost on a real SDK-absent build is one
-     * {@link ClassContext#loadClassData} call per visited class —
-     * bounded and not catastrophic, and the eventual symptom on the
-     * runtime side is a clearly diagnosable "no startup spans in the
-     * waterfall".
-     *
-     * <p><b>Why the cache is static, not per-instance.</b> AGP/Gradle
-     * serializes [AsmClassVisitorFactory] instances across the
-     * artifact-transform isolation boundary; an instance field with
-     * non-Gradle-managed state breaks the serialization with
-     * "Could not isolate parameters AsmClassesTransform$Parameters" —
-     * the same bug class as the historical `by lazy` regression (see
-     * [resolveTier]'s KDoc). Static fields are exempt.
-     *
-     * <p>Concurrent-safe: AGP can invoke {@link #createClassVisitor}
-     * across threads when processing project classes in parallel.
-     * Reading {@link Map#containsKey} on a {@link ConcurrentHashMap} is
-     * lock-free; on first PRESENT, multiple threads may all write the
-     * same {@code true} value, which is harmless.
-     */
-    private fun isSdkPresent(
-        classContext: ClassContext,
-        dispatcherClassFqn: String,
-    ): Boolean {
-        if (sSdkPresenceConfirmed.containsKey(dispatcherClassFqn)) {
-            return true
-        }
-        val present = classContext.loadClassData(dispatcherClassFqn) != null
-        if (present) {
-            sSdkPresenceConfirmed[dispatcherClassFqn] = true
-        }
-        return present
     }
 
     private fun isInDenylist(className: String): Boolean {
@@ -341,29 +270,6 @@ abstract class AppStartupTracingClassVisitorFactory :
             "jdk.internal.",
             "org.jetbrains.annotations.",
         )
-
-        /**
-         * Set of dispatcher FQNs confirmed PRESENT on the runtime
-         * classpath. Used as the "stop probing" signal in
-         * [isSdkPresent]; only PRESENT results are cached so that a
-         * transient AGP class-data race on the first class probed
-         * doesn't poison the entire build (see [isSdkPresent]'s KDoc
-         * for the full rationale).
-         *
-         * Modeled as {@code ConcurrentHashMap<String, Boolean>} rather
-         * than a {@link java.util.concurrent.ConcurrentHashMap#newKeySet
-         * set} for Java 8 compatibility — newKeySet only became
-         * available as a default-Set type in newer JDKs and the project
-         * targets older Gradle daemons too.
-         *
-         * Static rather than per-instance: AGP creates a new factory
-         * instance per variant + per artifact-transform isolation
-         * boundary, and a mutable instance field would (a) re-probe per
-         * variant unnecessarily and (b) crash Gradle's parameter-
-         * isolation serialization with NotSerializableException — the
-         * same bug class as the historical `by lazy` regression.
-         */
-        private val sSdkPresenceConfirmed: ConcurrentHashMap<String, Boolean> = ConcurrentHashMap()
 
         /**
          * One-element per-thread cache for {@link #classifyKinds} —
