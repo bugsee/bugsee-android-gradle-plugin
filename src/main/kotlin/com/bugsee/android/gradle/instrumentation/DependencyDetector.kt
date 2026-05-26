@@ -37,6 +37,35 @@ internal object DependencyDetector {
         }
     }
 
+    /**
+     * Returns the declared version string of the matching Bugsee
+     * dependency, or `null` if no match is found or no version is
+     * declared (project deps, dynamic versions without a string form).
+     *
+     * Scans configurations in the order Gradle returns them and yields
+     * the first non-null version. For external deps this is
+     * [org.gradle.api.artifacts.Dependency.getVersion]; project deps
+     * are skipped (they have no string version at declaration time).
+     *
+     * <p>Used by tier-driven instrumentation to bail out early when
+     * the runtime SDK is older than the minimum version that ships
+     * the injected dispatcher symbols.
+     */
+    fun getBugseeDependencyVersion(
+        project: Project,
+        artifactPrefix: String,
+    ): String? {
+        for (config in project.configurations) {
+            for (dep in config.dependencies) {
+                if (isMatchingExternal(dep, artifactPrefix)) {
+                    val v = dep.version
+                    if (!v.isNullOrBlank()) return v
+                }
+            }
+        }
+        return null
+    }
+
     private fun isMatchingExternal(dep: org.gradle.api.artifacts.Dependency, artifactPrefix: String): Boolean {
         return dep.group == BUGSEE_GROUP && dep.name.startsWith(artifactPrefix)
     }
