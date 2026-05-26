@@ -172,6 +172,29 @@ class PluginPropertiesLoaderTest {
     }
 
     @Test
+    fun load_utf8BomPrefix_isStripped_andFirstKeyMatches() {
+        // Windows Notepad and (older) VS Code save UTF-8 files with a
+        // leading BOM character (U+FEFF). Without explicit BOM
+        // stripping, `Properties.load` treats it as part of the first
+        // key — so `﻿plugin.endpoint` is parsed and our prefix
+        // filter rejects it (it starts with U+FEFF, not 'p'). The
+        // user sees no error and no effect.
+        val bom = "﻿"
+        val map = PluginPropertiesLoader.load(
+            "${bom}plugin.endpoint=https://bom.example.com\nplugin.debug=true",
+            logger,
+        )
+
+        assertEquals(
+            "https://bom.example.com", map["endpoint"],
+            "BOM-prefixed first key must be matched the same as a BOM-less " +
+                "one — otherwise users editing the file in Windows tooling " +
+                "would see silent config failures",
+        )
+        assertEquals("true", map["debug"])
+    }
+
+    @Test
     fun load_pluginPrefix_isCaseSensitive() {
         // The contract is `plugin.` lowercase. `Plugin.Debug=true`
         // must NOT be matched (no case-insensitive auto-conversion

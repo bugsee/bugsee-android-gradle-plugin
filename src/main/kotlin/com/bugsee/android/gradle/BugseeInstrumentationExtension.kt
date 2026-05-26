@@ -25,6 +25,14 @@ import javax.inject.Inject
  *
  * Properties without an explicit value fall back to gradle properties,
  * then manifest meta-data, then default `true`.
+ *
+ * Each property is also settable via `plugin.instrumentation.<name>`
+ * in `<rootProject>/bugsee.properties` (see the plugin README and
+ * [com.bugsee.android.gradle.config.PluginPropertiesApplier]).
+ * Note: `plugin.instrumentation.*` keys set the DSL property's
+ * `convention`, which makes `Property.isPresent == true` — that
+ * short-circuits the legacy Gradle-property + manifest-meta-data
+ * fallback chain. The user's DSL `.set(…)` still wins over both.
  */
 abstract class BugseeInstrumentationExtension @Inject constructor(objects: ObjectFactory) {
 

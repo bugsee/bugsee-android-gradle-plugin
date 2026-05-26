@@ -27,6 +27,9 @@ import javax.inject.Inject
  *     }
  * }
  * ```
+ *
+ * Settable via `plugin.ndk.<name>` in `<rootProject>/bugsee.properties`;
+ * DSL `.set(…)` wins. See the plugin README for the full key list.
  */
 abstract class BugseeNdkExtension @Inject constructor(objects: ObjectFactory) {
 

@@ -46,9 +46,18 @@ internal object PluginPropertiesLoader {
         if (text == null) return emptyMap()
         if (text.isBlank()) return emptyMap()
 
+        // Strip a leading UTF-8 BOM (U+FEFF). Without this, Windows
+        // Notepad / VS Code editors that save with BOM-on prepend the
+        // BOM character to the first line — `Properties.load` then
+        // treats `﻿plugin.endpoint` as the key name, which our
+        // prefix filter does NOT match. The first key would silently
+        // route to the unknown-key log and the user would see no
+        // effect from their config.
+        val normalized = text.removePrefix("﻿")
+
         val raw = try {
             val props = Properties()
-            props.load(text.reader())
+            props.load(normalized.reader())
             props
         } catch (e: IOException) {
             // Properties.load wraps unicode-escape failures as IOException

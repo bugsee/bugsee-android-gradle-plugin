@@ -43,6 +43,11 @@ internal object PluginPropertiesApplier {
      *
      * Unknown `plugin.*` keys: logged at `info` so `--info` builds can
      * spot typos without spamming normal builds.
+     *
+     * Idempotent: safe to call multiple times on the same extension.
+     * Each invocation replaces the conventions on the bound properties;
+     * any user `.set(…)` from the DSL is sticky and beats both the
+     * default convention AND any properties-supplied convention.
      */
     fun applyTo(project: Project, extension: BugseePluginExtension) {
         // `providers.fileContents(...)` registers the file as a
@@ -76,13 +81,11 @@ internal object PluginPropertiesApplier {
 
         val bindings = bindings(extension)
         val knownKeys = bindings.mapTo(HashSet()) { it.key }
-        val applied = HashSet<String>(props.size)
 
         for (binding in bindings) {
             val raw = props[binding.key] ?: continue
             try {
                 binding.apply(raw)
-                applied += binding.key
                 if (verbose) {
                     logger.warn(
                         "Bugsee: bugsee.properties applied plugin.${binding.key}=$raw"

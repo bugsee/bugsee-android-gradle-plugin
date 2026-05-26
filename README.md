@@ -159,9 +159,26 @@ note immediately below.
 > underlying DSL `Property` "present" (`isPresent == true`), and
 > `InstrumentationConfigResolver` short-circuits at step 1 — so
 > `plugin.*` BYPASSES the legacy Gradle-property and manifest-meta-data
-> fallbacks for that key. The simpler "DSL > properties > default"
-> chain documented at the top of this file applies to every NON-
-> instrumentation option.
+> fallbacks for that key. The user's DSL `.set(…)` still wins over both
+> sources. The simpler "DSL > properties > default" chain documented at
+> the top of this file applies to every NON-instrumentation option.
+>
+> **CI gotcha.** If your build matrix uses
+> `-Pbugsee.instrumentation.okhttp=false` (the legacy Gradle-property
+> form) to disable instrumentation per-job, that flag is silently
+> ignored once `plugin.instrumentation.okhttp` is set in
+> `bugsee.properties` — the bypass kicks in. To keep CI overrides
+> effective:
+>
+> - Either remove the conflicting `plugin.instrumentation.X` key from
+>   `bugsee.properties` and rely on the legacy `-P` chain, OR
+> - Read the `-P` flag into the DSL explicitly, e.g.
+>   ```kotlin
+>   bugsee { instrumentation {
+>       okhttp.set(findProperty("bugsee.instrumentation.okhttp") as? Boolean ?: true)
+>   } }
+>   ```
+>   so the CLI value flows through the highest-priority DSL slot.
 
 > **App token** — set via the unprefixed key `app_token=…`, not
 > `plugin.appToken`. The DSL provides additional richer forms
@@ -213,10 +230,33 @@ plugin.instrumentation.startupTier=DETAILED
 ```kotlin
 // build.gradle.kts at app module — DSL overrides for this module
 bugsee {
-    // This overrides plugin.endpoint from bugsee.properties:
+    // (1) Overrides plugin.endpoint from bugsee.properties (DSL > properties).
     endpoint.set("https://api.bugsee-internal.example.com")
+
+    // (2) Sets a key that bugsee.properties did NOT touch — the two
+    //     sources are additive; this becomes the effective value.
+    feedback.set(true)
+
+    // (3) Keys NOT mentioned in either source fall back to plugin
+    //     defaults — `ndk.forceDebugSymbolsUpload`, every other
+    //     instrumentation flag, etc. all remain at their built-in
+    //     defaults documented in the tables above.
 }
 ```
+
+**Effective config** for the example above:
+
+| Key | Effective value | From |
+|---|---|---|
+| `endpoint` | `https://api.bugsee-internal.example.com` | DSL (overrides properties) |
+| `feedback` | `true` | DSL (additive — no properties value) |
+| `debug` | `true` | bugsee.properties |
+| `ndk.enabled` | `true` | bugsee.properties |
+| `ndk.forceDebugSymbolsUpload` | `false` | built-in default |
+| `buildInfo.sizeAnalysis.enabled` | `true` | bugsee.properties |
+| `buildInfo.sizeCheck.warningPercent` | `10.0` | bugsee.properties |
+| `instrumentation.startupTier` | `DETAILED` | bugsee.properties |
+| `instrumentation.okhttp` (and others) | `true` | downstream resolver default |
 
 For the full set of DSL options, see KDocs on `BugseePluginExtension`
 and the sub-extension classes (`BugseeNdkExtension`,
