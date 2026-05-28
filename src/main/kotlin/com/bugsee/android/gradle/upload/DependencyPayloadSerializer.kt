@@ -132,6 +132,18 @@ internal object DependencyPayloadSerializer {
             put("direct", e.direct)
             e.scope?.let { put("scope", it) }
             put("type", e.type.wire)
+            // Package ecosystem — REQUIRED by the worker's vuln-scan to
+            // map a dependency onto its OSV ecosystem. Gradle resolves
+            // library deps from Maven-coordinate repositories, so every
+            // LIBRARY entry is OSV's `Maven` ecosystem. Emitted only for
+            // library type: `project` (in-repo module) and `file` (local
+            // artifact) entries have no package ecosystem, and the worker
+            // skips non-library types before it ever reads this field.
+            // Without it the worker drops EVERY entry (no ecosystem -> no
+            // OSV query) and vuln scanning silently finds nothing.
+            if (e.type == DependencyEntry.Type.LIBRARY) {
+                put("ecosystem", "maven")
+            }
             e.selectedReason?.let { put("selected_reason", it) }
             // `parents` is omitted when empty (the common case for
             // direct deps, which dominate the entry count on most

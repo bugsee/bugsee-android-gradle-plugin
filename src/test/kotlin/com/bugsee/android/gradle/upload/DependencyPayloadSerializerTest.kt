@@ -293,4 +293,27 @@ class DependencyPayloadSerializerTest {
         assertEquals("project", arr.getJSONObject(1).getString("type"))
         assertEquals("file",    arr.getJSONObject(2).getString("type"))
     }
+
+    @Test fun `library entries carry ecosystem maven while project and file entries omit it`() {
+        // CROSS-REPO CONTRACT: the worker's vuln-scan maps each library
+        // dep onto an OSV ecosystem via this `ecosystem` field and SKIPS
+        // any entry that lacks one. Gradle library deps are
+        // Maven-coordinate, so every library entry MUST emit
+        // `ecosystem: "maven"` — without it the worker drops every entry
+        // and vulnerability scanning silently finds nothing in
+        // production. project (in-repo module) and file (local artifact)
+        // entries have no package ecosystem and must omit the field
+        // (the worker skips non-library types regardless).
+        val entries = listOf(
+            DependencyEntry("g", "lib", "1", true, "implementation", DependencyEntry.Type.LIBRARY),
+            DependencyEntry("",  ":a",  null, true, "implementation", DependencyEntry.Type.PROJECT),
+            DependencyEntry("",  "f.jar", null, true, "runtimeOnly", DependencyEntry.Type.FILE)
+        )
+        val arr = parseGz(gz(entries)).getJSONArray("dependencies")
+        assertEquals("maven", arr.getJSONObject(0).getString("ecosystem"))
+        assertFalse("project entries must not carry ecosystem",
+                    arr.getJSONObject(1).has("ecosystem"))
+        assertFalse("file entries must not carry ecosystem",
+                    arr.getJSONObject(2).has("ecosystem"))
+    }
 }
