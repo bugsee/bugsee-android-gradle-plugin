@@ -53,22 +53,19 @@ internal object DependencyPayloadSerializer {
             // compares this against the previous build's
             // `collection_config` to decide whether the two lists
             // are apples-to-apples comparable.
-            put("collection_config", JSONObject().apply {
-                put("scope", summary.collectionConfig.scope)
-                put("include_selected_reason", summary.collectionConfig.includeSelectedReason)
-                put("max_count", summary.collectionConfig.maxCount)
-            })
+            put("collection_config", collectionConfigJson(summary.collectionConfig))
         }
 
     /**
      * Render the per-entry list as raw gzipped bytes. The shape:
-     *   `{"schema_version": 1, "dependencies": [...]}`
+     *   `{"schema_version": 1, "truncated": false,
+     *     "collection_config": {...}, "dependencies": [...]}`
      * Each entry serialises only the non-null fields — the worker
      * tolerates absent `version` / `scope` / `selected_reason` as
      * "not applicable".
      */
-    fun entriesGzBytes(entries: List<DependencyEntry>): ByteArray {
-        val obj = entriesJsonObject(entries)
+    fun entriesGzBytes(entries: List<DependencyEntry>, summary: DependenciesSummary): ByteArray {
+        val obj = entriesJsonObject(entries, summary)
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { gz ->
             // Use the JSONObject writer so we don't construct an
@@ -84,22 +81,40 @@ internal object DependencyPayloadSerializer {
      * temp file under `task.temporaryDir`). Returns the same File for
      * call-site chaining.
      */
-    fun writeEntriesGz(entries: List<DependencyEntry>, target: File): File {
+    fun writeEntriesGz(entries: List<DependencyEntry>, summary: DependenciesSummary, target: File): File {
         target.parentFile?.mkdirs()
-        target.writeBytes(entriesGzBytes(entries))
+        target.writeBytes(entriesGzBytes(entries, summary))
         return target
     }
 
     // ── internals ──────────────────────────────────────────────────
 
-    private fun entriesJsonObject(entries: List<DependencyEntry>): JSONObject =
+    private fun entriesJsonObject(entries: List<DependencyEntry>, summary: DependenciesSummary): JSONObject =
         JSONObject().apply {
             put("schema_version", SCHEMA_VERSION)
+            // Blob-level comparability signals. The worker's deps-diff
+            // reads `truncated` + `collection_config` off THIS gzipped
+            // blob (NOT the inline POST summary — it only has the
+            // blob on disk when diffing) to decide whether two builds'
+            // dependency lists are apples-to-apples. Omitting them
+            // collapsed every comparison to the "no known mismatch"
+            // default, so a scope change or a truncated list silently
+            // produced a misleading diff. Mirror the inline summary's
+            // values here so the worker sees the real fingerprint.
+            put("truncated", summary.truncated)
+            put("collection_config", collectionConfigJson(summary.collectionConfig))
             put("dependencies", JSONArray().also { arr ->
                 for (e in entries) {
                     arr.put(entryJson(e))
                 }
             })
+        }
+
+    private fun collectionConfigJson(config: CollectionConfig): JSONObject =
+        JSONObject().apply {
+            put("scope", config.scope)
+            put("include_selected_reason", config.includeSelectedReason)
+            put("max_count", config.maxCount)
         }
 
     private fun entryJson(e: DependencyEntry): JSONObject =

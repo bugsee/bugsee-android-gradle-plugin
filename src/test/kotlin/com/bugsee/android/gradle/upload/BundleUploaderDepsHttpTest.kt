@@ -136,7 +136,11 @@ class BundleUploaderDepsHttpTest {
             type = DependencyEntry.Type.LIBRARY
         ))
         val f = tempFolder.newFile("deps.json.gz")
-        DependencyPayloadSerializer.writeEntriesGz(entries, f)
+        val summary = DependenciesSummary.from(
+            entries, false, 0L,
+            CollectionConfig(scope = "runtime", includeSelectedReason = false, maxCount = 5000)
+        )
+        DependencyPayloadSerializer.writeEntriesGz(entries, summary, f)
         return f
     }
 

@@ -30,6 +30,18 @@ class DependencyPayloadSerializerTest {
         maxCount = 5000
     )
 
+    // Builds the gzipped entries blob the way the upload task does —
+    // deriving the summary from the entries (the blob now embeds the
+    // summary's `truncated` + `collection_config` so the worker can
+    // read them off the blob it downloads).
+    private fun gz(
+        entries: List<DependencyEntry>,
+        truncated: Boolean = false,
+        config: CollectionConfig = defaultConfig
+    ): ByteArray = DependencyPayloadSerializer.entriesGzBytes(
+        entries, DependenciesSummary.from(entries, truncated, 0L, config)
+    )
+
     @Test fun `summaryJson surfaces every scalar field`() {
         val summary = DependenciesSummary(
             total = 142,
@@ -108,7 +120,7 @@ class DependencyPayloadSerializerTest {
                 type = DependencyEntry.Type.PROJECT
             )
         )
-        val parsed = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries))
+        val parsed = parseGz(gz(entries))
         assertEquals(DependencyPayloadSerializer.SCHEMA_VERSION, parsed.getInt("schema_version"))
         val arr = parsed.getJSONArray("dependencies")
         assertEquals(3, arr.length())
@@ -119,6 +131,53 @@ class DependencyPayloadSerializerTest {
         assertEquals(true, first.getBoolean("direct"))
         assertEquals("implementation", first.getString("scope"))
         assertEquals("library", first.getString("type"))
+    }
+
+    @Test fun `entries blob embeds truncated and collection_config (worker reads them off the blob)`() {
+        // CONTRACT (cross-repo): the worker's deps-diff compatibility
+        // check reads `truncated` + `collection_config.scope` off THIS
+        // gzipped blob — not the inline POST summary, which it doesn't
+        // have on disk when diffing. Omitting them collapsed every
+        // comparison to "no known mismatch", so a scope change or a
+        // truncated list silently produced a misleading diff. Pin both
+        // fields at the blob's top level so a regression that dropped
+        // them (reverting to entries-only) is caught here.
+        val entries = listOf(
+            DependencyEntry(
+                group = "g", name = "n", version = "1",
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.LIBRARY
+            )
+        )
+        val config = CollectionConfig(
+            scope = "runtime_direct_only",
+            includeSelectedReason = true,
+            maxCount = 2500
+        )
+        val parsed = parseGz(gz(entries, truncated = true, config = config))
+        assertEquals(true, parsed.getBoolean("truncated"))
+        val cfg = parsed.getJSONObject("collection_config")
+        assertEquals("runtime_direct_only", cfg.getString("scope"))
+        assertEquals(true, cfg.getBoolean("include_selected_reason"))
+        assertEquals(2500, cfg.getInt("max_count"))
+    }
+
+    @Test fun `entries blob truncated defaults to false and mirrors the summary`() {
+        // The dominant (non-truncated) case: the blob must carry
+        // `truncated: false` explicitly, not omit it — the worker
+        // reads `.get('truncated')` and an absent key would read as
+        // None, which it treats the same as false today but pins a
+        // fragile dependency on that coincidence. Emit it explicitly.
+        val entries = listOf(
+            DependencyEntry(
+                group = "g", name = "n", version = "1",
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.LIBRARY
+            )
+        )
+        val parsed = parseGz(gz(entries))  // truncated defaults to false
+        assertTrue("truncated key must be present", parsed.has("truncated"))
+        assertFalse(parsed.getBoolean("truncated"))
     }
 
     @Test fun `null fields are OMITTED on the wire, not serialised as JSON null`() {
@@ -132,7 +191,7 @@ class DependencyPayloadSerializerTest {
             type = DependencyEntry.Type.LIBRARY,
             selectedReason = null
         )
-        val parsed = parseGz(DependencyPayloadSerializer.entriesGzBytes(listOf(transitive)))
+        val parsed = parseGz(gz(listOf(transitive)))
         val first = parsed.getJSONArray("dependencies").getJSONObject(0)
         assertFalse("version must be absent when null", first.has("version"))
         assertFalse("scope must be absent when null", first.has("scope"))
@@ -146,7 +205,7 @@ class DependencyPayloadSerializerTest {
             type = DependencyEntry.Type.LIBRARY,
             selectedReason = "forced"
         )
-        val parsed = parseGz(DependencyPayloadSerializer.entriesGzBytes(listOf(entry)))
+        val parsed = parseGz(gz(listOf(entry)))
         val first = parsed.getJSONArray("dependencies").getJSONObject(0)
         assertEquals("forced", first.getString("selected_reason"))
     }
@@ -158,7 +217,9 @@ class DependencyPayloadSerializerTest {
             direct = true, scope = "implementation",
             type = DependencyEntry.Type.LIBRARY
         ))
-        DependencyPayloadSerializer.writeEntriesGz(entries, target)
+        DependencyPayloadSerializer.writeEntriesGz(
+            entries, DependenciesSummary.from(entries, false, 0L, defaultConfig), target
+        )
         assertTrue("output must exist", target.exists())
         val parsed = parseGz(target.readBytes())
         assertEquals(1, parsed.getJSONArray("dependencies").length())
@@ -181,7 +242,7 @@ class DependencyPayloadSerializerTest {
                 type = DependencyEntry.Type.PROJECT
             )
         )
-        val arr = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries))
+        val arr = parseGz(gz(entries))
             .getJSONArray("dependencies")
         assertEquals("library:androidx.core:core-ktx", arr.getJSONObject(0).getString("id"))
         // project entry: empty group + name=":sub" → three colons total
@@ -207,7 +268,7 @@ class DependencyPayloadSerializerTest {
             type = DependencyEntry.Type.LIBRARY,
             parents = listOf("library:g:a", "library:g:c")
         )
-        val arr = parseGz(DependencyPayloadSerializer.entriesGzBytes(listOf(direct, transitive)))
+        val arr = parseGz(gz(listOf(direct, transitive)))
             .getJSONArray("dependencies")
 
         val directJson = arr.getJSONObject(0)
@@ -226,7 +287,7 @@ class DependencyPayloadSerializerTest {
             DependencyEntry("",  ":a",  null, true, "implementation", DependencyEntry.Type.PROJECT),
             DependencyEntry("",  "f.jar", null, true, "runtimeOnly", DependencyEntry.Type.FILE)
         )
-        val arr = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries))
+        val arr = parseGz(gz(entries))
             .getJSONArray("dependencies")
         assertEquals("library", arr.getJSONObject(0).getString("type"))
         assertEquals("project", arr.getJSONObject(1).getString("type"))

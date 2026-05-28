@@ -761,7 +761,7 @@ abstract class BundleUploadTask : DefaultTask() {
 
         val summaryJson = DependencyPayloadSerializer.summaryJson(result.summary)
         val gz = File(temporaryDir, "bugsee-dependencies.json.gz")
-        DependencyPayloadSerializer.writeEntriesGz(result.entries, gz)
+        DependencyPayloadSerializer.writeEntriesGz(result.entries, result.summary, gz)
         return DepsPayload(summaryJson = summaryJson, gzFile = gz)
     }
 
