@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.operation_dispatch
 
+import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
@@ -16,7 +17,8 @@ import org.objectweb.asm.Opcodes
  *    injects `BugseeOperationDispatcher.onXxxOperationStart/End()` around guarded calls.
  */
 internal class OperationDispatchClassVisitor(
-    nextClassVisitor: ClassVisitor
+    nextClassVisitor: ClassVisitor,
+    private val className: String,
 ) : ClassVisitor(Opcodes.ASM9, nextClassVisitor) {
 
     override fun visitMethod(
@@ -27,7 +29,16 @@ internal class OperationDispatchClassVisitor(
         exceptions: Array<out String>?
     ): MethodVisitor? {
         val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
-        return OperationDispatchMethodVisitor(mv)
+        // Wrap so a failure in our transform (or AGP's frame recomputation)
+        // is attributed to this class+method and re-thrown, never swallowed
+        // into corrupt bytecode. See CatchingMethodVisitor.
+        return CatchingMethodVisitor(
+            Opcodes.ASM9,
+            OperationDispatchMethodVisitor(mv),
+            className,
+            name,
+            descriptor,
+        )
     }
 }
 

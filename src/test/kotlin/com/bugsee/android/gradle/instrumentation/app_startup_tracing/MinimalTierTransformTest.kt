@@ -640,6 +640,7 @@ class MinimalTierTransformTest {
                 candidateMethods = candidateMethods,
                 dispatcherInternalName = dispatcherInternal,
                 tier = StartupTier.MINIMAL,
+                className = "fixtures.Test",
             )
         }
     }

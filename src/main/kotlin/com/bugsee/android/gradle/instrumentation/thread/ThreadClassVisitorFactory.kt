@@ -23,7 +23,11 @@ abstract class ThreadClassVisitorFactory :
             return nextClassVisitor
         }
         val extendsHandlerThread = HANDLER_THREAD in classContext.currentClassData.superClasses
-        return ThreadClassVisitor(nextClassVisitor, extendsHandlerThread)
+        return ThreadClassVisitor(
+            nextClassVisitor,
+            extendsHandlerThread,
+            classContext.currentClassData.className,
+        )
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

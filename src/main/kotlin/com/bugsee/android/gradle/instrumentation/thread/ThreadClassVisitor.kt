@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.thread
 
+import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
@@ -16,7 +17,8 @@ import org.objectweb.asm.Opcodes
  */
 internal class ThreadClassVisitor(
     nextClassVisitor: ClassVisitor,
-    private val extendsHandlerThread: Boolean
+    private val extendsHandlerThread: Boolean,
+    private val className: String,
 ) : ClassVisitor(Opcodes.ASM9, nextClassVisitor) {
 
     private var superName: String? = null
@@ -44,7 +46,12 @@ internal class ThreadClassVisitor(
         val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
         if (name == "run" && descriptor == "()V") {
             hasRunMethod = true
-            return ThreadRunMethodVisitor(mv)
+            // Wrap so a failure in our transform (or AGP's frame
+            // recomputation) is attributed to this class+method and
+            // re-thrown, never swallowed into corrupt bytecode. See
+            // CatchingMethodVisitor. The non-instrumented pass-through
+            // below returns the raw delegate, unwrapped.
+            return CatchingMethodVisitor(Opcodes.ASM9, ThreadRunMethodVisitor(mv), className, name, descriptor)
         }
         return mv
     }
@@ -66,7 +73,12 @@ internal class ThreadClassVisitor(
      * ```
      */
     private fun generateSyntheticRun() {
-        val mv = cv.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null) ?: return
+        val delegate = cv.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null) ?: return
+        // Wrap so a failure emitting the synthetic run() (or AGP's frame
+        // recomputation in visitMaxs) is attributed to this class+method
+        // and re-thrown, never swallowed into corrupt bytecode. See
+        // CatchingMethodVisitor.
+        val mv = CatchingMethodVisitor(Opcodes.ASM9, delegate, className, "run", "()V")
         mv.visitCode()
         // BugseeThreadAdapter.registerThread()
         mv.visitMethodInsn(

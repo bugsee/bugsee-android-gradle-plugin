@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.main_thread_misuse
 
+import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
@@ -13,7 +14,8 @@ import org.objectweb.asm.Opcodes
  * before any method invocation.
  */
 internal class MainThreadMisuseClassVisitor(
-    nextClassVisitor: ClassVisitor
+    nextClassVisitor: ClassVisitor,
+    private val className: String,
 ) : ClassVisitor(Opcodes.ASM9, nextClassVisitor) {
 
     override fun visitMethod(
@@ -24,7 +26,10 @@ internal class MainThreadMisuseClassVisitor(
         exceptions: Array<out String>?
     ): MethodVisitor? {
         val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
-        return MainThreadMisuseMethodVisitor(mv)
+        // Wrap so a failure in our transform (or AGP's frame recomputation)
+        // is attributed to this class+method and re-thrown, never swallowed
+        // into corrupt bytecode. See CatchingMethodVisitor.
+        return CatchingMethodVisitor(Opcodes.ASM9, MainThreadMisuseMethodVisitor(mv), className, name, descriptor)
     }
 }
 

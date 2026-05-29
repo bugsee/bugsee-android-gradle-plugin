@@ -45,6 +45,7 @@ abstract class ExtensionsInitClassVisitorFactory :
             apiVersion = Opcodes.ASM9,
             nextClassVisitor = nextClassVisitor,
             extensionSpecs = specs,
+            className = classContext.currentClassData.className,
         )
     }
 

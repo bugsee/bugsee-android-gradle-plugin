@@ -65,7 +65,7 @@ class OperationDispatchInjectionTest {
 
     private fun transformOpDispatch(bytes: ByteArray): ByteArray =
         AsmTestHarness.transform(bytes) { writer ->
-            OperationDispatchClassVisitor(writer)
+            OperationDispatchClassVisitor(writer, className = "fixtures.Test")
         }
 
     private fun methodInsns(bytes: ByteArray, methodName: String): List<Any> {

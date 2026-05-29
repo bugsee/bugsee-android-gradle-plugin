@@ -118,6 +118,7 @@ abstract class AppStartupTracingClassVisitorFactory :
             candidateMethods = candidates,
             dispatcherInternalName = dispatcherClassFqn.replace('.', '/'),
             tier = tier,
+            className = current.className,
         )
     }
 

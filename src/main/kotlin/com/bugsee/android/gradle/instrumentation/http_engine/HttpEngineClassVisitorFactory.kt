@@ -22,7 +22,7 @@ abstract class HttpEngineClassVisitorFactory :
         if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
             return nextClassVisitor
         }
-        return HttpEngineClassVisitor(nextClassVisitor)
+        return HttpEngineClassVisitor(nextClassVisitor, classContext.currentClassData.className)
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

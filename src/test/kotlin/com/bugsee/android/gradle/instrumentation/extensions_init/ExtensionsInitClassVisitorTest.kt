@@ -137,6 +137,7 @@ class ExtensionsInitClassVisitorTest {
                 Opcodes.ASM9,
                 writer,
                 listOf(specFor("registerFooExtension")),
+                className = "fixtures.Test",
             )
         }
         AsmTestHarness.verify(transformed).assertOk()
@@ -181,6 +182,7 @@ class ExtensionsInitClassVisitorTest {
                 Opcodes.ASM9,
                 writer,
                 listOf(specFor("registerFooExtension")),
+                className = "fixtures.Test",
             )
         }
         AsmTestHarness.verify(transformed).assertOk()
@@ -218,7 +220,7 @@ class ExtensionsInitClassVisitorTest {
     ): ByteArray {
         val original = classes["fixtures.SampleInitProvider"]!!
         return AsmTestHarness.transform(original) { writer ->
-            ExtensionsInitClassVisitor(Opcodes.ASM9, writer, specs)
+            ExtensionsInitClassVisitor(Opcodes.ASM9, writer, specs, className = "fixtures.Test")
         }
     }
 

@@ -22,7 +22,10 @@ abstract class OperationDispatchClassVisitorFactory :
         if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
             return nextClassVisitor
         }
-        return OperationDispatchClassVisitor(nextClassVisitor)
+        return OperationDispatchClassVisitor(
+            nextClassVisitor,
+            classContext.currentClassData.className,
+        )
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

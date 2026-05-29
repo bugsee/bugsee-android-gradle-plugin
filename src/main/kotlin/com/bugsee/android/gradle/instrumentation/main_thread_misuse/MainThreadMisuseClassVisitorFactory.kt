@@ -22,7 +22,7 @@ abstract class MainThreadMisuseClassVisitorFactory :
         if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
             return nextClassVisitor
         }
-        return MainThreadMisuseClassVisitor(nextClassVisitor)
+        return MainThreadMisuseClassVisitor(nextClassVisitor, classContext.currentClassData.className)
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

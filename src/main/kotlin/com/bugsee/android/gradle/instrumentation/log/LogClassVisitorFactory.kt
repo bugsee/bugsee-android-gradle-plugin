@@ -23,7 +23,7 @@ abstract class LogClassVisitorFactory :
         if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
             return nextClassVisitor
         }
-        return LogClassVisitor(nextClassVisitor)
+        return LogClassVisitor(nextClassVisitor, classContext.currentClassData.className)
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

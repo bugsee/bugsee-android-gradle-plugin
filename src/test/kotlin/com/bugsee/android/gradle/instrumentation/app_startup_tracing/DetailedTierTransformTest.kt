@@ -616,6 +616,7 @@ class DetailedTierTransformTest {
                 candidateMethods = candidateMethods,
                 dispatcherInternalName = dispatcherInternal,
                 tier = tier,
+                className = "fixtures.Test",
             )
         }
     }

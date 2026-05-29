@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.extensions_init
 
+import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
@@ -25,9 +26,10 @@ import org.objectweb.asm.Opcodes
  * an SDK-internal class whose name may move.
  */
 internal class ExtensionsInitClassVisitor(
-    apiVersion: Int,
+    private val apiVersion: Int,
     nextClassVisitor: ClassVisitor,
     private val extensionSpecs: List<ExtensionSpec>,
+    private val className: String,
 ) : ClassVisitor(apiVersion, nextClassVisitor) {
 
     override fun visitMethod(
@@ -40,7 +42,18 @@ internal class ExtensionsInitClassVisitor(
         val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
         if (extensionSpecs.isEmpty()) return mv
         if (name == INITIALIZE_EXTENSIONS_METHOD && descriptor == "()V") {
-            return InitializeExtensionsMethodVisitor(mv, extensionSpecs)
+            // Wrap so a failure in our transform (or AGP's frame
+            // recomputation) is attributed to this class+method and
+            // re-thrown, never swallowed into corrupt bytecode. See
+            // CatchingMethodVisitor. The non-instrumented pass-through
+            // returns the raw delegate, unwrapped.
+            return CatchingMethodVisitor(
+                apiVersion,
+                InitializeExtensionsMethodVisitor(mv, extensionSpecs),
+                className,
+                name,
+                descriptor,
+            )
         }
         return mv
     }

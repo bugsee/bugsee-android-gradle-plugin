@@ -31,7 +31,7 @@ abstract class ComposeInputClassVisitorFactory :
         if (className != ANDROID_COMPOSE_VIEW_CLASS) {
             return nextClassVisitor
         }
-        return ComposeInputClassVisitor(nextClassVisitor)
+        return ComposeInputClassVisitor(nextClassVisitor, className)
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

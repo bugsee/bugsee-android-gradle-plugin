@@ -60,7 +60,7 @@ class OkHttpClassVisitorTest {
 
     private fun transformOkHttp(bytes: ByteArray): ByteArray =
         AsmTestHarness.transform(bytes) { writer ->
-            OkHttpClassVisitor(writer)
+            OkHttpClassVisitor(writer, className = "fixtures.Test")
         }
 
     private fun methodInsns(bytes: ByteArray, methodName: String): List<Any> {

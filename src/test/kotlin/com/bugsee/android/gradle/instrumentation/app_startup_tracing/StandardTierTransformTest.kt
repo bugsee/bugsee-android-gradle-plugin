@@ -339,6 +339,7 @@ class StandardTierTransformTest {
                 candidateMethods = candidateMethods,
                 dispatcherInternalName = dispatcherInternal,
                 tier = tier,
+                className = "fixtures.Test",
             )
         }
     }

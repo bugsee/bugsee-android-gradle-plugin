@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.compose_input
 
+import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
@@ -17,7 +18,8 @@ import org.objectweb.asm.Opcodes
  * ```
  */
 internal class ComposeInputClassVisitor(
-    nextClassVisitor: ClassVisitor
+    nextClassVisitor: ClassVisitor,
+    private val className: String,
 ) : ClassVisitor(Opcodes.ASM9, nextClassVisitor) {
 
     override fun visitMethod(
@@ -30,7 +32,12 @@ internal class ComposeInputClassVisitor(
         val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
 
         if (name == DISPATCH_TOUCH_EVENT && descriptor == DISPATCH_TOUCH_EVENT_DESC) {
-            return ComposeInputMethodVisitor(mv)
+            // Wrap so a failure in our transform (or AGP's frame
+            // recomputation) is attributed to this class+method and
+            // re-thrown, never swallowed into corrupt bytecode. See
+            // CatchingMethodVisitor. The non-instrumented pass-through
+            // below returns the raw delegate, unwrapped.
+            return CatchingMethodVisitor(Opcodes.ASM9, ComposeInputMethodVisitor(mv), className, name, descriptor)
         }
 
         return mv

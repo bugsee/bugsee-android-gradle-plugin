@@ -22,7 +22,7 @@ abstract class OkHttpClassVisitorFactory :
         if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
             return nextClassVisitor
         }
-        return OkHttpClassVisitor(nextClassVisitor)
+        return OkHttpClassVisitor(nextClassVisitor, classContext.currentClassData.className)
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

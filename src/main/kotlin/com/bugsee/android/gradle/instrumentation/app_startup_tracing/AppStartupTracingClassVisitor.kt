@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
 import com.bugsee.android.gradle.StartupTier
+import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.Attribute
 import org.objectweb.asm.ClassVisitor
@@ -61,6 +62,7 @@ internal class AppStartupTracingClassVisitor(
     private val candidateMethods: Set<MethodKey>,
     private val dispatcherInternalName: String,
     private val tier: StartupTier,
+    private val className: String,
 ) : ClassVisitor(apiVersion, nextClassVisitor) {
 
     private var ownerInternalName: String = ""
@@ -139,20 +141,32 @@ internal class AppStartupTracingClassVisitor(
         if (isKindCandidate) {
             val classKind = StartupMethodFilter.kindForMethodKey(key)
             val (startName, endName) = dispatchMethodNamesFor(classKind)
-            return buildKindCandidateBufferingVisitor(
-                downstream = downstream,
-                apiVersion = apiVersion,
-                access = access,
-                methodName = name,
-                descriptor = descriptor,
-                signature = signature,
-                exceptions = exceptions,
-                siteId = siteId,
-                dispatcher = dispatcher,
-                ownerNameForLoops = ownerNameForLoops,
-                currentTier = currentTier,
-                startMethodName = startName,
-                endMethodName = endName,
+            // Wrap so a failure in our transform (or AGP's frame
+            // recomputation, which fires when the buffered MethodNode is
+            // replayed via accept()) is attributed to this class+method
+            // and re-thrown, never swallowed into corrupt bytecode. See
+            // CatchingMethodVisitor. The pass-through returns above
+            // (`return downstream`) are deliberately left unwrapped.
+            return CatchingMethodVisitor(
+                apiVersion,
+                buildKindCandidateBufferingVisitor(
+                    downstream = downstream,
+                    apiVersion = apiVersion,
+                    access = access,
+                    methodName = name,
+                    descriptor = descriptor,
+                    signature = signature,
+                    exceptions = exceptions,
+                    siteId = siteId,
+                    dispatcher = dispatcher,
+                    ownerNameForLoops = ownerNameForLoops,
+                    currentTier = currentTier,
+                    startMethodName = startName,
+                    endMethodName = endName,
+                ),
+                className,
+                name,
+                descriptor,
             )
         }
 
@@ -175,16 +189,30 @@ internal class AppStartupTracingClassVisitor(
         // The optimization is class-internal — no plugin-level constant-
         // pool pre-scan is feasible because AGP's instrumentation API
         // does not expose raw class bytes to a `ClassVisitorFactory`.
-        return buildAnnotationPeekVisitor(
-            downstream = downstream,
-            apiVersion = apiVersion,
-            access = access,
-            methodName = name,
-            descriptor = descriptor,
-            signature = signature,
-            exceptions = exceptions,
-            siteId = siteId,
-            dispatcher = dispatcher,
+        // Wrap so a failure in our transform (or AGP's frame
+        // recomputation, which fires when an annotated method's buffered
+        // MethodNode is replayed via accept()) is attributed to this
+        // class+method and re-thrown, never swallowed into corrupt
+        // bytecode. See CatchingMethodVisitor. Note the peek visitor's
+        // own pass-through (no @BugseeTrace → mv = downstream) flows
+        // through this wrapper too, but its guard is effectively free
+        // when no exception is thrown.
+        return CatchingMethodVisitor(
+            apiVersion,
+            buildAnnotationPeekVisitor(
+                downstream = downstream,
+                apiVersion = apiVersion,
+                access = access,
+                methodName = name,
+                descriptor = descriptor,
+                signature = signature,
+                exceptions = exceptions,
+                siteId = siteId,
+                dispatcher = dispatcher,
+            ),
+            className,
+            name,
+            descriptor,
         )
     }
 
