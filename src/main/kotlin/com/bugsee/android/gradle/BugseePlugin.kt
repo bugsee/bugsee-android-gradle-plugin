@@ -1012,41 +1012,40 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             variant.runtimeConfiguration.incoming.resolutionResult.rootComponent
         )
 
-        // Declared-scope map + file-deps list. Both are computed at
-        // configuration time (eagerly walking `configurations.findByName`),
-        // which is CC-safe because we only read declared-dependency
-        // names + groups (`ModuleDependency.group / name`) — no resolution
-        // touched here.
+        // Declared-scope map + file-deps list. Computed EAGERLY here at
+        // configuration time into plain Map<String,String> / List<String>
+        // values — deliberately NOT wrapped in `project.provider { }`.
+        // A provider whose lambda captures `project` (to read
+        // `project.configurations` when realized) is stored unrealized in
+        // the task state and fails configuration-cache serialization with
+        // "cannot serialize object of type 'org.gradle.api.Project'".
+        // Reading DECLARED dependencies (names/groups, and file-dependency
+        // file names) does not trigger configuration resolution, so doing
+        // it eagerly here is cheap and CC-safe — the values stored on the
+        // task are plain serializable types. (`runtimeRootComponent` above
+        // stays lazy because `rootComponent` is Gradle's own CC-compatible
+        // provider, designed to defer the actual resolution to execution.)
         val scopeNames = listOf("api", "implementation", "runtimeOnly", "compileOnly")
-        task.declaredScopes.set(
-            project.provider {
-                val confs = LinkedHashMap<String, org.gradle.api.artifacts.Configuration>()
-                for (n in scopeNames) {
-                    project.configurations.findByName(n)?.let { confs[n] = it }
-                }
-                DependencyCollector.collectDeclaredScopes(confs)
-            }
-        )
-        task.fileDependencies.set(
-            project.provider {
-                val out = mutableListOf<String>()
-                for (n in scopeNames) {
-                    val conf = project.configurations.findByName(n) ?: continue
-                    for (dep in conf.dependencies) {
-                        if (dep is org.gradle.api.artifacts.FileCollectionDependency) {
-                            // Resolve file names without triggering
-                            // the configuration's full resolution —
-                            // `files` is a FileCollection that
-                            // enumerates raw files only.
-                            for (f in dep.files) {
-                                out.add("$n|${f.name}")
-                            }
-                        }
+        val confs = LinkedHashMap<String, org.gradle.api.artifacts.Configuration>()
+        for (n in scopeNames) {
+            project.configurations.findByName(n)?.let { confs[n] = it }
+        }
+        task.declaredScopes.set(DependencyCollector.collectDeclaredScopes(confs))
+
+        val fileDeps = mutableListOf<String>()
+        for (n in scopeNames) {
+            val conf = project.configurations.findByName(n) ?: continue
+            for (dep in conf.dependencies) {
+                if (dep is org.gradle.api.artifacts.FileCollectionDependency) {
+                    // `files` enumerates the declared file collection only —
+                    // no configuration resolution is triggered.
+                    for (f in dep.files) {
+                        fileDeps.add("$n|${f.name}")
                     }
                 }
-                out
             }
-        )
+        }
+        task.fileDependencies.set(fileDeps)
     }
 
     /**
