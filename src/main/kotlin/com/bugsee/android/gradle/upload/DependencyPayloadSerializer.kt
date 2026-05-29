@@ -68,9 +68,10 @@ internal object DependencyPayloadSerializer {
         val obj = entriesJsonObject(entries, summary)
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { gz ->
-            // Use the JSONObject writer so we don't construct an
-            // intermediate `String` for the entire payload — saves a
-            // copy on multi-MB graphs.
+            // org.json has no streaming writer, so `toString()` builds
+            // the full JSON payload as a single String, which we then
+            // UTF-8 encode and gzip in place. On multi-MB graphs this
+            // String is the peak intermediate allocation.
             gz.write(obj.toString().toByteArray(Charsets.UTF_8))
         }
         return out.toByteArray()

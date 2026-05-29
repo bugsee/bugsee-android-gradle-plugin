@@ -211,9 +211,12 @@ abstract class BundleUploadTask : DefaultTask() {
     abstract val requestDependenciesUpload: Property<Boolean>
 
     /** One of `"runtime"`, `"runtime_direct_only"`, `"compile_runtime"`.
-     *  Currently informational only — the resolution result wired in
-     *  via [runtimeRootComponent] is the runtime classpath; the
-     *  other scope variants are reserved for a follow-up. */
+     *  Controls the collection scope: `"runtime_direct_only"` keeps only
+     *  first-level deps (sets `directOnly`), while `"runtime"` emits the
+     *  full runtime classpath. `"compile_runtime"` is reserved (needs a
+     *  second resolved configuration) and currently falls back to
+     *  `"runtime"` with a warning. The scope is also recorded in the
+     *  payload's `collection_config` for comparability gating. */
     @get:Input
     @get:Optional
     abstract val dependenciesScope: Property<String>

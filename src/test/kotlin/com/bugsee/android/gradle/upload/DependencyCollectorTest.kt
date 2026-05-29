@@ -164,6 +164,10 @@ class DependencyCollectorTest {
         val bEntry = result.entries.first { it.name == "b" }
         assertTrue("a must be direct",  aEntry.direct)
         assertFalse("b must be transitive", bEntry.direct)
+        // Full-collect mode (directOnly = false) must report the plain
+        // "runtime" scope — the other half of the ternary in
+        // DependencyCollector.collect().
+        assertEquals("runtime", result.summary.collectionConfig.scope)
     }
 
     @Test
@@ -534,5 +538,9 @@ class DependencyCollectorTest {
                    result.entries.all { it.direct })
         assertEquals(2, result.summary.total)
         assertEquals(0, result.summary.transitive)
+        // Pin the collection-config scope end-to-end: directOnly must
+        // surface as "runtime_direct_only" so the worker can tell the
+        // two collection modes apart for comparability gating.
+        assertEquals("runtime_direct_only", result.summary.collectionConfig.scope)
     }
 }
