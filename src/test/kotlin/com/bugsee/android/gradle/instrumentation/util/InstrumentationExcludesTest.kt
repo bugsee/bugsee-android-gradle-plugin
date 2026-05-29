@@ -42,6 +42,36 @@ class InstrumentationExcludesTest {
     }
 
     @Test
+    fun globWildcardMatchesEmptyRun() {
+        // A `*` must match ZERO characters too (`.*`, not `.+`). Without a
+        // case where the wildcard matches nothing, a `.*`->`.+` regression
+        // escapes — every other glob fixture has >= 1 char around the `*`.
+        assertTrue(
+            "trailing * must match an empty suffix",
+            InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("com.foo.Bar*")),
+        )
+        assertTrue(
+            "leading * must match an empty prefix",
+            InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("*com.foo.Bar")),
+        )
+    }
+
+    @Test
+    fun packageGlobRequiresTheSeparatorDot() {
+        // `com.foo.*` anchors a trailing dot, so it matches the SUBTREE but
+        // not the bare package name itself — unlike the no-wildcard form
+        // `com.foo`, which matches `com.foo` exactly. Pins that asymmetry.
+        assertFalse(
+            "com.foo.* must NOT match the bare package `com.foo`",
+            InstrumentationExcludes.isExcluded("com.foo", listOf("com.foo.*")),
+        )
+        assertTrue(
+            "the no-wildcard form DOES match the bare package",
+            InstrumentationExcludes.isExcluded("com.foo", listOf("com.foo")),
+        )
+    }
+
+    @Test
     fun whitespaceIsTrimmed() {
         assertTrue(InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("  com.foo.Bar  ")))
     }
