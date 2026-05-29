@@ -24,7 +24,7 @@ android {
 }
 
 dependencies {
-    compileOnly("com.bugsee:bugsee-android:1.0.0")
+    compileOnly("com.bugsee:bugsee-android:99.0.0")
 }
 
 bugsee {

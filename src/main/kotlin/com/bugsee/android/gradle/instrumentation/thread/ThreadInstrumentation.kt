@@ -26,12 +26,13 @@ internal class ThreadInstrumentation : Instrumentation {
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             ThreadClassVisitorFactory::class.java,
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeThreadAdapter")
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES

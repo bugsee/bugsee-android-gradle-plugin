@@ -92,7 +92,7 @@ internal class AppStartupTracingInstrumentation(
         return true
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         // resolveStartupTier() is called at configuration time, here in
         // apply(variant); the resulting String is captured into the
         // parameter lambda below. Project state (held by configResolver)
@@ -105,6 +105,7 @@ internal class AppStartupTracingInstrumentation(
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeAppStartupDispatcher")
             params.tier.set(tier)
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS

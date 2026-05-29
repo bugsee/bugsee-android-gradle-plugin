@@ -23,12 +23,13 @@ internal class LogInstrumentation : Instrumentation {
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             LogClassVisitorFactory::class.java,
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeLogAdapter")
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES

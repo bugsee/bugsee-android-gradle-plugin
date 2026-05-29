@@ -32,12 +32,13 @@ internal class ComposeInputInstrumentation : Instrumentation {
                 hasComposeDependency(project)
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             ComposeInputClassVisitorFactory::class.java,
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeComposeInputAdapter")
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS

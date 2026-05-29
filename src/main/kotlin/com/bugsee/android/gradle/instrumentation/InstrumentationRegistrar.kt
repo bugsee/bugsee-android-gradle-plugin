@@ -25,6 +25,7 @@ internal class InstrumentationRegistrar(
     private val logger: Logger,
     private val debug: Boolean,
     private val configResolver: InstrumentationConfigResolver,
+    private val excludes: Set<String>,
     extras: List<Instrumentation> = emptyList(),
 ) {
     private val instrumentations: List<Instrumentation> = listOf(
@@ -53,7 +54,7 @@ internal class InstrumentationRegistrar(
             }
             if (instrumentation.shouldApply(project)) {
                 if (debug) logger.warn("Bugsee: Applying ${instrumentation.name} instrumentation to variant ${variant.name}")
-                instrumentation.apply(variant)
+                instrumentation.apply(variant, excludes)
             } else {
                 if (debug) logger.warn("Bugsee: Skipping ${instrumentation.name} instrumentation (dependency not found)")
             }

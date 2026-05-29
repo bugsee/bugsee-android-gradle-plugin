@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import com.bugsee.android.gradle.instrumentation.BugseeInstrumentationParameters
+import com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes
 import org.objectweb.asm.ClassVisitor
 
 /**
@@ -26,6 +27,9 @@ abstract class HttpEngineClassVisitorFactory :
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
+        if (InstrumentationExcludes.isExcluded(classData.className, parameters.get().excludes.get())) {
+            return false
+        }
         // Skip our own adapter/wrapper classes
         return !classData.className.startsWith("com.bugsee.")
     }

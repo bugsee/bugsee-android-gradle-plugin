@@ -22,12 +22,13 @@ internal class HttpEngineInstrumentation : Instrumentation {
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android", "library")
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             HttpEngineClassVisitorFactory::class.java,
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeHttpEngineAdapter")
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES

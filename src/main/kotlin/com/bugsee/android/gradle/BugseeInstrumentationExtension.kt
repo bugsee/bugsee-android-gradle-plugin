@@ -2,6 +2,7 @@ package com.bugsee.android.gradle
 
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import javax.inject.Inject
 
 /**
@@ -44,6 +45,30 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      * and manifest meta-data).
      */
     val enabled: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
+
+    /**
+     * Class-name patterns to EXCLUDE from ALL Bugsee bytecode instrumentation.
+     *
+     * The escape hatch for the rare case where instrumenting a specific
+     * class fails — the build error from
+     * [com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor]
+     * names the offending class; add it here to unblock while the
+     * underlying plugin bug is fixed.
+     *
+     * Patterns match the dot-separated FQN. A bare class name matches
+     * exactly; a bare package name excludes everything under it; `*` is a
+     * wildcard (any characters). Examples:
+     * ```kotlin
+     * bugsee {
+     *     instrumentation {
+     *         excludes.add("com.example.Problematic")  // one class
+     *         excludes.add("com.vendor.sdk")           // whole package (+ sub-packages)
+     *         excludes.add("*.databinding.*Binding")   // glob
+     *     }
+     * }
+     * ```
+     */
+    val excludes: SetProperty<String> = objects.setProperty(String::class.java)
 
     /**
      * Inject `BugseeOkHttpInterceptor` into every `OkHttpClient.Builder.build()` call.

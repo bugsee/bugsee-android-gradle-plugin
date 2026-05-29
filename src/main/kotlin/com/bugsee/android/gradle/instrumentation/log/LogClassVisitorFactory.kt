@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import com.bugsee.android.gradle.instrumentation.BugseeInstrumentationParameters
+import com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes
 import org.objectweb.asm.ClassVisitor
 
 /**
@@ -28,6 +29,9 @@ abstract class LogClassVisitorFactory :
 
     override fun isInstrumentable(classData: ClassData): Boolean {
         val className = classData.className
+        if (InstrumentationExcludes.isExcluded(className, parameters.get().excludes.get())) {
+            return false
+        }
         return !className.startsWith("com.bugsee.") && !className.startsWith("android.")
     }
 }

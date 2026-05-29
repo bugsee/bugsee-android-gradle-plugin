@@ -24,7 +24,7 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         // Local stub-SDK repo published by the integrationTest task. Provides
-        // `com.bugsee:bugsee-android:1.0.0` so the fixture's compileOnly
+        // `com.bugsee:bugsee-android:99.0.0` so the fixture's compileOnly
         // declaration resolves and the plugin's dependency detector recognizes
         // the SDK as present (triggering AppStartupTracing registration).
         val stubRepo = settings.providers

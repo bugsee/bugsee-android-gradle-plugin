@@ -30,6 +30,13 @@ internal interface Instrumentation {
     /** Returns true if this instrumentation should be applied (dependency is present). */
     fun shouldApply(project: Project): Boolean
 
-    /** Registers the ASM class visitor factory with the given variant. */
-    fun apply(variant: Variant)
+    /**
+     * Registers the ASM class visitor factory with the given variant.
+     *
+     * [excludes] is the user-configured set of class-name patterns to skip
+     * (`bugsee { instrumentation { excludes.add(...) } }`); each
+     * implementation forwards it into its instrumentation parameters so the
+     * factory's `isInstrumentable` can honor it. May be empty.
+     */
+    fun apply(variant: Variant, excludes: Set<String>)
 }

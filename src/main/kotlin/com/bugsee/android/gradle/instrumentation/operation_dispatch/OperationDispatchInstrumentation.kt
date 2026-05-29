@@ -25,12 +25,13 @@ internal class OperationDispatchInstrumentation : Instrumentation {
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             OperationDispatchClassVisitorFactory::class.java,
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeOperationDispatcher")
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS

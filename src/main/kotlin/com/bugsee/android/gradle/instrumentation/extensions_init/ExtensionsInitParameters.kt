@@ -2,6 +2,8 @@ package com.bugsee.android.gradle.instrumentation.extensions_init
 
 import com.android.build.api.instrumentation.InstrumentationParameters
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.SetProperty
+import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -27,4 +29,13 @@ internal interface ExtensionsInitParameters : InstrumentationParameters {
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
     val detectedExtensionsFile: RegularFileProperty
+
+    /**
+     * Class-name patterns the user opted OUT of instrumentation
+     * (`bugsee { instrumentation { excludes.add(...) } }`). Consulted in
+     * `isInstrumentable` via
+     * [com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes].
+     */
+    @get:Input
+    val excludes: SetProperty<String>
 }

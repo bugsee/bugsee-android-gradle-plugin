@@ -271,7 +271,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     ExtensionsInitInstrumentation(extension, manifestTaskProvider),
                 )
                 val registrar = InstrumentationRegistrar(
-                    project, project.logger, isDebug, configResolver, extras
+                    project, project.logger, isDebug, configResolver,
+                    extension.instrumentation.excludes.getOrElse(emptySet()),
+                    extras,
                 )
                 registrar.applyAll(variant)
             } else {

@@ -148,31 +148,40 @@ val buildStubSdkJar by tasks.registering(Jar::class) {
 }
 
 // Publish the stub jar to a local Maven repo under build/integrationTest/stub-sdk-repo
-// using the real `com.bugsee:bugsee-android:1.0.0` coordinates. The fixture
-// declares this as `compileOnly("com.bugsee:bugsee-android:1.0.0")` so the
-// plugin's `DependencyDetector.hasBugseeDependency(...)` recognizes the dep
-// (it matches on group=com.bugsee + name starts-with "bugsee-android") and
-// proceeds to register the AppStartupTracing transform.
+// using the real `com.bugsee:bugsee-android` coordinates. The fixtures declare
+// `compileOnly("com.bugsee:bugsee-android:$STUB_SDK_VERSION")` so the plugin's
+// `DependencyDetector.hasBugseeDependency(...)` recognizes the dep (it matches on
+// group=com.bugsee + name starts-with "bugsee-android") and proceeds to register
+// the instrumentation transforms.
+//
+// The version is a high SENTINEL on purpose: app-startup tracing's shouldApply
+// gate (`MIN_SDK_VERSION_WITH_DISPATCHER`) REFUSES to instrument when the declared
+// SDK version is older than the release that first ships BugseeAppStartupDispatcher.
+// A stub below that minimum makes app-startup instrument nothing — silently
+// gutting the app-startup integration tests. Keeping the stub well above any
+// realistic MIN keeps those tests meaningful and future-proof. MUST stay in
+// lockstep with the `compileOnly(...)` version in the integration-test fixtures.
+val stubSdkVersion = "99.0.0"
 val stubSdkRepoDir = layout.buildDirectory.dir("integrationTest/stub-sdk-repo")
 val publishStubSdkToLocalRepo by tasks.registering(Copy::class) {
-    description = "Publish the stub-SDK jar under com.bugsee:bugsee-android:1.0.0 to a local repo."
+    description = "Publish the stub-SDK jar under com.bugsee:bugsee-android:$stubSdkVersion to a local repo."
     group = "verification"
     dependsOn(buildStubSdkJar)
-    val artifactDir = stubSdkRepoDir.map { it.dir("com/bugsee/bugsee-android/1.0.0") }
+    val artifactDir = stubSdkRepoDir.map { it.dir("com/bugsee/bugsee-android/$stubSdkVersion") }
     from(buildStubSdkJar.flatMap { it.archiveFile })
     into(artifactDir)
-    rename { "bugsee-android-1.0.0.jar" }
+    rename { "bugsee-android-$stubSdkVersion.jar" }
     doLast {
         // Minimal POM — the plugin's dependency detector only reads
         // group/name/version, but Gradle's POM-strict resolution wants the
         // file to exist and parse.
-        artifactDir.get().asFile.resolve("bugsee-android-1.0.0.pom").writeText(
+        artifactDir.get().asFile.resolve("bugsee-android-$stubSdkVersion.pom").writeText(
             """<?xml version="1.0" encoding="UTF-8"?>
             |<project xmlns="http://maven.apache.org/POM/4.0.0">
             |  <modelVersion>4.0.0</modelVersion>
             |  <groupId>com.bugsee</groupId>
             |  <artifactId>bugsee-android</artifactId>
-            |  <version>1.0.0</version>
+            |  <version>$stubSdkVersion</version>
             |  <packaging>jar</packaging>
             |</project>
             """.trimMargin()

@@ -22,12 +22,13 @@ internal class OkHttpInstrumentation : Instrumentation {
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             OkHttpClassVisitorFactory::class.java,
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.okhttp.BugseeOkHttpInterceptor")
+            params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES

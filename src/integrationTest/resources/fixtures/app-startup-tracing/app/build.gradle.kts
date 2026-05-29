@@ -49,9 +49,12 @@ android {
 }
 
 // Stub Bugsee SDK is published by the plugin's integrationTest task under
-// the real `com.bugsee:bugsee-android:1.0.0` Maven coordinates into a
-// per-build local repo. Declaring it as compileOnly here serves two
-// purposes:
+// the real `com.bugsee:bugsee-android:99.0.0` Maven coordinates into a
+// per-build local repo. The version is a high sentinel (>= app-startup
+// tracing's MIN_SDK_VERSION_WITH_DISPATCHER) so the version gate in
+// AppStartupTracingInstrumentation.shouldApply does NOT skip instrumentation;
+// it must stay in lockstep with the publish task in the plugin's
+// build.gradle.kts. Declaring it as compileOnly here serves two purposes:
 //   (1) Provides the dispatcher + annotation classes on AGP's compile-time
 //       classpath so `ClassContext.loadClassData` finds them and the
 //       plugin proceeds with bytecode wrapping.
@@ -60,7 +63,7 @@ android {
 // compileOnly because the fixture is only assembled — never executed —
 // and we don't want the stub bytecode in the dex output.
 dependencies {
-    compileOnly("com.bugsee:bugsee-android:1.0.0")
+    compileOnly("com.bugsee:bugsee-android:99.0.0")
     implementation("androidx.startup:startup-runtime:1.1.1")
 }
 
@@ -92,6 +95,17 @@ bugsee {
     if (!tier.isNullOrBlank()) {
         instrumentation {
             startupTier.set(StartupTier.valueOf(tier))
+        }
+    }
+
+    // Instrumentation excludes — exercised by InstrumentationExcludesIntegrationTest.
+    // `-PbugseeFixtureExcludes=<comma-separated FQN patterns>` opts those
+    // classes out of ALL Bugsee bytecode instrumentation.
+    val excludePatterns = project.findProperty("bugseeFixtureExcludes")?.toString()
+    if (!excludePatterns.isNullOrBlank()) {
+        instrumentation {
+            excludePatterns.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                .forEach { excludes.add(it) }
         }
     }
 

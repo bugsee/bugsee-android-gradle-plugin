@@ -44,7 +44,7 @@ internal class ExtensionsInitInstrumentation(
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
-    override fun apply(variant: Variant) {
+    override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
             ExtensionsInitClassVisitorFactory::class.java,
             InstrumentationScope.ALL,
@@ -52,6 +52,7 @@ internal class ExtensionsInitInstrumentation(
             params.detectedExtensionsFile.set(
                 manifestTaskProvider.flatMap { it.detectedExtensions }
             )
+            params.excludes.set(excludes)
         }
         // The injected try/catch blocks introduce new stack frames, so
         // recompute frames for instrumented methods rather than copying

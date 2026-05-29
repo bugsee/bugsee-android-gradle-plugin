@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import com.bugsee.android.gradle.instrumentation.BugseeInstrumentationParameters
+import com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes
 import org.objectweb.asm.ClassVisitor
 
 /**
@@ -35,6 +36,9 @@ abstract class ComposeInputClassVisitorFactory :
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
+        if (InstrumentationExcludes.isExcluded(classData.className, parameters.get().excludes.get())) {
+            return false
+        }
         return classData.className.startsWith(COMPOSE_PLATFORM_PACKAGE)
     }
 

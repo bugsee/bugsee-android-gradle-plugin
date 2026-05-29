@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.instrumentation.extensions_init
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
+import com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Opcodes
 
@@ -50,6 +51,9 @@ abstract class ExtensionsInitClassVisitorFactory :
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
+        if (InstrumentationExcludes.isExcluded(classData.className, parameters.get().excludes.get())) {
+            return false
+        }
         return classData.className == TARGET_CLASS_FQN
     }
 

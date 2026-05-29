@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.bugsee.android.gradle.StartupTier
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
+import com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes
 import org.objectweb.asm.ClassVisitor
 
 /**
@@ -123,6 +124,9 @@ abstract class AppStartupTracingClassVisitorFactory :
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
+        if (InstrumentationExcludes.isExcluded(classData.className, parameters.get().excludes.get())) {
+            return false
+        }
         if (isInDenylist(classData.className)) {
             return false
         }
