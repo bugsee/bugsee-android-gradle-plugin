@@ -65,12 +65,22 @@ dependencies {
 }
 
 bugsee {
-    // Disable upload tasks — they require a Bugsee app token and have
-    // configuration-cache incompatibilities unrelated to the
-    // app-startup tracing feature under test. Keeping them on would
-    // pollute the integration test with unrelated failures.
+    // Upload tasks (build-info + size analysis) are OFF by default in
+    // this fixture — they need a Bugsee app token and are otherwise
+    // unrelated to app-startup tracing. BundleUploadConfigCacheTest
+    // flips `bugseeFixtureBuildInfoCc=true` to turn build-info ON for
+    // ALL build types, so the dependency-collection task wiring is
+    // realized and its configuration-cache compatibility can be
+    // asserted. No app token is configured, so the upload task skips the
+    // network at execution (BundleUploadTask returns early on an
+    // unresolved token) — the test only cares that CONFIGURATION
+    // serializes cleanly under CC.
+    val buildInfoCc = project.findProperty("bugseeFixtureBuildInfoCc")?.toString() == "true"
     buildInfo {
-        enabled.set(false)
+        enabled.set(buildInfoCc)
+        if (buildInfoCc) {
+            allBuildTypes.set(true)
+        }
     }
 
     // Tier comes from the bugseeStartupTier project property — when
