@@ -133,6 +133,9 @@ internal object PluginPropertiesApplier {
         boolBinding("ndk.enabled", ext.ndk.enabled),
         boolBinding("ndk.forceDebugSymbolsUpload", ext.ndk.forceDebugSymbolsUpload),
 
+        // ── leak { … } ──────────────────────────────────────────────
+        boolBinding("leak.enabled", ext.leak.enabled),
+
         // ── buildInfo { … } ─────────────────────────────────────────
         boolBinding("buildInfo.enabled", ext.buildInfo.enabled),
         boolBinding("buildInfo.allBuildTypes", ext.buildInfo.allBuildTypes),

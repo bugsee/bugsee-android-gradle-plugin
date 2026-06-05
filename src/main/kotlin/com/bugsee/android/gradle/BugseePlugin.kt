@@ -138,6 +138,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     if (extension.ndk.enabled.get()) {
                         autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug)
                     }
+                    if (extension.leak.enabled.get()) {
+                        autoAddModule(project, deps, "bugsee-android-leak", "leak", isDebug)
+                    }
                     if (extension.feedback.get()) {
                         autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug)
                     }
@@ -1164,6 +1167,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "library",
             "stub",
             "ndk",
+            "leak",
             "ai",
             "compose",
             "feedback",

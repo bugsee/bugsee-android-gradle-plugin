@@ -82,6 +82,30 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     }
 
     /**
+     * Leak-detection integration block — gates the runtime
+     * `com.bugsee:bugsee-android-leak` dependency. See [BugseeLeakExtension].
+     *
+     * Disabled by default; opt in to add the module (once present, the SDK runs
+     * memory-leak detection by default).
+     */
+    val leak: BugseeLeakExtension = objects.newInstance(BugseeLeakExtension::class.java)
+
+    /**
+     * Configure leak-detection integration via a DSL block.
+     *
+     * ```kotlin
+     * bugsee {
+     *     leak {
+     *         enabled.set(true)
+     *     }
+     * }
+     * ```
+     */
+    fun leak(action: Action<BugseeLeakExtension>) {
+        action.execute(leak)
+    }
+
+    /**
      * Include the Bugsee in-app feedback module.
      *
      * When `true`, the plugin auto-adds `com.bugsee:bugsee-android-feedback` to the

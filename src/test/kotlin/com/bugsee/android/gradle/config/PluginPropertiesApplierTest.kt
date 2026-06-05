@@ -47,6 +47,9 @@ class PluginPropertiesApplierTest {
         assertEquals(false, ext.debug.get())
         assertEquals(true, ext.optimizeExtensionsLoading.get())
         assertEquals(true, ext.buildInfo.enabled.get())
+        // Optional module lanes default off (opt-in).
+        assertEquals(false, ext.ndk.enabled.get())
+        assertEquals(false, ext.leak.enabled.get())
     }
 
     // ── Precedence: properties win over defaults ────────────────────
@@ -380,6 +383,8 @@ class PluginPropertiesApplierTest {
             // ndk
             "plugin.ndk.enabled=true",
             "plugin.ndk.forceDebugSymbolsUpload=true",
+            // leak
+            "plugin.leak.enabled=true",
             // buildInfo
             "plugin.buildInfo.enabled=false",
             "plugin.buildInfo.allBuildTypes=true",
@@ -425,6 +430,8 @@ class PluginPropertiesApplierTest {
         // ndk
         assertEquals(true, ext.ndk.enabled.get())
         assertEquals(true, ext.ndk.forceDebugSymbolsUpload.get())
+        // leak
+        assertEquals(true, ext.leak.enabled.get())
         // buildInfo
         assertEquals(false, ext.buildInfo.enabled.get())
         assertEquals(true, ext.buildInfo.allBuildTypes.get())

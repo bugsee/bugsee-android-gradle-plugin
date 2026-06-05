@@ -78,6 +78,17 @@ dotted-path form as the DSL field names.
 | `plugin.ndk.enabled` | Boolean | `false` |
 | `plugin.ndk.forceDebugSymbolsUpload` | Boolean | `false` |
 
+### Leak detection
+
+When `enabled`, the plugin automatically adds the `bugsee-android-leak`
+module dependency (memory/thread leak detection). If the app already
+declares the leak module explicitly, this is a no-op — mirroring the
+`ndk.enabled` behaviour.
+
+| Key | Type | Default |
+|---|---|---|
+| `plugin.leak.enabled` | Boolean | `false` |
+
 ### Build info
 
 | Key | Type | Default |
