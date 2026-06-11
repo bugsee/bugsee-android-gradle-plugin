@@ -1,0 +1,291 @@
+package com.bugsee.android.gradle.upload
+
+import org.gradle.api.logging.Logger
+import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
+import java.net.URI
+import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
+
+/**
+ * Resolves a `bugsee-cli` binary path for [MappingUploadTask] /
+ * [NativeUploadTask] to exec.
+ *
+ * Precedence (highest first):
+ *   1. **Explicit `cliPath`** — the path is used verbatim. Lets developers
+ *      build the CLI from source or point at a pre-installed binary.
+ *      Returns `null` if the path exists but isn't executable so the task
+ *      can fall back to the Kotlin uploader rather than fail outright.
+ *   2. **Auto-download** from `https://download.bugsee.com/cli/v<version>/`
+ *      into a per-user Gradle cache at
+ *      `${gradleUserHome}/caches/bugsee-cli/<version>/<triple>/`. SHA-256
+ *      verified against the published sidecar. Subsequent builds (and
+ *      subsequent task invocations within one build) reuse the cache.
+ *
+ * Any failure during auto-download (network unreachable, unsupported host
+ * triple, checksum mismatch, extraction error) returns `null` and logs a
+ * warning. The task then falls back to the Kotlin uploader — the build
+ * still ships symbols, just via the legacy path.
+ *
+ * Concurrency: a per-triple lock file under the cache root prevents two
+ * parallel builds from racing the download. The second build to enter
+ * blocks on the lock, then sees the cache hit and skips.
+ */
+internal object CliBinaryResolver {
+
+    /**
+     * Default CLI version the plugin pins to. Bumped in lock-step with
+     * `bugsee-cli` releases that introduce wire-format or argv changes
+     * the plugin needs to keep up with.
+     */
+    const val DEFAULT_VERSION: String = "0.1.0"
+
+    /** Mirror root. The same bytes also exist on GitHub Releases under
+     *  `github.com/bugsee/bugsee-cli/releases/download/v<version>/`. */
+    private const val DOWNLOAD_BASE: String = "https://download.bugsee.com/cli"
+
+    private const val CONNECT_TIMEOUT_MS = 30_000
+    private const val READ_TIMEOUT_MS = 120_000
+
+    /**
+     * Returns an executable `bugsee-cli` binary, or `null` if none could
+     * be obtained. Side effect: may write into [gradleUserHome] under
+     * `caches/bugsee-cli/`.
+     */
+    fun resolve(
+        cliVersion: String?,
+        cliPath: String?,
+        execOps: ExecOperations,
+        gradleUserHome: File,
+        logger: Logger,
+        debug: Boolean,
+    ): File? {
+        // Layer 1: explicit path. If set, trust the user — but verify the
+        // file is actually executable so the eventual exec fails loudly
+        // here rather than mid-task.
+        if (!cliPath.isNullOrBlank()) {
+            val f = File(cliPath)
+            return when {
+                !f.isFile -> {
+                    logger.warn(
+                        "Bugsee: cliPath ${f.absolutePath} does not exist or is not a file; " +
+                            "using the Kotlin uploader.",
+                    )
+                    null
+                }
+                !f.canExecute() -> {
+                    logger.warn(
+                        "Bugsee: cliPath ${f.absolutePath} is not executable; " +
+                            "using the Kotlin uploader.",
+                    )
+                    null
+                }
+                else -> f
+            }
+        }
+
+        // Layer 2: auto-download. Pick the version + host triple.
+        val version = cliVersion?.takeIf { it.isNotBlank() } ?: DEFAULT_VERSION
+        val triple = detectHostTriple()
+        if (triple == null) {
+            logger.warn(
+                "Bugsee: no published bugsee-cli binary for host OS=${os()} arch=${arch()}; " +
+                    "set bugsee.cliPath to a locally-built binary, or fall back to the " +
+                    "Kotlin uploader.",
+            )
+            return null
+        }
+
+        val cacheRoot = File(gradleUserHome, "caches/bugsee-cli/$version/$triple")
+        val binaryName = if (triple.contains("windows")) "bugsee-cli.exe" else "bugsee-cli"
+        val cachedBinary = File(cacheRoot, binaryName)
+
+        // Fast path: cache hit.
+        if (cachedBinary.isFile && cachedBinary.canExecute()) {
+            if (debug) logger.warn("Bugsee: bugsee-cli cache hit at ${cachedBinary.absolutePath}")
+            return cachedBinary
+        }
+
+        return try {
+            downloadAndExtract(version, triple, cacheRoot, binaryName, execOps, logger, debug)
+        } catch (e: Throwable) {
+            logger.warn(
+                "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
+                    "using the Kotlin uploader.",
+            )
+            null
+        }
+    }
+
+    /**
+     * Maps the running JVM's `os.name` + `os.arch` to a Rust target triple
+     * that matches what `bugsee-cli` is published for. Returns `null` for
+     * unsupported combinations (Linux musl, Windows ARM64, anything else).
+     */
+    internal fun detectHostTriple(): String? = detectHostTriple(os(), arch())
+
+    internal fun detectHostTriple(os: String, arch: String): String? {
+        val osLower = os.lowercase()
+        val archLower = arch.lowercase()
+        val isMac = osLower.contains("mac") || osLower.contains("darwin")
+        val isLinux = osLower.contains("linux")
+        val isWindows = osLower.contains("windows")
+        val isArm64 = archLower in listOf("aarch64", "arm64")
+        val isAmd64 = archLower in listOf("x86_64", "amd64", "x64")
+
+        return when {
+            isMac && isArm64 -> "aarch64-apple-darwin"
+            isMac && isAmd64 -> "x86_64-apple-darwin"
+            isLinux && isArm64 -> "aarch64-unknown-linux-gnu"
+            isLinux && isAmd64 -> "x86_64-unknown-linux-gnu"
+            isWindows && isAmd64 -> "x86_64-pc-windows-msvc"
+            else -> null
+        }
+    }
+
+    private fun os(): String = System.getProperty("os.name") ?: ""
+    private fun arch(): String = System.getProperty("os.arch") ?: ""
+
+    /**
+     * Returns the artifact URL the plugin should download for a given
+     * `(version, triple)` tuple. Visible for testing so a CLI-name rename
+     * surfaces as a unit-test failure before any plugin consumer hits it.
+     */
+    internal fun artifactUrl(version: String, triple: String): String {
+        val ext = if (triple.contains("windows")) "zip" else "tar.xz"
+        return "$DOWNLOAD_BASE/v$version/bugsee-cli-$triple.$ext"
+    }
+
+    private fun downloadAndExtract(
+        version: String,
+        triple: String,
+        cacheRoot: File,
+        binaryName: String,
+        execOps: ExecOperations,
+        logger: Logger,
+        debug: Boolean,
+    ): File {
+        cacheRoot.mkdirs()
+        val parentDir = cacheRoot.parentFile ?: error("cache root has no parent: $cacheRoot")
+        parentDir.mkdirs()
+
+        val lockFile = File(parentDir, "$triple.lock")
+        lockFile.parentFile.mkdirs()
+
+        // File-lock the parent directory of the cache. A second build that
+        // enters here while the first is downloading blocks here, then
+        // sees the cache hit on re-check.
+        java.io.RandomAccessFile(lockFile, "rw").use { raf ->
+            raf.channel.lock().use {
+                val cachedBinary = File(cacheRoot, binaryName)
+                if (cachedBinary.isFile && cachedBinary.canExecute()) {
+                    if (debug) logger.warn("Bugsee: cache hit after lock acquire: $cachedBinary")
+                    return cachedBinary
+                }
+
+                val artifactUrl = artifactUrl(version, triple)
+                val sha256Url = "$artifactUrl.sha256"
+                val tarballName = artifactUrl.substringAfterLast('/')
+                val tarballFile = File(cacheRoot, tarballName)
+
+                logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
+                downloadToFile(artifactUrl, tarballFile)
+
+                val expectedSha = parseSha256Sidecar(downloadAsString(sha256Url))
+                val actualSha = sha256Hex(tarballFile)
+                if (!expectedSha.equals(actualSha, ignoreCase = true)) {
+                    tarballFile.delete()
+                    throw IOException(
+                        "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
+                    )
+                }
+
+                // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
+                // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
+                // (`bugsee-cli-<triple>/...`) so the binary lands directly in cacheRoot.
+                val extractResult = execOps.exec { spec ->
+                    spec.executable = "tar"
+                    spec.args = listOf(
+                        "-xf",
+                        tarballFile.absolutePath,
+                        "-C",
+                        cacheRoot.absolutePath,
+                        "--strip-components=1",
+                    )
+                    spec.isIgnoreExitValue = true
+                }
+                if (extractResult.exitValue != 0) {
+                    throw IOException(
+                        "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
+                    )
+                }
+
+                tarballFile.delete()
+
+                if (!cachedBinary.isFile) {
+                    throw IOException(
+                        "extraction completed but $binaryName not found in $cacheRoot",
+                    )
+                }
+                cachedBinary.setExecutable(true)
+                logger.warn("Bugsee: bugsee-cli v$version installed at ${cachedBinary.absolutePath}")
+                return cachedBinary
+            }
+        }
+    }
+
+    /**
+     * Parse a sha256sum-style sidecar (`<hex>  <filename>` or `<hex> *<filename>`).
+     * Returns just the hex digest.
+     */
+    internal fun parseSha256Sidecar(text: String): String {
+        return text.trim().substringBefore(' ').substringBefore('\t').trim()
+    }
+
+    private fun sha256Hex(file: File): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun downloadToFile(url: String, dest: File) {
+        val conn = openConnection(url)
+        conn.inputStream.use { input ->
+            dest.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+    }
+
+    private fun downloadAsString(url: String): String {
+        val conn = openConnection(url)
+        val bos = ByteArrayOutputStream()
+        conn.inputStream.use { it.copyTo(bos) }
+        return bos.toString(Charsets.UTF_8)
+    }
+
+    private fun openConnection(url: String): java.net.HttpURLConnection {
+        val conn = URI(url).toURL().openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = CONNECT_TIMEOUT_MS
+        conn.readTimeout = READ_TIMEOUT_MS
+        conn.instanceFollowRedirects = true
+        conn.requestMethod = "GET"
+        if (conn.responseCode !in 200..299) {
+            val body = conn.errorStream?.bufferedReader()?.readText()?.take(200).orEmpty()
+            throw IOException("GET $url returned ${conn.responseCode}: $body")
+        }
+        return conn
+    }
+
+    @Suppress("unused") // for future use if we ever need to bound wait time on the lock
+    private val lockAcquireTimeoutMs: Long = TimeUnit.MINUTES.toMillis(2)
+}

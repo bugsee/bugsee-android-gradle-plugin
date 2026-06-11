@@ -48,20 +48,36 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val endpoint: Property<String> = objects.property(String::class.java).convention("https://api.bugsee.com")
 
     /**
-     * Path to the `bugsee-cli` binary. When [uploader] is [UploaderStrategy.CLI]
-     * and this property is set to a readable executable, ProGuard/R8 mapping
-     * uploads exec the binary instead of running through the in-process Kotlin
-     * uploader.
+     * Path to the `bugsee-cli` binary — optional override. When set and the
+     * file is executable, [uploader] = [UploaderStrategy.CLI] uses this binary
+     * verbatim. When unset, the plugin auto-downloads the version named in
+     * [cliVersion] from `https://download.bugsee.com/cli/v<version>/`, caches
+     * it under `${gradleUserHome}/caches/bugsee-cli/<version>/<triple>/`,
+     * and reuses across builds. SHA-256 of the downloaded artifact is
+     * verified against the published sidecar.
      *
-     * Distribution is still phase-1 — the binary is built locally (`cargo build
-     * --release` in `~/Projects/Bugsee/bugsee-cli`) and this property points at
-     * the resulting `target/release/bugsee-cli`. Future phases will publish the
-     * binary as a Maven artifact and this property becomes an optional
-     * override.
+     * Override use cases: locally-built CLI (`cargo build --release` in
+     * `~/Projects/Bugsee/bugsee-cli`); air-gapped CI environments; testing
+     * a CLI version the plugin doesn't yet pin.
      *
-     * Default: unset (Kotlin uploader runs even with `uploader = cli`).
+     * Default: unset (auto-download kicks in).
      */
     val cliPath: Property<String> = objects.property(String::class.java)
+
+    /**
+     * `bugsee-cli` version the plugin pins to. Used to construct the
+     * download URL (`https://download.bugsee.com/cli/v<version>/`) when
+     * [cliPath] is unset.
+     *
+     * Defaults to the version the plugin was built against
+     * (`CliBinaryResolver.DEFAULT_VERSION`). Override to test newer
+     * releases without waiting for a plugin update — at your own risk,
+     * since CLI wire-format / argv changes could break the integration.
+     */
+    val cliVersion: Property<String> =
+        objects
+            .property(String::class.java)
+            .convention(com.bugsee.android.gradle.upload.CliBinaryResolver.DEFAULT_VERSION)
 
     /**
      * Which uploader strategy runs for symbol uploads.

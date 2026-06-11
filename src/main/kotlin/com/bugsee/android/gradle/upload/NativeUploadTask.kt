@@ -75,6 +75,22 @@ abstract class NativeUploadTask : DefaultTask() {
     @get:Internal
     abstract val cliPath: Property<String>
 
+    /**
+     * `bugsee-cli` version to auto-download when [cliPath] is unset. Wired
+     * from [com.bugsee.android.gradle.BugseePluginExtension.cliVersion],
+     * which defaults to [CliBinaryResolver.DEFAULT_VERSION].
+     */
+    @get:Input
+    abstract val cliVersion: Property<String>
+
+    /**
+     * Gradle user home directory. Captured at task registration so the
+     * action can read `caches/bugsee-cli/...` CC-safely. `@Internal`
+     * because the cache contents are derived state, not real task inputs.
+     */
+    @get:Internal
+    abstract val gradleUserHomeDir: DirectoryProperty
+
     @get:Input
     abstract val uploader: Property<UploaderStrategy>
 
@@ -188,7 +204,23 @@ abstract class NativeUploadTask : DefaultTask() {
         val cacheKey = "${HashUtils.sha1Hex(appToken)}:${variantName.get()}"
 
         val uploaderChoice = uploader.get()
-        val cliBinPath = cliPath.orNull?.takeIf { it.isNotBlank() }
+
+        // Resolve the CLI binary ONCE per task action, not per upload site.
+        // The resolver is cache-aware so re-calling would be cheap, but
+        // resolving in one place keeps the strategy state easy to follow.
+        // `null` means: no CLI available (or uploader=KOTLIN); fall back.
+        val cliBinary: File? = if (uploaderChoice == UploaderStrategy.CLI) {
+            CliBinaryResolver.resolve(
+                cliVersion = cliVersion.orNull,
+                cliPath = cliPath.orNull,
+                execOps = execOps,
+                gradleUserHome = gradleUserHomeDir.get().asFile,
+                logger = logger,
+                debug = isDebug,
+            )
+        } else {
+            null
+        }
 
         // Check for intermediate symbols folder first
         val intermediateSymbolsDir = File("$basePath/intermediates/native_debug_metadata/${variantName.get()}/out")
@@ -210,7 +242,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     skipCache = skipCache,
                     isDebug = isDebug,
                     uploaderChoice = uploaderChoice,
-                    cliBinPath = cliBinPath,
+                    cliBinary = cliBinary,
                 )
             } finally {
                 zipTemp.delete()
@@ -242,7 +274,7 @@ abstract class NativeUploadTask : DefaultTask() {
                         skipCache = skipCache,
                         isDebug = isDebug,
                         uploaderChoice = uploaderChoice,
-                        cliBinPath = cliBinPath,
+                        cliBinary = cliBinary,
                     )
                 } else {
                     if (isDebug) logger.warn("Bugsee: Native symbols file not found at: ${symbolsZip.absolutePath}")
@@ -273,7 +305,7 @@ abstract class NativeUploadTask : DefaultTask() {
         skipCache: Boolean,
         isDebug: Boolean,
         uploaderChoice: UploaderStrategy,
-        cliBinPath: String?,
+        cliBinary: File?,
     ) {
         val hash = HashUtils.sha1Hex(zip)
 
@@ -287,17 +319,16 @@ abstract class NativeUploadTask : DefaultTask() {
         // the backend can bucket fallback rates.
         val kotlinFallbackTag: String = when {
             uploaderChoice == UploaderStrategy.KOTLIN -> "kotlin"
-            cliBinPath == null -> {
-                logger.warn(
-                    "Bugsee: uploader = CLI but cliPath is not set; using the " +
-                        "Kotlin uploader instead.",
-                )
-                "kotlin-fallback-cli-not-configured"
+            cliBinary == null -> {
+                // Either auto-download was attempted and failed (warning
+                // already logged inside CliBinaryResolver), or the user
+                // explicitly set a cliPath that wasn't usable.
+                "kotlin-fallback-cli-not-resolved"
             }
             else -> {
                 val cliResult = CliUploader.uploadElf(
                     execOps = execOps,
-                    cliBinary = File(cliBinPath),
+                    cliBinary = cliBinary,
                     symbolsZip = zip,
                     appToken = appToken,
                     endpoint = endpointUrl,

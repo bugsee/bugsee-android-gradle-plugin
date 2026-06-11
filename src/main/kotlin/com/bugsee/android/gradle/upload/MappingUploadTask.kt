@@ -73,6 +73,24 @@ abstract class MappingUploadTask : DefaultTask() {
     @get:Internal
     abstract val cliPath: Property<String>
 
+    /**
+     * `bugsee-cli` version to auto-download when [cliPath] is unset. Wired
+     * from [com.bugsee.android.gradle.BugseePluginExtension.cliVersion],
+     * which defaults to [CliBinaryResolver.DEFAULT_VERSION].
+     */
+    @get:Input
+    abstract val cliVersion: Property<String>
+
+    /**
+     * Gradle user home directory (`~/.gradle` by default). Captured at task
+     * registration so the action can read `caches/bugsee-cli/...` without a
+     * CC-violating `project.gradle.gradleUserHomeDir` read at execution.
+     * `@Internal` because the contents under `caches/` are not real task
+     * inputs — they're a derived cache.
+     */
+    @get:Internal
+    abstract val gradleUserHomeDir: DirectoryProperty
+
     @get:Input
     abstract val uploader: Property<UploaderStrategy>
 
@@ -216,35 +234,41 @@ abstract class MappingUploadTask : DefaultTask() {
         // path's `X-Bugsee-Uploader` header so backend can count CLI vs.
         // fallback usage without touching customer code.
         val uploaderChoice = uploader.get()
-        val cliBinPath = cliPath.orNull?.takeIf { it.isNotBlank() }
 
-        val kotlinFallbackTag: String = when {
-            uploaderChoice == UploaderStrategy.KOTLIN -> "kotlin"
-            cliBinPath == null -> {
-                logger.warn(
-                    "Bugsee: uploader = CLI but cliPath is not set; using the " +
-                        "Kotlin uploader instead.",
-                )
-                "kotlin-fallback-cli-not-configured"
-            }
-            else -> {
-                val cliResult = CliUploader.uploadMapping(
+        val kotlinFallbackTag: String = when (uploaderChoice) {
+            UploaderStrategy.KOTLIN -> "kotlin"
+            UploaderStrategy.CLI -> {
+                // Resolve a binary: explicit cliPath wins; else auto-download
+                // from download.bugsee.com into the per-user Gradle cache.
+                val cliBinary = CliBinaryResolver.resolve(
+                    cliVersion = cliVersion.orNull,
+                    cliPath = cliPath.orNull,
                     execOps = execOps,
-                    cliBinary = File(cliBinPath),
-                    mappingFile = mapping,
-                    iconFile = iconFile,
-                    appToken = appToken,
-                    endpoint = endpoint.get(),
-                    version = versionName ?: "",
-                    build = versionCode.toString(),
-                    uuid = buildUUID,
+                    gradleUserHome = gradleUserHomeDir.get().asFile,
                     logger = logger,
                     debug = isDebug,
                 )
-                when {
-                    cliResult.success -> return
-                    !cliResult.shouldFallback -> return // already logged
-                    else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
+                if (cliBinary == null) {
+                    "kotlin-fallback-cli-not-resolved"
+                } else {
+                    val cliResult = CliUploader.uploadMapping(
+                        execOps = execOps,
+                        cliBinary = cliBinary,
+                        mappingFile = mapping,
+                        iconFile = iconFile,
+                        appToken = appToken,
+                        endpoint = endpoint.get(),
+                        version = versionName ?: "",
+                        build = versionCode.toString(),
+                        uuid = buildUUID,
+                        logger = logger,
+                        debug = isDebug,
+                    )
+                    when {
+                        cliResult.success -> return
+                        !cliResult.shouldFallback -> return // already logged
+                        else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
+                    }
                 }
             }
         }

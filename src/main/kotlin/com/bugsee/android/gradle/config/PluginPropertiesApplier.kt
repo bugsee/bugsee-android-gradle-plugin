@@ -127,6 +127,7 @@ internal object PluginPropertiesApplier {
         // ── Root extension ──────────────────────────────────────────
         stringBinding("endpoint", ext.endpoint),
         stringBinding("cliPath", ext.cliPath),
+        stringBinding("cliVersion", ext.cliVersion),
         enumBinding("uploader", ext.uploader, UploaderStrategy::class.java),
         boolBinding("debug", ext.debug),
         boolBinding("feedback", ext.feedback),
