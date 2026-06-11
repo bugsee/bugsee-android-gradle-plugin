@@ -117,16 +117,20 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     // without bumping the plugin. If the user has declared
                     // their own version on any configuration (`api`,
                     // `compileOnly`, variant configs, …), defer to it
-                    // rather than layering a dynamic dep on top.
-                    if (!isCoreSdkPresent(project)) {
+                    // rather than layering a dynamic dep on top. Opt-out
+                    // via `bugsee { sdkAutoLoad.set(false) }` for
+                    // builds that ship the core SDK via a manual classpath
+                    // path or a locally-published artefact.
+                    if (extension.sdkAutoLoad.get() && !isCoreSdkPresent(project)) {
+                        val range = CoreSdkAutoLoad.range(MIN_SDK_VERSION)
                         if (isDebug) {
                             project.logger.warn(
-                                "Bugsee: Auto-adding bugsee-android runtime dependency >= $MIN_SDK_VERSION"
+                                "Bugsee: Auto-adding bugsee-android runtime dependency $range"
                             )
                         }
                         deps.add(
                             project.dependencies.create(
-                                "com.bugsee:bugsee-android:[$MIN_SDK_VERSION,)"
+                                "com.bugsee:bugsee-android:$range"
                             )
                         )
                     }
@@ -145,19 +149,29 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                         autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug)
                     }
 
-                    if (hasComposeDependency(project) && isFeatureEnabled(inst.compose)) {
+                    // Compose AAR carries three independent capabilities (tag
+                    // injection, secure-modifier auto-detection, input capture).
+                    // Auto-add the AAR if ANY of them is enabled — disabling
+                    // `compose` (the umbrella) while keeping `composeInput` or
+                    // `composeSecure` should still pull in the runtime that
+                    // hosts those features.
+                    val composeEnabled =
+                        isAutoAddEnabled(project, inst.compose, "compose") ||
+                                isAutoAddEnabled(project, inst.composeSecure, "composeSecure") ||
+                                isAutoAddEnabled(project, inst.composeInput, "composeInput")
+                    if (hasComposeDependency(project) && composeEnabled) {
                         autoAddModule(project, deps, "bugsee-android-compose", "compose", isDebug)
                     }
-                    if (hasOkHttpDependency(project) && isFeatureEnabled(inst.okhttp)) {
+                    if (hasOkHttpDependency(project) && isAutoAddEnabled(project, inst.okhttp, "okhttp")) {
                         autoAddModule(project, deps, "bugsee-android-okhttp", "okhttp", isDebug)
                     }
-                    if (hasKtorDependency(project, 2) && isFeatureEnabled(inst.ktor)) {
+                    if (hasKtorDependency(project, 2) && isAutoAddEnabled(project, inst.ktor, "ktor")) {
                         autoAddModule(project, deps, "bugsee-android-ktor-2", "ktor-2", isDebug)
                     }
-                    if (hasKtorDependency(project, 3) && isFeatureEnabled(inst.ktor)) {
+                    if (hasKtorDependency(project, 3) && isAutoAddEnabled(project, inst.ktor, "ktor")) {
                         autoAddModule(project, deps, "bugsee-android-ktor-3", "ktor-3", isDebug)
                     }
-                    if (hasCronetDependency(project) && isFeatureEnabled(inst.cronet)) {
+                    if (hasCronetDependency(project) && isAutoAddEnabled(project, inst.cronet, "cronet")) {
                         autoAddModule(project, deps, "bugsee-android-cronet", "cronet", isDebug)
                     }
                 }
@@ -797,6 +811,47 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      */
     private fun isFeatureEnabled(property: Property<Boolean>): Boolean {
         return !property.isPresent || property.get()
+    }
+
+    /**
+     * `withDependencies`-time variant of feature resolution used by the
+     * auto-add path. Consults the DSL property first (which
+     * [com.bugsee.android.gradle.config.PluginPropertiesApplier] populates
+     * via convention from `bugsee.properties` `plugin.instrumentation.*`
+     * keys), then falls back to the Gradle property
+     * `bugsee.instrumentation.<key>`, then defaults to `true`.
+     *
+     * Manifest meta-data is not consulted here — the variant manifest is
+     * not yet bound when `withDependencies` runs. Once a variant is bound,
+     * [com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver]
+     * provides the full DSL → Gradle property → manifest meta-data →
+     * default resolution chain.
+     *
+     * This unifies the auto-add gates (okhttp / compose / ktor / cronet)
+     * so a Gradle-property override like `-Pbugsee.instrumentation.ktor=false`
+     * is honoured at AAR-pull-in time, not only at bytecode-instrumentation
+     * time.
+     */
+    private fun isAutoAddEnabled(
+        project: Project,
+        dslProperty: Property<Boolean>,
+        key: String
+    ): Boolean {
+        if (dslProperty.isPresent) {
+            return dslProperty.get()
+        }
+        val gradleValue = project.findProperty("bugsee.instrumentation.$key")?.toString()
+        if (gradleValue != null) {
+            val parsed = gradleValue.toBooleanStrictOrNull()
+            if (parsed == null) {
+                project.logger.warn(
+                    "Bugsee: Invalid boolean value '$gradleValue' for Gradle property " +
+                            "'bugsee.instrumentation.$key', defaulting to true"
+                )
+            }
+            return parsed ?: true
+        }
+        return true
     }
 
     /**

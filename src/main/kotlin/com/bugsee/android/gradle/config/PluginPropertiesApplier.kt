@@ -128,6 +128,7 @@ internal object PluginPropertiesApplier {
         boolBinding("debug", ext.debug),
         boolBinding("feedback", ext.feedback),
         boolBinding("optimizeExtensionsLoading", ext.optimizeExtensionsLoading),
+        boolBinding("sdkAutoLoad", ext.sdkAutoLoad),
 
         // ── ndk { … } ───────────────────────────────────────────────
         boolBinding("ndk.enabled", ext.ndk.enabled),

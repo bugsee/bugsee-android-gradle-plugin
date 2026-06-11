@@ -117,6 +117,32 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val feedback: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
+     * Auto-pull the Bugsee Android SDK core artifact
+     * (`com.bugsee:bugsee-android`) when an extension module is present
+     * but the core is not declared.
+     *
+     * When `true` (default), the plugin adds the core SDK to the
+     * consuming app's `implementation` configuration at a dynamic version
+     * range floored at the plugin's `MIN_SDK_VERSION`. This lets an app
+     * depend only on `bugsee-android-feedback` (or `bugsee-android-okhttp`,
+     * `bugsee-android-ndk`, …) and have the matching core SDK pulled in
+     * automatically — extension-only declarations are sufficient.
+     *
+     * If the app has declared `bugsee-android` itself on any
+     * configuration (`api`, `implementation`, `compileOnly`, per-variant
+     * configs, …), the auto-add is skipped regardless of this setting:
+     * the user-declared version always wins.
+     *
+     * Set to `false` to opt out of the auto-pull behaviour entirely —
+     * useful when shipping the core SDK via a local classpath path or
+     * a locally-published artefact, where the dynamic version range
+     * would conflict with the user-managed declaration.
+     *
+     * Default: `true`
+     */
+    val sdkAutoLoad: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
      * Build-info configuration block. Always-on by default; registers
      * a Bugsee build record on every release variant with metadata
      * (version, build, package_id, VCS, machine, plugin/SDK

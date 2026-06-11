@@ -46,6 +46,7 @@ class PluginPropertiesApplierTest {
         assertEquals("https://api.bugsee.com", ext.endpoint.get())
         assertEquals(false, ext.debug.get())
         assertEquals(true, ext.optimizeExtensionsLoading.get())
+        assertEquals(true, ext.sdkAutoLoad.get())
         assertEquals(true, ext.buildInfo.enabled.get())
         // Optional module lanes default off (opt-in).
         assertEquals(false, ext.ndk.enabled.get())
@@ -380,6 +381,7 @@ class PluginPropertiesApplierTest {
             "plugin.debug=true",
             "plugin.feedback=true",
             "plugin.optimizeExtensionsLoading=false",
+            "plugin.sdkAutoLoad=false",
             // ndk
             "plugin.ndk.enabled=true",
             "plugin.ndk.forceDebugSymbolsUpload=true",
@@ -427,6 +429,7 @@ class PluginPropertiesApplierTest {
         assertEquals(true, ext.debug.get())
         assertEquals(true, ext.feedback.get())
         assertEquals(false, ext.optimizeExtensionsLoading.get())
+        assertEquals(false, ext.sdkAutoLoad.get())
         // ndk
         assertEquals(true, ext.ndk.enabled.get())
         assertEquals(true, ext.ndk.forceDebugSymbolsUpload.get())
