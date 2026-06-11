@@ -2,6 +2,7 @@ package com.bugsee.android.gradle.config
 
 import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.StartupTier
+import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Project
 import org.gradle.api.logging.Logger
 import org.gradle.api.provider.Property
@@ -125,6 +126,8 @@ internal object PluginPropertiesApplier {
     private fun bindings(ext: BugseePluginExtension): List<Binding> = listOf(
         // ── Root extension ──────────────────────────────────────────
         stringBinding("endpoint", ext.endpoint),
+        stringBinding("cliPath", ext.cliPath),
+        enumBinding("uploader", ext.uploader, UploaderStrategy::class.java),
         boolBinding("debug", ext.debug),
         boolBinding("feedback", ext.feedback),
         boolBinding("optimizeExtensionsLoading", ext.optimizeExtensionsLoading),

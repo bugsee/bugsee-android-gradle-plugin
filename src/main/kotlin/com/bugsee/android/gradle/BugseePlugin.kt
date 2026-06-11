@@ -450,6 +450,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.debug.set(extension.debug)
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
+            // Uploader strategy + bugsee-cli binary path. `cliPath` is wired as
+            // an optional provider so a missing value never blocks the task's
+            // up-to-date checks — `MappingUploadTask.execute` reads it at
+            // runtime and falls back to the Kotlin uploader when absent.
+            task.cliPath.set(extension.cliPath)
+            task.uploader.set(extension.uploader)
             task.group = "bugsee"
             task.description = "Uploads ProGuard/R8 mapping file for $capitalizedVariant"
 
@@ -503,6 +509,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
             task.forceUpload.set(extension.ndk.forceDebugSymbolsUpload)
+            // Uploader strategy + bugsee-cli binary path — mirrors the wiring on
+            // MappingUploadTask. Same rationale: `cliPath` is an optional provider
+            // so a missing value never blocks up-to-date checks; the task reads
+            // it at runtime and falls back to the Kotlin uploader when absent.
+            task.cliPath.set(extension.cliPath)
+            task.uploader.set(extension.uploader)
             task.group = "bugsee"
             task.description = "Uploads NDK native debug symbols for $capitalizedVariant"
 

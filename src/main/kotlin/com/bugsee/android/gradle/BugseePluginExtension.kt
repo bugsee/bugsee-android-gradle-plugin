@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle
 
+import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
@@ -45,6 +46,40 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * Default: `https://api.bugsee.com`
      */
     val endpoint: Property<String> = objects.property(String::class.java).convention("https://api.bugsee.com")
+
+    /**
+     * Path to the `bugsee-cli` binary. When [uploader] is [UploaderStrategy.CLI]
+     * and this property is set to a readable executable, ProGuard/R8 mapping
+     * uploads exec the binary instead of running through the in-process Kotlin
+     * uploader.
+     *
+     * Distribution is still phase-1 — the binary is built locally (`cargo build
+     * --release` in `~/Projects/Bugsee/bugsee-cli`) and this property points at
+     * the resulting `target/release/bugsee-cli`. Future phases will publish the
+     * binary as a Maven artifact and this property becomes an optional
+     * override.
+     *
+     * Default: unset (Kotlin uploader runs even with `uploader = cli`).
+     */
+    val cliPath: Property<String> = objects.property(String::class.java)
+
+    /**
+     * Which uploader strategy runs for symbol uploads.
+     *
+     * - [UploaderStrategy.KOTLIN] (default): in-process Kotlin uploader.
+     * - [UploaderStrategy.CLI]: exec the `bugsee-cli` binary at [cliPath]; on a
+     *   structural failure (exit codes 1 or 2 per the CLI's contract), fall
+     *   back to the Kotlin path.
+     *
+     * The fallback transition is logged at WARN and the `X-Bugsee-Uploader`
+     * request header is stamped with the reason so the backend can count
+     * fallback rates without touching customer code.
+     *
+     * Default: [UploaderStrategy.KOTLIN]. Will flip to [UploaderStrategy.CLI]
+     * once CLI telemetry shows ~100% reliability across hosted CI matrices.
+     */
+    val uploader: Property<UploaderStrategy> =
+        objects.property(UploaderStrategy::class.java).convention(UploaderStrategy.KOTLIN)
 
     /**
      * Enable verbose debug logging from the plugin.

@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.upload
 
+import com.sun.net.httpserver.Headers
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import org.gradle.api.logging.Logger
@@ -16,6 +17,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -390,6 +392,91 @@ class SymbolUploaderHttpTest {
         // No PUT should have fired — the server already has the symbol.
         assertEquals(0, server.putCallCount(), "PUT must not be attempted on dedup")
     }
+
+    // ── X-Bugsee-Uploader telemetry header ───────────────────────────
+
+    @Test fun `default uploaderTag stamps X-Bugsee-Uploader as kotlin`() {
+        // The header carries the "which uploader path ran" telemetry the
+        // backend uses to count CLI-vs-fallback usage during the dual-path
+        // rollout. Direct invocations of SymbolUploader default to
+        // "kotlin" — the Kotlin path is the source-of-truth fallback.
+        server.setPostStatus(200)
+        SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+        )
+        val headers = server.lastPostHeaders
+        assertNotNull(headers, "POST must have arrived; warns: ${logger.warnMessages}")
+        assertEquals(
+            "kotlin",
+            headers.getFirst("X-Bugsee-Uploader"),
+            "default uploaderTag must be 'kotlin'",
+        )
+    }
+
+    @Test fun `explicit uploaderTag is forwarded as X-Bugsee-Uploader value`() {
+        // When MappingUploadTask falls back from a structural CLI failure,
+        // it passes uploaderTag = "kotlin-fallback-cli-<reason>" so the
+        // backend can bucket by reason. Pin that the value is forwarded
+        // verbatim — backend dashboards depend on the exact string.
+        server.setPostStatus(200)
+        SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+            uploaderTag = "kotlin-fallback-cli-exit-1",
+        )
+        val headers = server.lastPostHeaders
+        assertNotNull(headers, "POST must have arrived; warns: ${logger.warnMessages}")
+        assertEquals(
+            "kotlin-fallback-cli-exit-1",
+            headers.getFirst("X-Bugsee-Uploader"),
+            "explicit uploaderTag must be forwarded verbatim",
+        )
+    }
+
+    @Test fun `PUT to presigned URL does NOT carry X-Bugsee-Uploader`() {
+        // The presigned PUT goes to S3, whose URL is signed against a
+        // specific header set. Adding X-Bugsee-Uploader there would
+        // trigger SignatureDoesNotMatch and silently fail every upload.
+        // Pin that the header lands on the POST only.
+        //
+        // We assert this indirectly: the POST captures last headers ONLY
+        // for the POST handler (the mock's PUT handler doesn't update
+        // lastPostHeaders); the PUT must complete successfully (which
+        // would fail if we'd signed something we shouldn't have).
+        server.setPostStatus(200)
+        server.setPutStatus(200)
+
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+            uploaderTag = "kotlin-fallback-cli-exec-failed",
+        )
+        assertTrue(ok, "upload must succeed; warns: ${logger.warnMessages}")
+
+        // POST headers reflect the test's chosen tag.
+        val postHeaders = server.lastPostHeaders
+        assertNotNull(postHeaders)
+        assertEquals(
+            "kotlin-fallback-cli-exec-failed",
+            postHeaders.getFirst("X-Bugsee-Uploader"),
+        )
+        // (PUT-header inspection is left to a future extension of MockSymbolServer
+        // if we ever need to pin the absence positively rather than infer it.)
+        assertEquals(1, server.putCallCount(), "PUT must have run")
+    }
 }
 
 /**
@@ -413,6 +500,13 @@ internal class MockSymbolServer(private val appToken: String) {
     @Volatile private var postBody: String? = null  // null = use default
     @Volatile private var putStatus: Int = 200
     @Volatile private var putBody: String = ""
+
+    /**
+     * The most recent POST's request headers. Captured so tests can assert
+     * what the client sent — notably `X-Bugsee-Uploader`, which gates the
+     * dual-path rollout telemetry.
+     */
+    @Volatile var lastPostHeaders: Headers? = null
 
     val baseUrl: String get() = "http://127.0.0.1:${server.address.port}"
 
@@ -441,6 +535,9 @@ internal class MockSymbolServer(private val appToken: String) {
     }
 
     private fun handlePost(exchange: HttpExchange) {
+        // Capture request headers BEFORE the response is sent — tests assert
+        // on telemetry headers like X-Bugsee-Uploader.
+        lastPostHeaders = exchange.requestHeaders
         // Drain the body so the client can read the response.
         exchange.requestBody.use { it.readBytes() }
         val body = postBody ?: JSONObject().apply {

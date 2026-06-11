@@ -16,7 +16,10 @@ import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 import org.json.JSONObject
+import java.io.File
+import javax.inject.Inject
 
 /**
  * Task that uploads the ProGuard/R8 mapping file to the Bugsee backend.
@@ -24,7 +27,26 @@ import org.json.JSONObject
  * Configuration-cache safe: every value the action needs is wired into
  * an `@Input` / `@Internal` task property at registration time. The
  * action MUST NOT reach into `project.extensions` or `project.layout`
- * at execution — `project` is unavailable on CC replay.
+ * at execution — `project` is unavailable on CC replay. [ExecOperations]
+ * is the CC-safe replacement for `project.exec` and is requested via
+ * `@Inject` rather than read from the project.
+ *
+ * Phase 1 of the bugsee-cli rollout: the task picks one of two uploader
+ * strategies based on [uploader] + [cliPath] (both seeded from the
+ * matching [com.bugsee.android.gradle.BugseePluginExtension] fields at
+ * registration).
+ *
+ *   - [UploaderStrategy.KOTLIN] (default) — run [SymbolUploader.uploadData]
+ *     directly, exactly as the task always has.
+ *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload` via
+ *     [CliUploader]. On a structural CLI failure (exit 1 or 2 per the
+ *     CLI contract, binary missing, exec failed), fall back to the
+ *     Kotlin uploader so the build still ships symbols. Substantive CLI
+ *     failures (bad token, server, network) propagate without retry.
+ *
+ * In either fallback case the Kotlin uploader stamps the `X-Bugsee-Uploader`
+ * header with a `kotlin-fallback-cli-<reason>` value so the backend can
+ * bucket fallback rates.
  */
 abstract class MappingUploadTask : DefaultTask() {
 
@@ -36,6 +58,23 @@ abstract class MappingUploadTask : DefaultTask() {
 
     @get:Input
     abstract val endpoint: Property<String>
+
+    /**
+     * Path to the `bugsee-cli` binary. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.cliPath] at task
+     * registration. When unset (or [uploader] is [UploaderStrategy.KOTLIN]),
+     * the CLI path is never invoked.
+     *
+     * `@Internal` because the existence of the file is checked at execution
+     * time (see [CliUploader.uploadMapping]); we don't want Gradle to fail
+     * up-to-date checks just because a developer changed the path between
+     * builds — the source of truth is what's on disk when the task runs.
+     */
+    @get:Internal
+    abstract val cliPath: Property<String>
+
+    @get:Input
+    abstract val uploader: Property<UploaderStrategy>
 
     @get:InputFile
     abstract val manifestFile: RegularFileProperty
@@ -108,6 +147,13 @@ abstract class MappingUploadTask : DefaultTask() {
     @get:Internal
     abstract val rootProjectDirectory: DirectoryProperty
 
+    /**
+     * Injected by Gradle. CC-safe replacement for `project.exec` —
+     * required when the action shells out to `bugsee-cli`.
+     */
+    @get:Inject
+    abstract val execOps: ExecOperations
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -166,7 +212,44 @@ abstract class MappingUploadTask : DefaultTask() {
         else null
         if (isDebug) logger.warn("Bugsee: Icon file: ${iconFile?.path}")
 
-        // Create ZIP with mapping + icon
+        // Pick uploader strategy. The fallback tag flows into the Kotlin
+        // path's `X-Bugsee-Uploader` header so backend can count CLI vs.
+        // fallback usage without touching customer code.
+        val uploaderChoice = uploader.get()
+        val cliBinPath = cliPath.orNull?.takeIf { it.isNotBlank() }
+
+        val kotlinFallbackTag: String = when {
+            uploaderChoice == UploaderStrategy.KOTLIN -> "kotlin"
+            cliBinPath == null -> {
+                logger.warn(
+                    "Bugsee: uploader = CLI but cliPath is not set; using the " +
+                        "Kotlin uploader instead.",
+                )
+                "kotlin-fallback-cli-not-configured"
+            }
+            else -> {
+                val cliResult = CliUploader.uploadMapping(
+                    execOps = execOps,
+                    cliBinary = File(cliBinPath),
+                    mappingFile = mapping,
+                    iconFile = iconFile,
+                    appToken = appToken,
+                    endpoint = endpoint.get(),
+                    version = versionName ?: "",
+                    build = versionCode.toString(),
+                    uuid = buildUUID,
+                    logger = logger,
+                    debug = isDebug,
+                )
+                when {
+                    cliResult.success -> return
+                    !cliResult.shouldFallback -> return // already logged
+                    else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
+                }
+            }
+        }
+
+        // Kotlin path: build the ZIP + metadata and run the in-process uploader.
         val zipTemp = ZipUtils.createMappingZip(mapping, iconFile, buildUUID)
         try {
             // Compute mapping hash
@@ -187,7 +270,8 @@ abstract class MappingUploadTask : DefaultTask() {
                 appToken = appToken,
                 endpoint = endpoint.get(),
                 logger = logger,
-                debug = isDebug
+                debug = isDebug,
+                uploaderTag = kotlinFallbackTag,
             )
         } finally {
             zipTemp.delete()

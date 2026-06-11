@@ -31,6 +31,17 @@ internal object SymbolUploader {
      * @param endpoint The Bugsee API endpoint
      * @param logger Gradle logger
      * @param debug Whether debug logging is enabled
+     * @param uploaderTag Value for the `X-Bugsee-Uploader` request header on
+     *   the metadata POST. Defaults to `"kotlin"` for direct invocations.
+     *   When this uploader runs as a fallback after `bugsee-cli` failed
+     *   structurally, the caller passes `"kotlin-fallback-cli-<reason>"`
+     *   (where `<reason>` matches `CliUploadResult.fallbackReason`) so the
+     *   backend can count both paths without touching customer code. See
+     *   [CliUploader] and the dual-path rollout plan.
+     *
+     *   The header is NOT added to the presigned-URL PUT — that goes to S3,
+     *   whose signature is bound to a specific header set; adding extras
+     *   there would trigger `SignatureDoesNotMatch`.
      * @return `true` if the upload succeeded or the symbol already exists on the server
      */
     fun uploadData(
@@ -39,7 +50,8 @@ internal object SymbolUploader {
         appToken: String,
         endpoint: String,
         logger: Logger,
-        debug: Boolean
+        debug: Boolean,
+        uploaderTag: String = "kotlin",
     ): Boolean {
         if (debug) logger.warn("Bugsee: Starting upload. Body: $json")
 
@@ -48,6 +60,7 @@ internal object SymbolUploader {
         val body = StringEntity(json)
         body.contentType = BasicHeader(HTTP.CONTENT_TYPE, "application/json")
         httpPost.entity = body
+        httpPost.addHeader("X-Bugsee-Uploader", uploaderTag)
 
         val requestConfig = RequestConfig.custom()
             .setConnectTimeout(CONNECT_TIMEOUT_MS)

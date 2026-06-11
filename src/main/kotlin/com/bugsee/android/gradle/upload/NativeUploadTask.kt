@@ -16,8 +16,10 @@ import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 import org.json.JSONObject
 import java.io.File
+import javax.inject.Inject
 
 /**
  * Task that uploads NDK native debug symbols to the Bugsee backend.
@@ -29,7 +31,21 @@ import java.io.File
  * Configuration-cache safe: every value the action needs is wired into
  * an `@Input` / `@Internal` task property at registration time. The
  * action MUST NOT reach into `project.extensions` or `project.layout`
- * at execution — `project` is unavailable on CC replay.
+ * at execution — `project` is unavailable on CC replay. [ExecOperations]
+ * is the CC-safe replacement for `project.exec` and is requested via
+ * `@Inject` rather than read from the project.
+ *
+ * Mirrors [MappingUploadTask]'s dual-uploader strategy:
+ *   - [UploaderStrategy.KOTLIN] (default) — run [SymbolUploader.uploadData]
+ *     directly with `transform = "breakpad"`.
+ *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload --type elf`
+ *     via [CliUploader.uploadElf]. On a structural CLI failure (exit 1 or 2,
+ *     binary missing, exec failed), fall back to the Kotlin uploader.
+ *     Substantive CLI failures (bad token, server, network) propagate.
+ *
+ * Both paths share the [SymbolHashCache] — once a hash is uploaded
+ * successfully by either path, subsequent builds skip the upload regardless
+ * of which strategy is selected.
  */
 abstract class NativeUploadTask : DefaultTask() {
 
@@ -44,6 +60,23 @@ abstract class NativeUploadTask : DefaultTask() {
 
     @get:Input
     abstract val forceUpload: Property<Boolean>
+
+    /**
+     * Path to the `bugsee-cli` binary. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.cliPath] at task
+     * registration. When unset (or [uploader] is [UploaderStrategy.KOTLIN]),
+     * the CLI path is never invoked.
+     *
+     * `@Internal` rationale: same as [MappingUploadTask.cliPath] — the
+     * binary's existence is checked at execution; we don't want Gradle's
+     * up-to-date checks gating on a path string that doesn't represent
+     * real task input.
+     */
+    @get:Internal
+    abstract val cliPath: Property<String>
+
+    @get:Input
+    abstract val uploader: Property<UploaderStrategy>
 
     @get:InputFile
     abstract val manifestFile: RegularFileProperty
@@ -104,6 +137,13 @@ abstract class NativeUploadTask : DefaultTask() {
     @get:Internal
     abstract val buildDirectory: DirectoryProperty
 
+    /**
+     * Injected by Gradle. CC-safe replacement for `project.exec` —
+     * required when the action shells out to `bugsee-cli`.
+     */
+    @get:Inject
+    abstract val execOps: ExecOperations
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -147,6 +187,9 @@ abstract class NativeUploadTask : DefaultTask() {
         val cacheFile = File(rootProjectDirectory.get().asFile, ".gradle/bugsee/native-symbol-cache.json")
         val cacheKey = "${HashUtils.sha1Hex(appToken)}:${variantName.get()}"
 
+        val uploaderChoice = uploader.get()
+        val cliBinPath = cliPath.orNull?.takeIf { it.isNotBlank() }
+
         // Check for intermediate symbols folder first
         val intermediateSymbolsDir = File("$basePath/intermediates/native_debug_metadata/${variantName.get()}/out")
         if (intermediateSymbolsDir.exists()) {
@@ -155,33 +198,20 @@ abstract class NativeUploadTask : DefaultTask() {
             val zipTemp = File.createTempFile(buildUUID, ".zip")
             try {
                 ZipUtils.zipDirectory(intermediateSymbolsDir.absolutePath, zipTemp.absolutePath)
-
-                val hash = HashUtils.sha1Hex(zipTemp)
-
-                if (!skipCache && SymbolHashCache.isCached(cacheFile, cacheKey, hash)) {
-                    if (isDebug) logger.warn("Bugsee: Native symbols unchanged (hash=$hash). Skipping upload.")
-                    return
-                }
-
-                val json = JSONObject().apply {
-                    put("uuid", buildUUID)
-                    put("version", versionName)
-                    put("build", versionCode)
-                    put("hash", hash)
-                    put("transform", "breakpad")
-                }.toString()
-
-                val success = SymbolUploader.uploadData(
-                    file = zipTemp,
-                    json = json,
+                uploadOneZip(
+                    zip = zipTemp,
+                    buildUUID = buildUUID,
+                    versionName = versionName,
+                    versionCode = versionCode,
                     appToken = appToken,
-                    endpoint = endpoint.get(),
-                    logger = logger,
-                    debug = isDebug
+                    endpointUrl = endpoint.get(),
+                    cacheFile = cacheFile,
+                    cacheKey = cacheKey,
+                    skipCache = skipCache,
+                    isDebug = isDebug,
+                    uploaderChoice = uploaderChoice,
+                    cliBinPath = cliBinPath,
                 )
-                if (success) {
-                    SymbolHashCache.put(cacheFile, cacheKey, hash)
-                }
             } finally {
                 zipTemp.delete()
             }
@@ -200,33 +230,20 @@ abstract class NativeUploadTask : DefaultTask() {
                 val symbolsZip = File(outputDir, "native-debug-symbols.zip")
                 if (symbolsZip.exists()) {
                     if (isDebug) logger.warn("Bugsee: Native symbols file found: ${symbolsZip.path}")
-
-                    val hash = HashUtils.sha1Hex(symbolsZip)
-
-                    if (!skipCache && SymbolHashCache.isCached(cacheFile, cacheKey, hash)) {
-                        if (isDebug) logger.warn("Bugsee: Native symbols unchanged (hash=$hash). Skipping upload.")
-                        return@forEach
-                    }
-
-                    val json = JSONObject().apply {
-                        put("uuid", buildUUID)
-                        put("version", versionName)
-                        put("build", versionCode)
-                        put("hash", hash)
-                        put("transform", "breakpad")
-                    }.toString()
-
-                    val success = SymbolUploader.uploadData(
-                        file = symbolsZip,
-                        json = json,
+                    uploadOneZip(
+                        zip = symbolsZip,
+                        buildUUID = buildUUID,
+                        versionName = versionName,
+                        versionCode = versionCode,
                         appToken = appToken,
-                        endpoint = endpoint.get(),
-                        logger = logger,
-                        debug = isDebug
+                        endpointUrl = endpoint.get(),
+                        cacheFile = cacheFile,
+                        cacheKey = cacheKey,
+                        skipCache = skipCache,
+                        isDebug = isDebug,
+                        uploaderChoice = uploaderChoice,
+                        cliBinPath = cliBinPath,
                     )
-                    if (success) {
-                        SymbolHashCache.put(cacheFile, cacheKey, hash)
-                    }
                 } else {
                     if (isDebug) logger.warn("Bugsee: Native symbols file not found at: ${symbolsZip.absolutePath}")
                 }
@@ -234,6 +251,93 @@ abstract class NativeUploadTask : DefaultTask() {
         } else {
             logger.warn("Bugsee: NDK upload is enabled but no native symbols found for variant ${variantName.get()}. " +
                 "Ensure your project includes native code and that debugSymbolLevel is configured.")
+        }
+    }
+
+    /**
+     * Hash → cache-check → strategy-pick → upload (CLI first if configured,
+     * Kotlin otherwise) → cache-write on success. Extracted so both upload
+     * sites (intermediate folder + final zip) share the same dual-path
+     * behavior.
+     */
+    @Suppress("LongParameterList")
+    private fun uploadOneZip(
+        zip: File,
+        buildUUID: String,
+        versionName: String?,
+        versionCode: String,
+        appToken: String,
+        endpointUrl: String,
+        cacheFile: File,
+        cacheKey: String,
+        skipCache: Boolean,
+        isDebug: Boolean,
+        uploaderChoice: UploaderStrategy,
+        cliBinPath: String?,
+    ) {
+        val hash = HashUtils.sha1Hex(zip)
+
+        if (!skipCache && SymbolHashCache.isCached(cacheFile, cacheKey, hash)) {
+            if (isDebug) logger.warn("Bugsee: Native symbols unchanged (hash=$hash). Skipping upload.")
+            return
+        }
+
+        // Strategy pick — same shape as MappingUploadTask. The Kotlin tag
+        // flows into the SymbolUploader's `X-Bugsee-Uploader` header so
+        // the backend can bucket fallback rates.
+        val kotlinFallbackTag: String = when {
+            uploaderChoice == UploaderStrategy.KOTLIN -> "kotlin"
+            cliBinPath == null -> {
+                logger.warn(
+                    "Bugsee: uploader = CLI but cliPath is not set; using the " +
+                        "Kotlin uploader instead.",
+                )
+                "kotlin-fallback-cli-not-configured"
+            }
+            else -> {
+                val cliResult = CliUploader.uploadElf(
+                    execOps = execOps,
+                    cliBinary = File(cliBinPath),
+                    symbolsZip = zip,
+                    appToken = appToken,
+                    endpoint = endpointUrl,
+                    version = versionName ?: "",
+                    build = versionCode,
+                    uuid = buildUUID,
+                    logger = logger,
+                    debug = isDebug,
+                )
+                when {
+                    cliResult.success -> {
+                        SymbolHashCache.put(cacheFile, cacheKey, hash)
+                        return
+                    }
+                    !cliResult.shouldFallback -> return // already logged
+                    else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
+                }
+            }
+        }
+
+        // Kotlin path: build JSON + run the in-process uploader.
+        val json = JSONObject().apply {
+            put("uuid", buildUUID)
+            put("version", versionName)
+            put("build", versionCode)
+            put("hash", hash)
+            put("transform", "breakpad")
+        }.toString()
+
+        val success = SymbolUploader.uploadData(
+            file = zip,
+            json = json,
+            appToken = appToken,
+            endpoint = endpointUrl,
+            logger = logger,
+            debug = isDebug,
+            uploaderTag = kotlinFallbackTag,
+        )
+        if (success) {
+            SymbolHashCache.put(cacheFile, cacheKey, hash)
         }
     }
 }
