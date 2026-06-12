@@ -17,6 +17,7 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
@@ -273,6 +274,37 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Optional
     abstract val timingsEnabled: Property<Boolean>
 
+    /**
+     * Build-actions manifest output. JSON file declaring which
+     * build-info actions this Gradle plugin handled for this variant
+     * — read by the Bugsee fastlane plugin (and any other Bugsee
+     * producer running alongside this build) so they can skip
+     * per-action work the plugin already did.
+     *
+     * Schema (version 1) is documented in
+     * `Fastlane::Bugsee::Handshake` (fastlane-plugin-bugsee/lib/
+     * fastlane/plugin/bugsee/helper/bugsee_handshake.rb). Keep the
+     * `actions` keys + the schema_version IN LOCKSTEP with the
+     * fastlane reader's `ACTION_KEYS` list; an unilateral rename on
+     * either side silently breaks de-duplication.
+     *
+     * Wired by [com.bugsee.android.gradle.BugseePlugin] to
+     * `<project>/build/intermediates/bugsee/<variant>/build-actions.json`
+     * — same parent dir as `build-id.txt`, so a single glob
+     * matching every file under each per-variant
+     * `intermediates/bugsee/<dir>` catches both files.
+     */
+    @get:OutputFile
+    @get:Optional
+    abstract val buildActionsManifestFile: RegularFileProperty
+
+    /** Plugin version baked into the manifest's `producer_version`
+     *  field so the fastlane reader can attribute skip decisions
+     *  back to a specific Bugsee Android Gradle plugin release. */
+    @get:Input
+    @get:Optional
+    abstract val pluginVersion: Property<String>
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -374,6 +406,13 @@ abstract class BundleUploadTask : DefaultTask() {
             null
         }
 
+        // Hoisted above the try{} so the build-actions manifest
+        // write in the `finally` block can read them. The same
+        // values are also re-used inside the upload metadata
+        // construction below.
+        val wantsArtifactUpload = requestArtifactUpload.getOrElse(false)
+        val wantsDependenciesUpload = requestDependenciesUpload.getOrElse(false)
+
         try {
             // VCS sub-object — nested to match the appserver's
             // `VcsMetadataSchema`. Each field only lands if we
@@ -398,9 +437,6 @@ abstract class BundleUploadTask : DefaultTask() {
             // actual artifact size, not whatever the transport-layer
             // wrapper happens to be.
             val artifactSize = artifactFile.length()
-
-            val wantsArtifactUpload = requestArtifactUpload.getOrElse(false)
-            val wantsDependenciesUpload = requestDependenciesUpload.getOrElse(false)
 
             // Run the dependency collector when the user has opted in
             // (default-on path). All-or-nothing: a resolution failure
@@ -579,8 +615,46 @@ abstract class BundleUploadTask : DefaultTask() {
             }
         } finally {
             uploadZip.delete()
+            // Cross-producer handshake — write the build-actions
+            // manifest declaring which actions this plugin handled
+            // for this variant. Read by the Bugsee fastlane plugin
+            // (and any other producer) so they can skip per-action
+            // work that's already been done. Writes inside `finally`
+            // so a failed upload still leaves a manifest declaring
+            // intent — the plugin tried, retrying from fastlane
+            // would just re-attempt the same wire payload the
+            // server already saw.
+            try {
+                val outFile = buildActionsManifestFile.orNull?.asFile
+                if (outFile != null) {
+                    val resolvedBuildId = try {
+                        resolvedBuildIdFile.orNull?.asFile?.takeIf { it.isFile }
+                            ?.readText()?.trim()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    writeBuildActionsManifest(
+                        outFile = outFile,
+                        pluginVersion = pluginVersion.orNull,
+                        buildId = resolvedBuildId,
+                        producedAtMs = System.currentTimeMillis(),
+                        versionName = versionName,
+                        versionCode = versionCode,
+                        dsymUpload = false,
+                        mappingUpload = mappingFile.orNull?.asFile?.isFile == true,
+                        depsCollection = wantsDependenciesUpload,
+                        timings = timingsEnabled.getOrElse(true),
+                        sizeAnalysis = wantsArtifactUpload,
+                    )
+                }
+            } catch (e: Exception) {
+                if (isDebug) logger.warn(
+                    "Bugsee: failed to write build-actions manifest: ${e.message}"
+                )
+            }
         }
     }
+
 
     /**
      * Collapse the configured threshold properties into the evaluator's
@@ -785,6 +859,67 @@ abstract class BundleUploadTask : DefaultTask() {
     }
 
     companion object {
+        /**
+         * Write the cross-producer build-actions handshake manifest.
+         *
+         * Cross-repo contract:
+         *
+         *   - `schema_version` MUST be `1` to match the fastlane
+         *     reader's `Fastlane::Bugsee::Handshake` (file
+         *     `fastlane-plugin-bugsee/lib/fastlane/plugin/bugsee/
+         *     helper/bugsee_handshake.rb`). The reader rejects any
+         *     other schema_version as forward-incompatible.
+         *   - `producer` is the literal
+         *     `"bugsee-android-gradle-plugin"` — fastlane logs this
+         *     verbatim so a customer can attribute skip decisions
+         *     back to a specific producer.
+         *   - The `actions` block declares the DSL state of each
+         *     feature flag for THIS variant. A `true` value means
+         *     the plugin was configured to handle this action
+         *     (whether it ultimately succeeded or failed). The
+         *     fastlane reader treats `true` as "skip this work"
+         *     and `false` / absent as "do it yourself".
+         *
+         * Best-effort: caller catches exceptions. Failing to write
+         * the local manifest file is at worst a noisy lane log
+         * (fastlane runs the work itself), not a broken build.
+         *
+         * Visible for testing — pure inputs, no Task dependencies.
+         */
+        @JvmStatic
+        internal fun writeBuildActionsManifest(
+            outFile: File,
+            pluginVersion: String?,
+            buildId: String?,
+            producedAtMs: Long,
+            versionName: String?,
+            versionCode: String?,
+            dsymUpload: Boolean,
+            mappingUpload: Boolean,
+            depsCollection: Boolean,
+            timings: Boolean,
+            sizeAnalysis: Boolean,
+        ) {
+            outFile.parentFile?.mkdirs()
+            val manifest = JSONObject().apply {
+                put("schema_version", 1)
+                put("producer", "bugsee-android-gradle-plugin")
+                pluginVersion?.let { put("producer_version", it) }
+                buildId?.let { put("build_id", it) }
+                put("produced_at_ms", producedAtMs)
+                versionName?.let { put("version_name", it) }
+                versionCode?.let { put("version_code", it) }
+                put("actions", JSONObject().apply {
+                    put("dsym_upload",     dsymUpload)
+                    put("mapping_upload",  mappingUpload)
+                    put("deps_collection", depsCollection)
+                    put("timings",         timings)
+                    put("size_analysis",   sizeAnalysis)
+                })
+            }
+            outFile.writeText(manifest.toString())
+        }
+
         // MS-DOS date/time cannot represent anything before 1980-01-01,
         // so any normalised mtime we pick must be on or after that.
         internal val DOS_EPOCH_LOCAL: LocalDateTime =

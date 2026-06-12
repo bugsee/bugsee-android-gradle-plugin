@@ -689,6 +689,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // explicit `set`/`usesService` call needed. The
             // user-facing on/off flag still has to be set explicitly.
             task.timingsEnabled.set(extension.buildInfo.timings.enabled)
+            // Handshake — write the per-variant build-actions
+            // manifest next to build-id.txt so the fastlane plugin
+            // can find it via the standard intermediates glob.
+            task.buildActionsManifestFile.set(
+                project.layout.buildDirectory.file(
+                    "intermediates/bugsee/${variant.name}/build-actions.json"
+                )
+            )
+            task.pluginVersion.set(PLUGIN_VERSION)
         }
 
         project.tasks.configureEach { t ->
@@ -732,6 +741,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             wireDependenciesCollectionInputs(task, project, variant, extension.buildInfo.dependencies)
             // Timing service auto-wired via @ServiceReference (see above).
             task.timingsEnabled.set(extension.buildInfo.timings.enabled)
+            // Handshake — same per-variant location as the AAB
+            // upload task. The two upload tasks share a single
+            // manifest output because Gradle's @OutputFile
+            // declaration ties up-to-date checks to the file;
+            // either task running rewrites it.
+            task.buildActionsManifestFile.set(
+                project.layout.buildDirectory.file(
+                    "intermediates/bugsee/${variant.name}/build-actions.json"
+                )
+            )
+            task.pluginVersion.set(PLUGIN_VERSION)
         }
 
         project.tasks.configureEach { t ->
