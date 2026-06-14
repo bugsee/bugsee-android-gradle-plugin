@@ -698,6 +698,23 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 )
             )
             task.pluginVersion.set(PLUGIN_VERSION)
+            // Build-info bundle (Phase D) — same CLI plumbing as the
+            // mapping upload task. `cliPath` optional (local binary);
+            // otherwise the task auto-downloads `cliVersion` into the
+            // per-user Gradle cache. `gradleUserHomeDir` is that cache
+            // root, captured CC-safely as a File.
+            task.cliPath.set(extension.cliPath)
+            task.cliVersion.set(extension.cliVersion)
+            task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
+            // Escape hatch: `BUGSEE_LEGACY_BUILDINFO_GZIP=1` forces the
+            // legacy per-blob gzip PUTs even when the server signed a
+            // build-info bundle URL. Read via a provider so the
+            // config-cache invalidates correctly when the env var flips.
+            task.legacyBuildInfoGzip.set(
+                project.providers.environmentVariable("BUGSEE_LEGACY_BUILDINFO_GZIP")
+                    .map { it == "1" || it.equals("true", ignoreCase = true) }
+                    .orElse(false)
+            )
         }
 
         project.tasks.configureEach { t ->
@@ -752,6 +769,23 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 )
             )
             task.pluginVersion.set(PLUGIN_VERSION)
+            // Build-info bundle (Phase D) — same CLI plumbing as the
+            // mapping upload task. `cliPath` optional (local binary);
+            // otherwise the task auto-downloads `cliVersion` into the
+            // per-user Gradle cache. `gradleUserHomeDir` is that cache
+            // root, captured CC-safely as a File.
+            task.cliPath.set(extension.cliPath)
+            task.cliVersion.set(extension.cliVersion)
+            task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
+            // Escape hatch: `BUGSEE_LEGACY_BUILDINFO_GZIP=1` forces the
+            // legacy per-blob gzip PUTs even when the server signed a
+            // build-info bundle URL. Read via a provider so the
+            // config-cache invalidates correctly when the env var flips.
+            task.legacyBuildInfoGzip.set(
+                project.providers.environmentVariable("BUGSEE_LEGACY_BUILDINFO_GZIP")
+                    .map { it == "1" || it.equals("true", ignoreCase = true) }
+                    .orElse(false)
+            )
         }
 
         project.tasks.configureEach { t ->

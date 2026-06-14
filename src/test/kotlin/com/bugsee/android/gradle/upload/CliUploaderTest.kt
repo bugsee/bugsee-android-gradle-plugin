@@ -116,6 +116,63 @@ class CliUploaderTest {
         assertFalse(argv.contains("--icon"), "ELF argv must NEVER contain --icon; argv=$argv")
     }
 
+    // ── argv contract — build-info bundle (pre-signed mode) ──────────
+
+    private val depsJson = File("/tmp/dependencies.json")
+    private val timingsJson = File("/tmp/timings.json")
+
+    @Test fun `buildBuildInfoArgv with deps and timings produces the documented flag order`() {
+        val argv = CliUploader.buildBuildInfoArgv(
+            uploadUrl = "https://s3.example/final/build-info/abc-tid.zip?sig=…",
+            depsJsonFile = depsJson,
+            timingsJsonFile = timingsJson,
+        )
+        assertContentEquals(
+            listOf(
+                "upload", "build-info",
+                "--upload-url", "https://s3.example/final/build-info/abc-tid.zip?sig=…",
+                "--deps", "/tmp/dependencies.json",
+                "--timings", "/tmp/timings.json",
+            ),
+            argv,
+        )
+    }
+
+    @Test fun `buildBuildInfoArgv omits --deps when no deps file is collected`() {
+        val argv = CliUploader.buildBuildInfoArgv(
+            uploadUrl = "https://s3.example/u",
+            depsJsonFile = null,
+            timingsJsonFile = timingsJson,
+        )
+        assertFalse(argv.contains("--deps"), "no --deps flag when deps file is null; argv=$argv")
+        assertTrue(argv.contains("--timings"), "timings still present; argv=$argv")
+    }
+
+    @Test fun `buildBuildInfoArgv omits --timings when no timings file is collected`() {
+        val argv = CliUploader.buildBuildInfoArgv(
+            uploadUrl = "https://s3.example/u",
+            depsJsonFile = depsJson,
+            timingsJsonFile = null,
+        )
+        assertTrue(argv.contains("--deps"), "deps still present; argv=$argv")
+        assertFalse(argv.contains("--timings"), "no --timings flag when timings file is null; argv=$argv")
+    }
+
+    @Test fun `buildBuildInfoArgv is pre-signed mode — no --endpoint or --app-token`() {
+        // Pre-signed mode PUTs directly to the URL the plugin already
+        // obtained from its own /builds POST; sending --endpoint /
+        // --app-token would (harmlessly) imply a second registration the
+        // CLI must not do. Pin their absence so a copy/paste from the
+        // symbol argv builders doesn't silently reintroduce them.
+        val argv = CliUploader.buildBuildInfoArgv(
+            uploadUrl = "https://s3.example/u",
+            depsJsonFile = depsJson,
+            timingsJsonFile = timingsJson,
+        )
+        assertFalse(argv.contains("--endpoint"), "build-info pre-signed argv must NOT carry --endpoint; argv=$argv")
+        assertFalse(argv.contains("--app-token"), "build-info pre-signed argv must NOT carry --app-token; argv=$argv")
+    }
+
     // ── exit-code → fallback contract ───────────────────────────────
 
     @Test fun `exit 0 does not trigger fallback`() {

@@ -92,6 +92,14 @@ internal object ChunkedBundleUploader {
         debug: Boolean,
         dependenciesGzFile: File? = null,
         timingsGzFile: File? = null,
+        // Build-info bundle (Phase D) — mirrors the single-PUT path. All
+        // default to the no-bundle state so callers/tests that don't opt
+        // in keep the legacy per-blob behaviour.
+        execOps: org.gradle.process.ExecOperations? = null,
+        resolveCli: () -> File? = { null },
+        depsJsonFile: File? = null,
+        timingsJsonFile: File? = null,
+        legacyBuildInfoGzip: Boolean = false,
     ): String {
         val http = newHttpClient()
         try {
@@ -170,13 +178,20 @@ internal object ChunkedBundleUploader {
             // Each PUT is best-effort and independent — a transient
             // failure here does not unwind the (already-committed)
             // chunked artefact submission.
-            BundleUploader.uploadAuxiliaryBlob(
-                http, "dependencies", submitResult.depsUploadEndpoint,
-                dependenciesGzFile, logger, debug,
-            )
-            BundleUploader.uploadAuxiliaryBlob(
-                http, "timings", submitResult.timingsUploadEndpoint,
-                timingsGzFile, logger, debug,
+            BundleUploader.uploadBuildInfoComponents(
+                client = http,
+                buildInfoUploadEndpoint = submitResult.buildInfoUploadEndpoint,
+                dependenciesUploadEndpoint = submitResult.depsUploadEndpoint,
+                timingsUploadEndpoint = submitResult.timingsUploadEndpoint,
+                execOps = execOps,
+                resolveCli = resolveCli,
+                depsJsonFile = depsJsonFile,
+                timingsJsonFile = timingsJsonFile,
+                dependenciesGzFile = dependenciesGzFile,
+                timingsGzFile = timingsGzFile,
+                legacyBuildInfoGzip = legacyBuildInfoGzip,
+                logger = logger,
+                debug = debug,
             )
 
             return submitResult.buildId
@@ -195,6 +210,7 @@ internal object ChunkedBundleUploader {
         val buildId: String,
         val depsUploadEndpoint: String,
         val timingsUploadEndpoint: String,
+        val buildInfoUploadEndpoint: String,
     )
 
     // ── Chunk hashing ─────────────────────────────────────────────
@@ -375,6 +391,7 @@ internal object ChunkedBundleUploader {
                 buildId = buildId,
                 depsUploadEndpoint = payload.optString("dependencies_upload_endpoint", ""),
                 timingsUploadEndpoint = payload.optString("timings_upload_endpoint", ""),
+                buildInfoUploadEndpoint = payload.optString("build_info_upload_endpoint", ""),
             )
         }
     }

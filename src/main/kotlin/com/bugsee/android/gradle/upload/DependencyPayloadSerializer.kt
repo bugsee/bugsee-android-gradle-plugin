@@ -88,6 +88,20 @@ internal object DependencyPayloadSerializer {
         return target
     }
 
+    /**
+     * Write the per-entry list as RAW (uncompressed) JSON — byte-identical
+     * content to [writeEntriesGz] but unzipped. The build-info bundle path
+     * hands this `dependencies.json` to `bugsee-cli upload build-info`,
+     * which does its own zstd packing; the worker re-gzips it on the way
+     * to the store, so the stored bytes match the legacy gzip path exactly.
+     * Returns the same File for call-site chaining.
+     */
+    fun writeEntries(entries: List<DependencyEntry>, summary: DependenciesSummary, target: File): File {
+        target.parentFile?.mkdirs()
+        target.writeBytes(entriesJsonObject(entries, summary).toString().toByteArray(Charsets.UTF_8))
+        return target
+    }
+
     // ── internals ──────────────────────────────────────────────────
 
     private fun entriesJsonObject(entries: List<DependencyEntry>, summary: DependenciesSummary): JSONObject =

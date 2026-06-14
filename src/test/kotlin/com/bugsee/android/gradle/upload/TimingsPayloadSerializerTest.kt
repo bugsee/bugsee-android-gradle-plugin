@@ -51,6 +51,26 @@ class TimingsPayloadSerializerTest {
         assertEquals(4_000L, first.getLong("end_ms"))
     }
 
+    @Test fun `writeJson emits raw JSON with the same content as the gz blob`() {
+        // The build-info bundle path hands `bugsee-cli` the RAW
+        // timings.json; the legacy path PUTs the gz. The worker re-gzips
+        // the bundle entry on store, so the two MUST carry byte-identical
+        // content. (Non-empty timings → build_started_at_ms is the
+        // earliest start, so the clock fallback never makes them diverge.)
+        val timings = listOf(
+            t(":app:compileReleaseKotlin", 1_000, 5_000),
+            t(":app:bundleRelease",        5_000, 5_800)
+        )
+        val rawFile = tempFolder.newFile("timings.json")
+        TimingsPayloadSerializer.writeJson(timings, rawFile)
+
+        val rawObj = JSONObject(rawFile.readText(Charsets.UTF_8))
+        val gzObj = parseGz(TimingsPayloadSerializer.gzipBytes(timings))
+        assertEquals(gzObj.toString(), rawObj.toString())
+        assertEquals(TimingsPayloadSerializer.SCHEMA_VERSION, rawObj.getInt("schema_version"))
+        assertTrue(rawObj.has("tasks"))
+    }
+
     @Test fun `offset arithmetic uses build_started_at_ms as origin`() {
         // Absolute-epoch task t0 + 1000 / t0 + 2000 -> offsets 1000 / 2000
         // and build_started_at_ms == t0. Pins the rule that the

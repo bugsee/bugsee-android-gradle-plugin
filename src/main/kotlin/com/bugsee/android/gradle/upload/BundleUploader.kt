@@ -12,6 +12,7 @@ import org.apache.http.message.BasicHeader
 import org.apache.http.protocol.HTTP
 import org.apache.http.util.EntityUtils
 import org.gradle.api.logging.Logger
+import org.gradle.process.ExecOperations
 import org.json.JSONObject
 import java.io.File
 
@@ -108,6 +109,17 @@ internal object BundleUploader {
         debug: Boolean,
         dependenciesGzFile: File? = null,
         timingsGzFile: File? = null,
+        // Build-info bundle (Phase D). When the registration response
+        // carries `build_info_upload_endpoint` AND a CLI binary is
+        // resolvable AND the escape hatch is off, deps + timings ship as
+        // ONE zstd bundle via `bugsee-cli upload build-info` instead of
+        // the two legacy gzip PUTs. All default to the no-bundle state so
+        // existing callers / tests get the unchanged legacy behaviour.
+        execOps: ExecOperations? = null,
+        resolveCli: () -> File? = { null },
+        depsJsonFile: File? = null,
+        timingsJsonFile: File? = null,
+        legacyBuildInfoGzip: Boolean = false,
     ) {
         if (debug) logger.warn("Bugsee: Starting bundle upload. Body: $json")
 
@@ -247,10 +259,127 @@ internal object BundleUploader {
             // (deps_summary on the POST body; build_metadata.timings
             // inside the same body); these are the detail blobs the
             // viewer lazy-fetches.
-            uploadAuxiliaryBlob(client, "dependencies", depsPresignedEndpoint, dependenciesGzFile, logger, debug)
-            uploadAuxiliaryBlob(client, "timings", timingsPresignedEndpoint, timingsGzFile, logger, debug)
+            uploadBuildInfoComponents(
+                client = client,
+                buildInfoUploadEndpoint = payload.optString("build_info_upload_endpoint", ""),
+                dependenciesUploadEndpoint = depsPresignedEndpoint,
+                timingsUploadEndpoint = timingsPresignedEndpoint,
+                execOps = execOps,
+                resolveCli = resolveCli,
+                depsJsonFile = depsJsonFile,
+                timingsJsonFile = timingsJsonFile,
+                dependenciesGzFile = dependenciesGzFile,
+                timingsGzFile = timingsGzFile,
+                legacyBuildInfoGzip = legacyBuildInfoGzip,
+                logger = logger,
+                debug = debug,
+            )
         }
     }
+
+    /**
+     * Ship the build-info components (deps + timings) by ONE of two routes:
+     *
+     *   - **Bundle (preferred)** — when the server signed a
+     *     [buildInfoUploadEndpoint], the escape hatch is off, there's at
+     *     least one raw JSON file, and a CLI binary resolves: shell to
+     *     `bugsee-cli upload build-info --upload-url <endpoint>` (pre-signed
+     *     mode), which packs the raw `dependencies.json` / `timings.json`
+     *     into one zstd ZIP and PUTs it. The converged Phase-D path.
+     *   - **Legacy per-blob (fallback)** — otherwise (no bundle endpoint /
+     *     escape hatch / no CLI / ANY bundle failure): the two independent
+     *     best-effort gzip PUTs to the separate presigned URLs, exactly as
+     *     before this path existed.
+     *
+     * Fallback policy (best-effort enrichment): the legacy per-blob PUTs go
+     * to DIFFERENT presigned URLs than the bundle, so they're an INDEPENDENT
+     * upload mechanism — not "the same backend, same error" the way the
+     * mapping CLI/Kotlin paths are. So we fall back to them on ANY bundle
+     * failure (structural OR substantive), maximising the chance the
+     * enrichment data still lands. A failed bundle (exit != 0) didn't store
+     * anything, so there's no double-store risk.
+     *
+     * CLI resolution is LAZY: [resolveCli] is invoked only after the cheap
+     * gate passes, so an org that isn't flagged on (no bundle endpoint in
+     * the response) never pays the CLI auto-download. Shared between the
+     * single-PUT and chunked paths so both produce the same wire behaviour.
+     */
+    @Suppress("LongParameterList")
+    internal fun uploadBuildInfoComponents(
+        client: org.apache.http.impl.client.CloseableHttpClient,
+        buildInfoUploadEndpoint: String,
+        dependenciesUploadEndpoint: String,
+        timingsUploadEndpoint: String,
+        execOps: ExecOperations?,
+        resolveCli: () -> File?,
+        depsJsonFile: File?,
+        timingsJsonFile: File?,
+        dependenciesGzFile: File?,
+        timingsGzFile: File?,
+        legacyBuildInfoGzip: Boolean,
+        logger: Logger,
+        debug: Boolean,
+    ) {
+        if (shouldAttemptBundle(
+                buildInfoUploadEndpoint = buildInfoUploadEndpoint,
+                legacyBuildInfoGzip = legacyBuildInfoGzip,
+                hasExec = execOps != null,
+                hasAnyJson = depsJsonFile != null || timingsJsonFile != null,
+            )
+        ) {
+            // Lazy: only download/resolve the CLI now that a bundle is
+            // actually on offer (W3 — don't pay it on every soak build).
+            val cliBinary = resolveCli()
+            if (cliBinary != null && execOps != null) {
+                val result = CliUploader.uploadBuildInfo(
+                    execOps = execOps,
+                    cliBinary = cliBinary,
+                    uploadUrl = buildInfoUploadEndpoint,
+                    depsJsonFile = depsJsonFile,
+                    timingsJsonFile = timingsJsonFile,
+                    logger = logger,
+                    debug = debug,
+                )
+                if (result.success) {
+                    if (debug) logger.warn("Bugsee: build-info bundle uploaded via bugsee-cli.")
+                    return
+                }
+                // Any failure → fall back to the independent legacy PUTs.
+                logger.warn(
+                    "Bugsee: build-info bundle upload failed " +
+                        "(${result.fallbackReason ?: "exit ${result.exitCode}"}); " +
+                        "falling back to legacy per-blob upload.",
+                )
+            } else {
+                logger.warn(
+                    "Bugsee: build-info bundle offered but bugsee-cli could not be " +
+                        "resolved; falling back to legacy per-blob upload.",
+                )
+            }
+            // fall through to the legacy per-blob PUTs
+        }
+
+        uploadAuxiliaryBlob(client, "dependencies", dependenciesUploadEndpoint, dependenciesGzFile, logger, debug)
+        uploadAuxiliaryBlob(client, "timings", timingsUploadEndpoint, timingsGzFile, logger, debug)
+    }
+
+    /**
+     * Cheap gate for the build-info bundle path, evaluated BEFORE the CLI is
+     * resolved (so a non-flagged org never pays the auto-download): the
+     * server signed a bundle URL ([buildInfoUploadEndpoint] non-empty), the
+     * escape hatch is off, an [ExecOperations] is available, and there's at
+     * least one component to pack. Any miss → the legacy per-blob gzip PUTs.
+     * Whether the CLI then actually resolves is handled by the caller (a
+     * null resolve also falls back). Extracted (and `internal`) so the
+     * gating contract is unit-testable without an exec / network round-trip.
+     */
+    internal fun shouldAttemptBundle(
+        buildInfoUploadEndpoint: String,
+        legacyBuildInfoGzip: Boolean,
+        hasExec: Boolean,
+        hasAnyJson: Boolean,
+    ): Boolean =
+        buildInfoUploadEndpoint.isNotEmpty() && !legacyBuildInfoGzip && hasExec && hasAnyJson
 
     /**
      * Best-effort PUT of an auxiliary blob (deps or timings gz) to a

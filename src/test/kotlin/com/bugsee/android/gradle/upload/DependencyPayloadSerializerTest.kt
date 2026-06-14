@@ -62,6 +62,35 @@ class DependencyPayloadSerializerTest {
         assertEquals(true, out.getBoolean("truncated"))
     }
 
+    @Test fun `writeEntries emits raw JSON with the same content as the gz blob`() {
+        // The build-info bundle path hands `bugsee-cli` the RAW
+        // dependencies.json; the legacy path PUTs the gz. The worker
+        // re-gzips the bundle entry on store, so the two MUST carry
+        // byte-identical content or a bundle-delivered build would differ
+        // from a legacy-delivered one.
+        val entries = listOf(
+            DependencyEntry(
+                group = "androidx.core", name = "core-ktx", version = "1.13.1",
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.LIBRARY
+            ),
+            DependencyEntry(
+                group = "", name = ":sub", version = null,
+                direct = true, scope = "implementation",
+                type = DependencyEntry.Type.PROJECT
+            )
+        )
+        val summary = DependenciesSummary.from(entries, false, 0L, defaultConfig)
+        val rawFile = tempFolder.newFile("dependencies.json")
+        DependencyPayloadSerializer.writeEntries(entries, summary, rawFile)
+
+        val rawObj = JSONObject(rawFile.readText(Charsets.UTF_8))
+        val gzObj = parseGz(DependencyPayloadSerializer.entriesGzBytes(entries, summary))
+        assertEquals(gzObj.toString(), rawObj.toString())
+        assertEquals(DependencyPayloadSerializer.SCHEMA_VERSION, rawObj.getInt("schema_version"))
+        assertEquals(2, rawObj.getJSONArray("dependencies").length())
+    }
+
     @Test fun `summaryJson emits collection_config fingerprint`() {
         // The worker compares this object against the previous build's
         // `collection_config` to decide whether the two dep lists are

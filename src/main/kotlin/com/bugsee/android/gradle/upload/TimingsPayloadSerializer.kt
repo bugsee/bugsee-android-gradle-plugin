@@ -169,4 +169,17 @@ internal object TimingsPayloadSerializer {
         target.writeBytes(gzipBytes(timings))
         return target
     }
+
+    /**
+     * Write the timeline blob as RAW (uncompressed) JSON — same content
+     * as [writeGz] but unzipped. Handed to `bugsee-cli upload build-info`
+     * as the bundle's `timings.json` entry (the CLI zstd-packs it; the
+     * worker re-gzips on store, so the stored bytes match the legacy gzip
+     * path). Returns the same File for call-site chaining.
+     */
+    fun writeJson(timings: Collection<TaskTiming>, target: File): File {
+        target.parentFile?.mkdirs()
+        target.writeBytes(blobJsonObject(timings).toString().toByteArray(Charsets.UTF_8))
+        return target
+    }
 }

@@ -21,9 +21,11 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 import org.gradle.util.GradleVersion
 import org.json.JSONObject
 import java.io.File
+import javax.inject.Inject
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.time.LocalDateTime
@@ -305,6 +307,41 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Optional
     abstract val pluginVersion: Property<String>
 
+    // ── Build-info bundle (Phase D) — CLI plumbing ───────────────────
+    // When the registration response carries `build_info_upload_endpoint`
+    // (appserver Phase C + the org feature flag), deps + timings ship as
+    // ONE zstd bundle via `bugsee-cli upload build-info` instead of the
+    // two legacy gzip PUTs. Mirrors the CLI wiring on MappingUploadTask.
+
+    /** Explicit `bugsee-cli` path (from `BugseePluginExtension.cliPath`);
+     *  when unset the binary is auto-downloaded by version. `@Internal`
+     *  (matching MappingUploadTask): the source of truth is what's on disk
+     *  when the task runs, so a developer changing the path between builds
+     *  shouldn't fail this task's up-to-date check. */
+    @get:Internal
+    abstract val cliPath: Property<String>
+
+    /** `bugsee-cli` version to auto-download when [cliPath] is unset. */
+    @get:Input
+    @get:Optional
+    abstract val cliVersion: Property<String>
+
+    /** Gradle user home — the auto-download cache root for the CLI. */
+    @get:Internal
+    abstract val gradleUserHomeDir: DirectoryProperty
+
+    /** Escape hatch: when `true` (env `BUGSEE_LEGACY_BUILDINFO_GZIP=1`),
+     *  force the legacy per-blob gzip PUTs even when the server signed a
+     *  build-info bundle URL. Emergency rollback during the soak. */
+    @get:Input
+    @get:Optional
+    abstract val legacyBuildInfoGzip: Property<Boolean>
+
+    /** Injected by Gradle. CC-safe replacement for `project.exec` —
+     *  required when the action shells out to `bugsee-cli`. */
+    @get:Inject
+    abstract val execOps: ExecOperations
+
     @TaskAction
     fun execute() {
         val isDebug = debug.get()
@@ -506,6 +543,16 @@ abstract class BundleUploadTask : DefaultTask() {
                 if (timingsPayload != null) {
                     put("request_timings_upload", true)
                 }
+                // Opt into the converged build-info bundle whenever we have
+                // any build-info to ship. The server only signs a
+                // `build_info_upload_endpoint` when the org's
+                // `BUGSEE_FEATURE_BUILD_INFO_BUNDLE_ENABLED` flag is on; we
+                // keep requesting deps/timings URLs too so the legacy path
+                // stays available for fallback (and for orgs not yet on the
+                // flag) during the soak.
+                if (depsPayload != null || timingsPayload != null) {
+                    put("request_build_info_upload", true)
+                }
                 if (vcsJson.length() > 0) put("vcs", vcsJson)
                 // Machine + plugin/Gradle versions + per-category
                 // Gradle task timings (see resolveBuildMetadataJson).
@@ -535,6 +582,29 @@ abstract class BundleUploadTask : DefaultTask() {
                 )
             } else null
 
+            // Build-info bundle (Phase D): resolve the CLI LAZILY. The
+            // uploader invokes `resolveCli` only after it sees a
+            // `build_info_upload_endpoint` in the registration response, so
+            // an org that isn't flagged on never pays the CLI auto-download.
+            // A null result (no CLI resolvable) falls back to the legacy
+            // per-blob PUTs inside the uploader.
+            val legacyGzip = legacyBuildInfoGzip.getOrElse(false)
+            val gradleUserHome = gradleUserHomeDir.orNull?.asFile
+            val resolveCli: () -> File? = {
+                if (gradleUserHome != null) {
+                    CliBinaryResolver.resolve(
+                        cliVersion = cliVersion.orNull,
+                        cliPath = cliPath.orNull,
+                        execOps = execOps,
+                        gradleUserHome = gradleUserHome,
+                        logger = logger,
+                        debug = isDebug,
+                    )
+                } else {
+                    null
+                }
+            }
+
             // Chunked upload path (Phase 6, feature-flagged). Only
             // meaningful when an artefact upload was requested — the
             // build-info-only path has nothing to chunk. Falls back
@@ -551,6 +621,11 @@ abstract class BundleUploadTask : DefaultTask() {
                         endpoint  = endpoint.get(),
                         dependenciesGzFile = depsPayload?.gzFile,
                         timingsGzFile = timingsPayload?.gzFile,
+                        execOps = execOps,
+                        resolveCli = resolveCli,
+                        depsJsonFile = depsPayload?.jsonFile,
+                        timingsJsonFile = timingsPayload?.jsonFile,
+                        legacyBuildInfoGzip = legacyGzip,
                         logger    = logger,
                         debug     = isDebug,
                     )
@@ -575,6 +650,11 @@ abstract class BundleUploadTask : DefaultTask() {
                         requestArtifactUpload = wantsArtifactUpload,
                         dependenciesGzFile = depsPayload?.gzFile,
                         timingsGzFile = timingsPayload?.gzFile,
+                        execOps = execOps,
+                        resolveCli = resolveCli,
+                        depsJsonFile = depsPayload?.jsonFile,
+                        timingsJsonFile = timingsPayload?.jsonFile,
+                        legacyBuildInfoGzip = legacyGzip,
                         logger = logger,
                         debug = isDebug
                     )
@@ -746,7 +826,7 @@ abstract class BundleUploadTask : DefaultTask() {
      * scalar summary (embedded in the metadata POST) and the gzipped
      * full per-entry blob (PUT to the dependencies presigned URL).
      */
-    private data class DepsPayload(val summaryJson: JSONObject, val gzFile: File)
+    private data class DepsPayload(val summaryJson: JSONObject, val gzFile: File, val jsonFile: File)
 
     /**
      * Carrier for the build-timings detail blob — the full per-task
@@ -756,7 +836,7 @@ abstract class BundleUploadTask : DefaultTask() {
      * the metadata POST; the gz file here is PUT to the presigned URL
      * the server returns when `request_timings_upload: true`.
      */
-    private data class TimingsPayload(val gzFile: File)
+    private data class TimingsPayload(val gzFile: File, val jsonFile: File)
 
     /**
      * Build the timings detail blob if the build collected any task
@@ -769,7 +849,12 @@ abstract class BundleUploadTask : DefaultTask() {
         if (timingsSnapshot == null || timingsSnapshot.isEmpty()) return null
         val gz = File(temporaryDir, "bugsee-timings.json.gz")
         TimingsPayloadSerializer.writeGz(timingsSnapshot, gz)
-        return TimingsPayload(gzFile = gz)
+        // Raw (uncompressed) sibling for the build-info bundle path — the
+        // CLI packs this into the zstd bundle; the gz above is the legacy
+        // per-blob fallback. Both describe the same timeline.
+        val raw = File(temporaryDir, "bugsee-timings.json")
+        TimingsPayloadSerializer.writeJson(timingsSnapshot, raw)
+        return TimingsPayload(gzFile = gz, jsonFile = raw)
     }
 
     /**
@@ -839,7 +924,12 @@ abstract class BundleUploadTask : DefaultTask() {
         val summaryJson = DependencyPayloadSerializer.summaryJson(result.summary)
         val gz = File(temporaryDir, "bugsee-dependencies.json.gz")
         DependencyPayloadSerializer.writeEntriesGz(result.entries, result.summary, gz)
-        return DepsPayload(summaryJson = summaryJson, gzFile = gz)
+        // Raw (uncompressed) sibling for the build-info bundle path — the
+        // CLI packs this into the zstd bundle; the gz above is the legacy
+        // per-blob fallback. Both carry the same entry list.
+        val raw = File(temporaryDir, "bugsee-dependencies.json")
+        DependencyPayloadSerializer.writeEntries(result.entries, result.summary, raw)
+        return DepsPayload(summaryJson = summaryJson, gzFile = gz, jsonFile = raw)
     }
 
     private fun resolveArtifactFile(): File? {

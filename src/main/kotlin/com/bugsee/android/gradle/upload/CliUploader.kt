@@ -110,6 +110,48 @@ internal object CliUploader {
         debug = debug,
     )
 
+    /**
+     * Drives `bugsee-cli upload build-info` in PRE-SIGNED mode: the
+     * Gradle plugin already registered the build via its own
+     * `/v2/apps/<token>/builds` POST and received the
+     * `build_info_upload_endpoint` presigned URL in that response, so the
+     * CLI skips registration and PUTs the zstd bundle directly to
+     * [uploadUrl]. The CLI packs [depsJsonFile] / [timingsJsonFile] (RAW
+     * JSON — NOT the gzipped legacy blobs) into the bundle as
+     * `dependencies.json` / `timings.json`.
+     *
+     * At least one of [depsJsonFile] / [timingsJsonFile] must be non-null
+     * (the CLI rejects an empty bundle with a config error). Returns the
+     * same [CliUploadResult] contract as the symbol uploads — a
+     * structural failure (exit 1/2, binary missing) signals the caller to
+     * fall back to the legacy per-blob gzip PUTs.
+     *
+     * Requires `bugsee-cli` >= 0.2.0 (the version that introduced the
+     * `upload build-info` subcommand). The caller pins the downloaded CLI
+     * version via [CliBinaryResolver]; an older binary on PATH yields a
+     * Usage error (exit 2) → structural fallback.
+     */
+    @Suppress("LongParameterList")
+    fun uploadBuildInfo(
+        execOps: ExecOperations,
+        cliBinary: File,
+        uploadUrl: String,
+        depsJsonFile: File?,
+        timingsJsonFile: File?,
+        logger: Logger,
+        debug: Boolean,
+    ): CliUploadResult = verifyAndExec(
+        execOps = execOps,
+        cliBinary = cliBinary,
+        argv = buildBuildInfoArgv(
+            uploadUrl = uploadUrl,
+            depsJsonFile = depsJsonFile,
+            timingsJsonFile = timingsJsonFile,
+        ),
+        logger = logger,
+        debug = debug,
+    )
+
     private fun verifyAndExec(
         execOps: ExecOperations,
         cliBinary: File,
@@ -268,6 +310,32 @@ internal object CliUploader {
         add("--build"); add(build)
         add("--uuid"); add(uuid)
         add(symbolsZip.absolutePath)
+    }
+
+    /**
+     * Constructs the argv vector for `bugsee-cli upload build-info` in
+     * pre-signed mode. No `--endpoint` / `--app-token`: `--upload-url`
+     * tells the CLI to PUT the bundle directly to the presigned URL the
+     * plugin already obtained, skipping a second build registration.
+     *
+     * Entry flags map RAW JSON files to the bundle's stable entry names
+     * (`dependencies.json` / `timings.json`); the CLI does the zstd ZIP
+     * packing. Omitting a flag omits that entry — the caller passes only
+     * the components it collected.
+     *
+     * Visible for testing so the plugin↔CLI flag contract is pinned: a
+     * rename of any `upload build-info` flag flips this test at plugin-CI
+     * time rather than at customer build time.
+     */
+    internal fun buildBuildInfoArgv(
+        uploadUrl: String,
+        depsJsonFile: File?,
+        timingsJsonFile: File?,
+    ): List<String> = buildList {
+        add("upload"); add("build-info")
+        add("--upload-url"); add(uploadUrl)
+        depsJsonFile?.let { add("--deps"); add(it.absolutePath) }
+        timingsJsonFile?.let { add("--timings"); add(it.absolutePath) }
     }
 
     /**
