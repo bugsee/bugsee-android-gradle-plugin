@@ -426,14 +426,21 @@ abstract class BundleUploadTask : DefaultTask() {
 
         // Create ZIP containing bundle + optional mapping. Prefers the CLI
         // packer (zstd mapping) when eligible, native DEFLATE otherwise.
-        val uploadZip = createUploadZip(
-            bundle = artifactFile,
-            mapping = mapping,
-            buildUUID = buildUUID,
-            resolveCli = resolveCli,
-            legacyGzip = legacyGzip,
-            isDebug = isDebug,
-        )
+        //
+        // LAZY: only the native fallback path needs a pre-packed ZIP — the CLI
+        // `upload build` path packs the raw artefact itself. Wrapping in `lazy`
+        // avoids packing the (potentially large) artefact twice when the CLI
+        // handles the upload; the native path forces it via `.value`.
+        val uploadZip = lazy {
+            createUploadZip(
+                bundle = artifactFile,
+                mapping = mapping,
+                buildUUID = buildUUID,
+                resolveCli = resolveCli,
+                legacyGzip = legacyGzip,
+                isDebug = isDebug,
+            )
+        }
 
         // Best-effort VCS metadata — never fails the build.
         // `projectDirectory` is wired from `project.layout
@@ -620,61 +627,104 @@ abstract class BundleUploadTask : DefaultTask() {
             // lazily inside the uploader, and a null result falls back to the
             // legacy per-blob PUTs.
 
-            // Chunked upload path (Phase 6, feature-flagged). Only
-            // meaningful when an artefact upload was requested — the
-            // build-info-only path has nothing to chunk. Falls back
-            // to the single-PUT path on any failure so CI never breaks
-            // just because the chunked endpoints aren't deployed yet.
             val chunked = wantsArtifactUpload && chunkedUpload.get()
-            var chunkedSucceeded = false
-            if (chunked) {
-                try {
-                    ChunkedBundleUploader.upload(
-                        uploadZip = uploadZip,
-                        metadata  = JSONObject(json),
-                        appToken  = appToken,
-                        endpoint  = endpoint.get(),
-                        dependenciesGzFile = depsPayload?.gzFile,
-                        timingsGzFile = timingsPayload?.gzFile,
-                        execOps = execOps,
-                        resolveCli = resolveCli,
-                        depsJsonFile = depsPayload?.jsonFile,
-                        timingsJsonFile = timingsPayload?.jsonFile,
-                        legacyBuildInfoGzip = legacyGzip,
-                        logger    = logger,
-                        debug     = isDebug,
-                    )
-                    chunkedSucceeded = true
-                } catch (e: Exception) {
-                    logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${e.message}")
+
+            // CLI-primary path: ONE `bugsee-cli upload build` does the whole
+            // artefact upload — registration POST, pack (artefact + zstd
+            // mapping), the presigned PUT (single-PUT or chunked), and the
+            // build-info bundle from the same registration. The plugin owns
+            // *what* (the metadata body + which files); the CLI owns *how*.
+            //
+            // Gated on the pinned CLI shipping `upload build` (so this stays
+            // INERT until DEFAULT_VERSION is bumped to >= UPLOAD_BUILD_MIN_VERSION)
+            // and not forced legacy. A structural CLI failure / unavailable
+            // binary falls through to the native Bundle/ChunkedBundleUploader
+            // path below; a substantive failure (bad token / server) is NOT
+            // retried natively — the native path would hit the same error.
+            var uploadHandled = false
+            if (wantsArtifactUpload && !legacyGzip && cliSupportsUploadBuild()) {
+                val cli = resolveCli()
+                if (cli != null) {
+                    val payloadFile = File.createTempFile("bugsee-build-payload-$buildUUID", ".json")
+                    payloadFile.deleteOnExit()
+                    try {
+                        payloadFile.writeText(json)
+                        val result = CliUploader.uploadBuild(
+                            execOps = execOps,
+                            cliBinary = cli,
+                            endpoint = endpoint.get(),
+                            appToken = appToken,
+                            payloadJsonFile = payloadFile,
+                            artifactFile = artifactFile, // RAW artefact — the CLI packs it
+                            mappingFile = mapping,
+                            depsJsonFile = depsPayload?.jsonFile,
+                            timingsJsonFile = timingsPayload?.jsonFile,
+                            chunked = chunked,
+                            logger = logger,
+                            debug = isDebug,
+                        )
+                        uploadHandled = result.success || !result.shouldFallback
+                    } catch (e: Exception) {
+                        logger.warn(
+                            "Bugsee: bugsee-cli upload build threw — falling back to " +
+                                "the native uploader. Cause: ${e.message}",
+                        )
+                    } finally {
+                        payloadFile.delete()
+                    }
                 }
             }
 
-            if (!chunkedSucceeded) {
-                // POST metadata; PUT file too when wantsArtifactUpload;
-                // PUT deps gz too when depsPayload != null. Each PUT
-                // is independently best-effort inside the uploader —
-                // a failing deps PUT must not fail an otherwise-green
-                // artefact upload, and vice versa.
-                try {
-                    BundleUploader.uploadData(
-                        file = uploadZip,
-                        json = json,
-                        appToken = appToken,
-                        endpoint = endpoint.get(),
-                        requestArtifactUpload = wantsArtifactUpload,
-                        dependenciesGzFile = depsPayload?.gzFile,
-                        timingsGzFile = timingsPayload?.gzFile,
-                        execOps = execOps,
-                        resolveCli = resolveCli,
-                        depsJsonFile = depsPayload?.jsonFile,
-                        timingsJsonFile = timingsPayload?.jsonFile,
-                        legacyBuildInfoGzip = legacyGzip,
-                        logger = logger,
-                        debug = isDebug
-                    )
-                } catch (e: Exception) {
-                    logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${e.message}")
+            // Native fallback (used when the CLI path is inert/unavailable or
+            // hit a structural failure). Chunked first, then single-PUT — both
+            // consume the lazily-packed uploadZip and carry their own build-info
+            // handling. Best-effort: a failed upload never fails the build.
+            if (!uploadHandled) {
+                var chunkedSucceeded = false
+                if (chunked) {
+                    try {
+                        ChunkedBundleUploader.upload(
+                            uploadZip = uploadZip.value,
+                            metadata  = JSONObject(json),
+                            appToken  = appToken,
+                            endpoint  = endpoint.get(),
+                            dependenciesGzFile = depsPayload?.gzFile,
+                            timingsGzFile = timingsPayload?.gzFile,
+                            execOps = execOps,
+                            resolveCli = resolveCli,
+                            depsJsonFile = depsPayload?.jsonFile,
+                            timingsJsonFile = timingsPayload?.jsonFile,
+                            legacyBuildInfoGzip = legacyGzip,
+                            logger    = logger,
+                            debug     = isDebug,
+                        )
+                        chunkedSucceeded = true
+                    } catch (e: Exception) {
+                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${e.message}")
+                    }
+                }
+
+                if (!chunkedSucceeded) {
+                    try {
+                        BundleUploader.uploadData(
+                            file = uploadZip.value,
+                            json = json,
+                            appToken = appToken,
+                            endpoint = endpoint.get(),
+                            requestArtifactUpload = wantsArtifactUpload,
+                            dependenciesGzFile = depsPayload?.gzFile,
+                            timingsGzFile = timingsPayload?.gzFile,
+                            execOps = execOps,
+                            resolveCli = resolveCli,
+                            depsJsonFile = depsPayload?.jsonFile,
+                            timingsJsonFile = timingsPayload?.jsonFile,
+                            legacyBuildInfoGzip = legacyGzip,
+                            logger = logger,
+                            debug = isDebug
+                        )
+                    } catch (e: Exception) {
+                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${e.message}")
+                    }
                 }
             }
 
@@ -709,7 +759,9 @@ abstract class BundleUploadTask : DefaultTask() {
                 logger.info("Bugsee: size-check skipped — no baseline available")
             }
         } finally {
-            uploadZip.delete()
+            // Only the native fallback materializes the ZIP; the CLI path never
+            // touches `uploadZip.value`, so there's nothing to delete then.
+            if (uploadZip.isInitialized()) uploadZip.value.delete()
             // Cross-producer handshake — write the build-actions
             // manifest declaring which actions this plugin handled
             // for this variant. Read by the Bugsee fastlane plugin
@@ -1015,6 +1067,21 @@ abstract class BundleUploadTask : DefaultTask() {
         val version = cliVersion.orNull?.takeIf { it.isNotBlank() }
             ?: CliBinaryResolver.DEFAULT_VERSION
         return CliBinaryResolver.versionAtLeast(version, CliBinaryResolver.PACK_MIN_VERSION)
+    }
+
+    /**
+     * Whether the pinned CLI ships `upload build` (the converged build upload).
+     * Same gate shape as [cliSupportsPack]: an explicit [cliPath] is trusted
+     * (fall back at run time if too old); otherwise the auto-downloaded
+     * [cliVersion] (or [CliBinaryResolver.DEFAULT_VERSION]) must be
+     * >= [CliBinaryResolver.UPLOAD_BUILD_MIN_VERSION]. Keeps the full-CLI-upload
+     * migration inert until DEFAULT_VERSION is bumped to a release that has it.
+     */
+    private fun cliSupportsUploadBuild(): Boolean {
+        if (!cliPath.orNull.isNullOrBlank()) return true
+        val version = cliVersion.orNull?.takeIf { it.isNotBlank() }
+            ?: CliBinaryResolver.DEFAULT_VERSION
+        return CliBinaryResolver.versionAtLeast(version, CliBinaryResolver.UPLOAD_BUILD_MIN_VERSION)
     }
 
     companion object {

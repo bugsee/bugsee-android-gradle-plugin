@@ -82,20 +82,23 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     /**
      * Which uploader strategy runs for symbol uploads.
      *
-     * - [UploaderStrategy.KOTLIN] (default): in-process Kotlin uploader.
-     * - [UploaderStrategy.CLI]: exec the `bugsee-cli` binary at [cliPath]; on a
-     *   structural failure (exit codes 1 or 2 per the CLI's contract), fall
-     *   back to the Kotlin path.
+     * - [UploaderStrategy.CLI] (default): exec the `bugsee-cli` binary at
+     *   [cliPath] (or the auto-downloaded pinned version); on a structural
+     *   failure (exit codes 1 or 2 per the CLI's contract, or an unresolvable
+     *   binary), fall back to the in-process Kotlin uploader.
+     * - [UploaderStrategy.KOTLIN]: force the in-process Kotlin uploader.
      *
      * The fallback transition is logged at WARN and the `X-Bugsee-Uploader`
      * request header is stamped with the reason so the backend can count
      * fallback rates without touching customer code.
      *
-     * Default: [UploaderStrategy.KOTLIN]. Will flip to [UploaderStrategy.CLI]
-     * once CLI telemetry shows ~100% reliability across hosted CI matrices.
+     * Default flipped to [UploaderStrategy.CLI] as part of routing ALL of the
+     * plugin's build-time uploads through the CLI (the artefact + build-info
+     * paths in `BundleUploadTask` route there too). The Kotlin uploader is
+     * retained as the fail-closed fallback, so a CLI hiccup never breaks a build.
      */
     val uploader: Property<UploaderStrategy> =
-        objects.property(UploaderStrategy::class.java).convention(UploaderStrategy.KOTLIN)
+        objects.property(UploaderStrategy::class.java).convention(UploaderStrategy.CLI)
 
     /**
      * Enable verbose debug logging from the plugin.

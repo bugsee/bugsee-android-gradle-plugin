@@ -53,6 +53,17 @@ internal object CliBinaryResolver {
     const val PACK_MIN_VERSION: String = "0.2.0"
 
     /**
+     * Lowest CLI version that ships `upload build` — the converged build upload
+     * (registration + artefact single/chunked + build-info in one invocation)
+     * that lets the plugin route ALL artefact uploads through the CLI. Gated
+     * the same way as [PACK_MIN_VERSION]: `BundleUploadTask` only delegates to
+     * the CLI when the pinned version is at least this, so the migration stays
+     * INERT (native Bundle/ChunkedBundleUploader path runs) until
+     * [DEFAULT_VERSION] is bumped to a release that has `upload build`.
+     */
+    const val UPLOAD_BUILD_MIN_VERSION: String = "0.3.0"
+
+    /**
      * `true` iff [version] >= [min] by numeric-component comparison. Each
      * dot/dash/plus-separated segment contributes its leading digits (so a
      * prerelease like `0.2.0-rc1` compares on its numeric core `0.2.0`, the

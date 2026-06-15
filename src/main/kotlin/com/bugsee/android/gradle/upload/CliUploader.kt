@@ -153,6 +153,57 @@ internal object CliUploader {
     )
 
     /**
+     * Drives `bugsee-cli upload build` — the converged build upload: the CLI
+     * registers the build (`POST /v2/apps/<token>/builds`), packs the artefact
+     * (+ optional zstd mapping) and uploads it (single-PUT, or chunked when
+     * [chunked]), and ships the build-info bundle from the same registration
+     * when [depsJsonFile]/[timingsJsonFile] are present and the org flag signs
+     * the endpoint. The plugin owns *what* (the metadata body + which files);
+     * the CLI owns *how* (packing, registration, presigned PUTs, chunking,
+     * retries, telemetry).
+     *
+     * Returns the [CliUploadResult] contract: a structural failure (exit 1/2,
+     * binary missing) signals the caller to fall back to the native
+     * Bundle/ChunkedBundleUploader path; a substantive failure (bad token /
+     * server / transport) propagates without fallback since the native path
+     * would hit the same error.
+     *
+     * Requires `bugsee-cli` >= the version that introduced `upload build`
+     * (gated by the caller via [CliBinaryResolver]); an older binary yields a
+     * Usage error (exit 2) → structural fallback.
+     */
+    @Suppress("LongParameterList")
+    fun uploadBuild(
+        execOps: ExecOperations,
+        cliBinary: File,
+        endpoint: String,
+        appToken: String,
+        payloadJsonFile: File,
+        artifactFile: File,
+        mappingFile: File?,
+        depsJsonFile: File?,
+        timingsJsonFile: File?,
+        chunked: Boolean,
+        logger: Logger,
+        debug: Boolean,
+    ): CliUploadResult = verifyAndExec(
+        execOps = execOps,
+        cliBinary = cliBinary,
+        argv = buildBuildArgv(
+            endpoint = endpoint,
+            appToken = appToken,
+            payloadJsonFile = payloadJsonFile,
+            artifactFile = artifactFile,
+            mappingFile = mappingFile,
+            depsJsonFile = depsJsonFile,
+            timingsJsonFile = timingsJsonFile,
+            chunked = chunked,
+        ),
+        logger = logger,
+        debug = debug,
+    )
+
+    /**
      * Drives `bugsee-cli pack` to build the normalized upload ZIP — the
      * artefact STORED verbatim plus an optional `mapping.txt` compressed with
      * zstd (method 93) — writing it to [outZip]. Local-only: no network.
@@ -428,6 +479,37 @@ internal object CliUploader {
         add("--upload-url"); add(uploadUrl)
         depsJsonFile?.let { add("--deps"); add(it.absolutePath) }
         timingsJsonFile?.let { add("--timings"); add(it.absolutePath) }
+    }
+
+    /**
+     * Constructs the argv vector for `bugsee-cli upload build`. Carries
+     * `--endpoint` / `--app-token` (the CLI does the registration POST, unlike
+     * build-info's pre-signed mode). `--artifact` is the RAW `.aab`/`.apk` (the
+     * CLI packs it + the optional `--mapping`); omit `--deps`/`--timings` when
+     * not collected; `--chunked` opts into the chunked transport.
+     *
+     * Visible for testing so the plugin↔CLI flag contract is pinned.
+     */
+    @Suppress("LongParameterList")
+    internal fun buildBuildArgv(
+        endpoint: String,
+        appToken: String,
+        payloadJsonFile: File,
+        artifactFile: File,
+        mappingFile: File?,
+        depsJsonFile: File?,
+        timingsJsonFile: File?,
+        chunked: Boolean,
+    ): List<String> = buildList {
+        add("--endpoint"); add(endpoint)
+        add("--app-token"); add(appToken)
+        add("upload"); add("build")
+        add("--payload-json"); add(payloadJsonFile.absolutePath)
+        add("--artifact"); add(artifactFile.absolutePath)
+        mappingFile?.let { add("--mapping"); add(it.absolutePath) }
+        depsJsonFile?.let { add("--deps"); add(it.absolutePath) }
+        timingsJsonFile?.let { add("--timings"); add(it.absolutePath) }
+        if (chunked) add("--chunked")
     }
 
     /**

@@ -211,6 +211,62 @@ class CliUploaderTest {
         assertFalse(argv.contains("--mapping"), "no --mapping flag when mapping is null; argv=$argv")
     }
 
+    // ── argv contract — upload build (converged build upload) ────────
+
+    @Test fun `buildBuildArgv with all inputs produces the documented flag order`() {
+        val argv = CliUploader.buildBuildArgv(
+            endpoint = "https://api.bugsee.com",
+            appToken = "tok",
+            payloadJsonFile = File("/tmp/payload.json"),
+            artifactFile = File("/tmp/app.aab"),
+            mappingFile = File("/tmp/mapping.txt"),
+            depsJsonFile = File("/tmp/deps.json"),
+            timingsJsonFile = File("/tmp/timings.json"),
+            chunked = true,
+        )
+        assertContentEquals(
+            listOf(
+                "--endpoint", "https://api.bugsee.com",
+                "--app-token", "tok",
+                "upload", "build",
+                "--payload-json", "/tmp/payload.json",
+                "--artifact", "/tmp/app.aab",
+                "--mapping", "/tmp/mapping.txt",
+                "--deps", "/tmp/deps.json",
+                "--timings", "/tmp/timings.json",
+                "--chunked",
+            ),
+            argv,
+        )
+    }
+
+    @Test fun `buildBuildArgv omits optional flags when not supplied`() {
+        val argv = CliUploader.buildBuildArgv(
+            endpoint = "https://api.bugsee.com",
+            appToken = "tok",
+            payloadJsonFile = File("/tmp/payload.json"),
+            artifactFile = File("/tmp/app.apk"),
+            mappingFile = null,
+            depsJsonFile = null,
+            timingsJsonFile = null,
+            chunked = false,
+        )
+        assertContentEquals(
+            listOf(
+                "--endpoint", "https://api.bugsee.com",
+                "--app-token", "tok",
+                "upload", "build",
+                "--payload-json", "/tmp/payload.json",
+                "--artifact", "/tmp/app.apk",
+            ),
+            argv,
+        )
+        assertFalse(argv.contains("--mapping"), "no --mapping; argv=$argv")
+        assertFalse(argv.contains("--deps"), "no --deps; argv=$argv")
+        assertFalse(argv.contains("--timings"), "no --timings; argv=$argv")
+        assertFalse(argv.contains("--chunked"), "no --chunked; argv=$argv")
+    }
+
     @Test fun `packUploadZip falls back (returns false) when the binary is missing, without exec'ing`() {
         // The most common fallback trigger: no CLI resolvable (pre-activation,
         // offline, unsupported host). packUploadZip must short-circuit to
