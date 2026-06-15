@@ -40,7 +40,7 @@ internal object CliBinaryResolver {
      * `bugsee-cli` releases that introduce wire-format or argv changes
      * the plugin needs to keep up with.
      */
-    const val DEFAULT_VERSION: String = "0.1.0"
+    const val DEFAULT_VERSION: String = "0.2.0"
 
     /**
      * Lowest CLI version that ships the `pack` subcommand (the normalized

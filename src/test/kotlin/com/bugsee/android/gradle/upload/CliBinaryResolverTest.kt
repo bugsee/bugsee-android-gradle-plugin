@@ -147,18 +147,19 @@ class CliBinaryResolverTest {
 
     // ── version gate for the `pack` subcommand ───────────────────────
 
-    @Test fun `default pinned version does NOT yet support pack`() {
-        // The activation contract: until DEFAULT_VERSION is bumped to a
-        // release shipping `pack`, the CLI packer stays inert and builds
-        // use the native DEFLATE packer. If this flips unexpectedly, the
-        // plugin would start auto-downloading a CLI that usage-errors on
-        // an unknown subcommand for every size-analysis build.
-        assertFalse(
+    @Test fun `default pinned version now satisfies the pack gate (activated)`() {
+        // Activation: DEFAULT_VERSION has been bumped to a release that ships
+        // `pack`, so the CLI packer is live and size-analysis builds pack the
+        // mapping with zstd. (Before the bump this asserted the opposite — the
+        // inert contract — so a CLI without `pack` was never auto-downloaded.)
+        // If DEFAULT_VERSION is ever rolled BACK below PACK_MIN_VERSION the
+        // native DEFLATE packer takes over again; this test would flip with it.
+        assertTrue(
             CliBinaryResolver.versionAtLeast(
                 CliBinaryResolver.DEFAULT_VERSION,
                 CliBinaryResolver.PACK_MIN_VERSION,
             ),
-            "0.1.0 must not satisfy the >=0.2.0 pack gate",
+            "bumped DEFAULT_VERSION must satisfy the >=PACK_MIN_VERSION pack gate",
         )
     }
 
