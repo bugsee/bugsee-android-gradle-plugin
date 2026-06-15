@@ -152,6 +152,78 @@ internal object CliUploader {
         debug = debug,
     )
 
+    /**
+     * Drives `bugsee-cli pack` to build the normalized upload ZIP — the
+     * artefact STORED verbatim plus an optional `mapping.txt` compressed with
+     * zstd (method 93) — writing it to [outZip]. Local-only: no network.
+     *
+     * Returns `true` iff the CLI exited 0 AND [outZip] was produced. ANY
+     * failure (binary missing / not executable, exec error, or any non-zero
+     * exit) returns `false` so the caller falls back to the plugin's native
+     * DEFLATE packer. Unlike the upload paths there is no structural-vs-
+     * substantive distinction here: the native packer always produces a valid
+     * (if larger) ZIP, so a CLI hiccup must never break the build. An older
+     * binary without the `pack` subcommand yields a Usage error (exit 2) →
+     * `false` → native fallback, so this is safe before the pinned CLI version
+     * is bumped.
+     */
+    @Suppress("LongParameterList")
+    fun packUploadZip(
+        execOps: ExecOperations,
+        cliBinary: File,
+        artifactFile: File,
+        mappingFile: File?,
+        outZip: File,
+        logger: Logger,
+        debug: Boolean,
+    ): Boolean {
+        if (!cliBinary.isFile || !cliBinary.canExecute()) {
+            logger.warn(
+                "Bugsee: bugsee-cli unavailable for packing " +
+                    "(${cliBinary.absolutePath}); using the native packer.",
+            )
+            return false
+        }
+
+        val argv = buildPackArgv(artifactFile, mappingFile, outZip)
+        if (debug) {
+            logger.warn("Bugsee: invoking bugsee-cli with args: ${argv.joinToString(" ")}")
+        }
+
+        val stderr = ByteArrayOutputStream()
+        val exitCode = try {
+            execOps.exec { spec ->
+                spec.executable = cliBinary.absolutePath
+                spec.args = argv
+                spec.errorOutput = stderr
+                spec.isIgnoreExitValue = true
+            }.exitValue
+        } catch (e: Exception) {
+            logger.warn(
+                "Bugsee: failed to execute bugsee-cli pack: ${e.message}; " +
+                    "using the native packer.",
+            )
+            return false
+        }
+
+        val stderrText = stderr.toString(Charsets.UTF_8).trim()
+        if (stderrText.isNotEmpty()) {
+            logger.warn("Bugsee: bugsee-cli output:\n$stderrText")
+        }
+
+        // Require a non-empty output, not just presence: an exit-0 that left a
+        // 0-byte / truncated ZIP (a future CLI bug, or a reaped-but-killed
+        // process reporting 0) must fall back rather than upload garbage.
+        if (exitCode == 0 && outZip.isFile && outZip.length() > 0L) {
+            return true
+        }
+        logger.warn(
+            "Bugsee: bugsee-cli pack exited $exitCode (or produced no/empty output); " +
+                "using the native packer.",
+        )
+        return false
+    }
+
     private fun verifyAndExec(
         execOps: ExecOperations,
         cliBinary: File,
@@ -327,6 +399,26 @@ internal object CliUploader {
      * rename of any `upload build-info` flag flips this test at plugin-CI
      * time rather than at customer build time.
      */
+    /**
+     * Constructs the argv vector for `bugsee-cli pack`. No `--endpoint` /
+     * `--app-token`: packing is local-only. Omitting `--mapping` produces an
+     * artefact-only ZIP (non-obfuscated builds).
+     *
+     * Visible for testing so the plugin↔CLI flag contract is pinned: a rename
+     * of any `pack` flag flips this test at plugin-CI time rather than at
+     * customer build time.
+     */
+    internal fun buildPackArgv(
+        artifactFile: File,
+        mappingFile: File?,
+        outZip: File,
+    ): List<String> = buildList {
+        add("pack")
+        add("--artifact"); add(artifactFile.absolutePath)
+        mappingFile?.let { add("--mapping"); add(it.absolutePath) }
+        add("--out"); add(outZip.absolutePath)
+    }
+
     internal fun buildBuildInfoArgv(
         uploadUrl: String,
         depsJsonFile: File?,

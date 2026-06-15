@@ -2,7 +2,9 @@ package com.bugsee.android.gradle.upload
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Pin three CliBinaryResolver contracts that, if broken, would silently
@@ -141,5 +143,54 @@ class CliBinaryResolverTest {
             "deadbeef",
             CliBinaryResolver.parseSha256Sidecar("deadbeef\tfile.tar.xz"),
         )
+    }
+
+    // ── version gate for the `pack` subcommand ───────────────────────
+
+    @Test fun `default pinned version does NOT yet support pack`() {
+        // The activation contract: until DEFAULT_VERSION is bumped to a
+        // release shipping `pack`, the CLI packer stays inert and builds
+        // use the native DEFLATE packer. If this flips unexpectedly, the
+        // plugin would start auto-downloading a CLI that usage-errors on
+        // an unknown subcommand for every size-analysis build.
+        assertFalse(
+            CliBinaryResolver.versionAtLeast(
+                CliBinaryResolver.DEFAULT_VERSION,
+                CliBinaryResolver.PACK_MIN_VERSION,
+            ),
+            "0.1.0 must not satisfy the >=0.2.0 pack gate",
+        )
+    }
+
+    @Test fun `versionAtLeast compares numeric components`() {
+        assertTrue(CliBinaryResolver.versionAtLeast("0.2.0", "0.2.0"), "equal is >=")
+        assertTrue(CliBinaryResolver.versionAtLeast("0.2.1", "0.2.0"))
+        assertTrue(CliBinaryResolver.versionAtLeast("0.10.0", "0.2.0"), "10 > 2 numerically, not lexically")
+        assertTrue(CliBinaryResolver.versionAtLeast("1.0.0", "0.2.0"))
+        assertFalse(CliBinaryResolver.versionAtLeast("0.1.9", "0.2.0"))
+        assertFalse(CliBinaryResolver.versionAtLeast("0.1.0", "0.2.0"))
+    }
+
+    @Test fun `versionAtLeast treats a prerelease on its numeric core`() {
+        // A 0.2.0 prerelease ships `pack`, so it should satisfy the gate —
+        // we'd rather attempt pack on a 0.2.0-rc than skip it.
+        assertTrue(CliBinaryResolver.versionAtLeast("0.2.0-rc1", "0.2.0"))
+        assertTrue(CliBinaryResolver.versionAtLeast("0.2.0+build7", "0.2.0"))
+        assertFalse(CliBinaryResolver.versionAtLeast("0.1.0-rc9", "0.2.0"))
+    }
+
+    @Test fun `versionAtLeast pads missing trailing components with zero`() {
+        assertTrue(CliBinaryResolver.versionAtLeast("0.2", "0.2.0"))
+        assertFalse(CliBinaryResolver.versionAtLeast("0.2", "0.2.1"))
+    }
+
+    @Test fun `versionAtLeast treats empty or garbage as below the gate`() {
+        // A blank/unparseable pinned version must NOT be read as "supports
+        // pack" — that would auto-download a CLI for every build only to have
+        // it usage-error. Each unparseable segment contributes 0, so the
+        // comparison stays conservative.
+        assertFalse(CliBinaryResolver.versionAtLeast("", "0.2.0"))
+        assertFalse(CliBinaryResolver.versionAtLeast("garbage", "0.2.0"))
+        assertFalse(CliBinaryResolver.versionAtLeast("v-next", "0.2.0"))
     }
 }

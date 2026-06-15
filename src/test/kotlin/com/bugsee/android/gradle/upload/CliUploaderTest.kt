@@ -1,5 +1,11 @@
 package com.bugsee.android.gradle.upload
 
+import org.gradle.api.Action
+import org.gradle.api.logging.Logging
+import org.gradle.process.ExecOperations
+import org.gradle.process.ExecResult
+import org.gradle.process.ExecSpec
+import org.gradle.process.JavaExecSpec
 import org.junit.Test
 import java.io.File
 import kotlin.test.assertContentEquals
@@ -171,6 +177,74 @@ class CliUploaderTest {
         )
         assertFalse(argv.contains("--endpoint"), "build-info pre-signed argv must NOT carry --endpoint; argv=$argv")
         assertFalse(argv.contains("--app-token"), "build-info pre-signed argv must NOT carry --app-token; argv=$argv")
+    }
+
+    // ── argv contract — pack (upload-ZIP builder) ────────────────────
+
+    @Test fun `buildPackArgv with mapping produces the documented flag order`() {
+        val argv = CliUploader.buildPackArgv(
+            artifactFile = File("/tmp/app.apk"),
+            mappingFile = File("/tmp/mapping.txt"),
+            outZip = File("/tmp/upload.zip"),
+        )
+        assertContentEquals(
+            listOf(
+                "pack",
+                "--artifact", "/tmp/app.apk",
+                "--mapping", "/tmp/mapping.txt",
+                "--out", "/tmp/upload.zip",
+            ),
+            argv,
+        )
+    }
+
+    @Test fun `buildPackArgv omits --mapping for a non-obfuscated build`() {
+        val argv = CliUploader.buildPackArgv(
+            artifactFile = File("/tmp/app.aab"),
+            mappingFile = null,
+            outZip = File("/tmp/upload.zip"),
+        )
+        assertContentEquals(
+            listOf("pack", "--artifact", "/tmp/app.aab", "--out", "/tmp/upload.zip"),
+            argv,
+        )
+        assertFalse(argv.contains("--mapping"), "no --mapping flag when mapping is null; argv=$argv")
+    }
+
+    @Test fun `packUploadZip falls back (returns false) when the binary is missing, without exec'ing`() {
+        // The most common fallback trigger: no CLI resolvable (pre-activation,
+        // offline, unsupported host). packUploadZip must short-circuit to
+        // false BEFORE touching ExecOperations, so the caller uses the native
+        // packer. The fake exec throws if invoked, proving we never tried.
+        val neverExec = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult =
+                throw AssertionError("must not exec when the binary is missing")
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("must not javaexec")
+        }
+        val result = CliUploader.packUploadZip(
+            execOps = neverExec,
+            cliBinary = File("/definitely/not/here/bugsee-cli"),
+            artifactFile = File("/tmp/app.apk"),
+            mappingFile = File("/tmp/mapping.txt"),
+            outZip = File("/tmp/out.zip"),
+            logger = Logging.getLogger("test"),
+            debug = false,
+        )
+        assertFalse(result, "missing binary must yield false (native fallback)")
+    }
+
+    @Test fun `buildPackArgv is local-only — no --endpoint or --app-token`() {
+        // Packing writes a local ZIP and does no network I/O; the producer
+        // uploads the result itself. Pin the absence of network flags so a
+        // copy/paste from an upload argv builder can't reintroduce them.
+        val argv = CliUploader.buildPackArgv(
+            artifactFile = File("/tmp/app.apk"),
+            mappingFile = File("/tmp/mapping.txt"),
+            outZip = File("/tmp/upload.zip"),
+        )
+        assertFalse(argv.contains("--endpoint"), "pack argv must NOT carry --endpoint; argv=$argv")
+        assertFalse(argv.contains("--app-token"), "pack argv must NOT carry --app-token; argv=$argv")
     }
 
     // ── exit-code → fallback contract ───────────────────────────────

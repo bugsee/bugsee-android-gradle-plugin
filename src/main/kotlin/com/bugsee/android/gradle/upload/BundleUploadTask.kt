@@ -401,8 +401,39 @@ abstract class BundleUploadTask : DefaultTask() {
             }
         }
 
-        // Create ZIP containing bundle + optional mapping
-        val uploadZip = createUploadZip(artifactFile, mapping, buildUUID)
+        // Resolve the CLI lazily (auto-download is cached under
+        // gradleUserHome). Reused for two things: packing the upload ZIP
+        // just below (zstd-compressed mapping) and, later, shipping the
+        // build-info bundle. The closure has no side effects until invoked,
+        // so defining it here is free; a null result (no CLI resolvable)
+        // makes both paths fall back to their native implementations.
+        val legacyGzip = legacyBuildInfoGzip.getOrElse(false)
+        val gradleUserHome = gradleUserHomeDir.orNull?.asFile
+        val resolveCli: () -> File? = {
+            if (gradleUserHome != null) {
+                CliBinaryResolver.resolve(
+                    cliVersion = cliVersion.orNull,
+                    cliPath = cliPath.orNull,
+                    execOps = execOps,
+                    gradleUserHome = gradleUserHome,
+                    logger = logger,
+                    debug = isDebug,
+                )
+            } else {
+                null
+            }
+        }
+
+        // Create ZIP containing bundle + optional mapping. Prefers the CLI
+        // packer (zstd mapping) when eligible, native DEFLATE otherwise.
+        val uploadZip = createUploadZip(
+            bundle = artifactFile,
+            mapping = mapping,
+            buildUUID = buildUUID,
+            resolveCli = resolveCli,
+            legacyGzip = legacyGzip,
+            isDebug = isDebug,
+        )
 
         // Best-effort VCS metadata — never fails the build.
         // `projectDirectory` is wired from `project.layout
@@ -582,28 +613,12 @@ abstract class BundleUploadTask : DefaultTask() {
                 )
             } else null
 
-            // Build-info bundle (Phase D): resolve the CLI LAZILY. The
-            // uploader invokes `resolveCli` only after it sees a
-            // `build_info_upload_endpoint` in the registration response, so
-            // an org that isn't flagged on never pays the CLI auto-download.
-            // A null result (no CLI resolvable) falls back to the legacy
-            // per-blob PUTs inside the uploader.
-            val legacyGzip = legacyBuildInfoGzip.getOrElse(false)
-            val gradleUserHome = gradleUserHomeDir.orNull?.asFile
-            val resolveCli: () -> File? = {
-                if (gradleUserHome != null) {
-                    CliBinaryResolver.resolve(
-                        cliVersion = cliVersion.orNull,
-                        cliPath = cliPath.orNull,
-                        execOps = execOps,
-                        gradleUserHome = gradleUserHome,
-                        logger = logger,
-                        debug = isDebug,
-                    )
-                } else {
-                    null
-                }
-            }
+            // `resolveCli` / `legacyGzip` are resolved once up front (before
+            // the upload ZIP is packed) and reused here. The build-info bundle
+            // still pays the CLI auto-download only when the server actually
+            // signs a `build_info_upload_endpoint` — `resolveCli` is invoked
+            // lazily inside the uploader, and a null result falls back to the
+            // legacy per-blob PUTs.
 
             // Chunked upload path (Phase 6, feature-flagged). Only
             // meaningful when an artefact upload was requested — the
@@ -941,11 +956,65 @@ abstract class BundleUploadTask : DefaultTask() {
         return dir.walkTopDown().firstOrNull { it.extension == "apk" }
     }
 
-    private fun createUploadZip(bundle: File, mapping: File?, buildUUID: String): File {
+    private fun createUploadZip(
+        bundle: File,
+        mapping: File?,
+        buildUUID: String,
+        resolveCli: () -> File?,
+        legacyGzip: Boolean,
+        isDebug: Boolean,
+    ): File {
         val zipTemp = File.createTempFile("bugsee-build-$buildUUID", ".zip")
         zipTemp.deleteOnExit()
+
+        // Prefer the CLI packer: it zstd-compresses the mapping (~zstd-19)
+        // instead of the native java.util.zip DEFLATE-1, shrinking the
+        // embedded mapping substantially, and keeps compression in the one
+        // component that owns it (no zstd-jni / commons-compress on the plugin
+        // classpath). The worker reads the resulting method-93 `mapping.txt`
+        // entry transparently via its zstd zipfile shim — no worker change.
+        //
+        // Only worth a subprocess when there's a mapping to compress: with no
+        // mapping the ZIP is just the STORED artefact, for which the CLI and
+        // native packers emit identical bytes. Gated on the pinned CLI
+        // supporting `pack` (see cliSupportsPack) so the path stays inert
+        // until DEFAULT_VERSION is bumped; the BUGSEE_LEGACY_BUILDINFO_GZIP
+        // escape hatch forces native too. ANY CLI failure falls through to the
+        // native packer, which always produces a valid (if larger) ZIP —
+        // writeNormalizedUploadZip truncates zipTemp, discarding a partial CLI
+        // write — so a CLI hiccup never breaks the build.
+        if (mapping != null && !legacyGzip && cliSupportsPack()) {
+            val cli = resolveCli()
+            if (cli != null && CliUploader.packUploadZip(
+                    execOps = execOps,
+                    cliBinary = cli,
+                    artifactFile = bundle,
+                    mappingFile = mapping,
+                    outZip = zipTemp,
+                    logger = logger,
+                    debug = isDebug,
+                )
+            ) {
+                return zipTemp
+            }
+        }
+
         writeNormalizedUploadZip(bundle, mapping, zipTemp)
         return zipTemp
+    }
+
+    /**
+     * Whether the pinned CLI is known to ship the `pack` subcommand. An
+     * explicit [cliPath] bypasses the version check — we trust a user-provided
+     * binary and fall back at run time if it turns out too old. Otherwise the
+     * auto-downloaded [cliVersion] (or [CliBinaryResolver.DEFAULT_VERSION])
+     * must be >= [CliBinaryResolver.PACK_MIN_VERSION].
+     */
+    private fun cliSupportsPack(): Boolean {
+        if (!cliPath.orNull.isNullOrBlank()) return true
+        val version = cliVersion.orNull?.takeIf { it.isNotBlank() }
+            ?: CliBinaryResolver.DEFAULT_VERSION
+        return CliBinaryResolver.versionAtLeast(version, CliBinaryResolver.PACK_MIN_VERSION)
     }
 
     companion object {

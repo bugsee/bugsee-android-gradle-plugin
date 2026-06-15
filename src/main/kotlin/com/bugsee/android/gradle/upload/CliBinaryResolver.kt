@@ -42,6 +42,39 @@ internal object CliBinaryResolver {
      */
     const val DEFAULT_VERSION: String = "0.1.0"
 
+    /**
+     * Lowest CLI version that ships the `pack` subcommand (the normalized
+     * upload-ZIP packer with a zstd-compressed mapping). `BundleUploadTask`
+     * only attempts CLI packing when the pinned version is at least this, so
+     * the feature stays INERT until [DEFAULT_VERSION] is bumped to a release
+     * that has `pack` — no size-analysis build pays a CLI auto-download just to
+     * have an older binary usage-error on an unknown subcommand.
+     */
+    const val PACK_MIN_VERSION: String = "0.2.0"
+
+    /**
+     * `true` iff [version] >= [min] by numeric-component comparison. Each
+     * dot/dash/plus-separated segment contributes its leading digits (so a
+     * prerelease like `0.2.0-rc1` compares on its numeric core `0.2.0`, the
+     * conservative choice — we'd rather attempt `pack` on a 0.2.0 prerelease
+     * than skip it). Missing trailing components compare as 0.
+     *
+     * Visible for testing.
+     */
+    internal fun versionAtLeast(version: String, min: String): Boolean {
+        fun parts(v: String): List<Int> = v
+            .split('.', '-', '+')
+            .map { seg -> seg.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
+        val a = parts(version)
+        val b = parts(min)
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val ai = a.getOrElse(i) { 0 }
+            val bi = b.getOrElse(i) { 0 }
+            if (ai != bi) return ai > bi
+        }
+        return true
+    }
+
     /** Mirror root. The same bytes also exist on GitHub Releases under
      *  `github.com/bugsee/bugsee-cli/releases/download/v<version>/`. */
     private const val DOWNLOAD_BASE: String = "https://download.bugsee.com/cli"
