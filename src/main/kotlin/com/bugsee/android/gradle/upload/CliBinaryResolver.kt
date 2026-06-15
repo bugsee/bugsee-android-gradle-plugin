@@ -39,8 +39,14 @@ internal object CliBinaryResolver {
      * Default CLI version the plugin pins to. Bumped in lock-step with
      * `bugsee-cli` releases that introduce wire-format or argv changes
      * the plugin needs to keep up with.
+     *
+     * `0.3.0` is the first release carrying `upload build` (converged
+     * registration + artefact single/chunked + build-info), so this bump
+     * is the activation switch for the full-CLI artefact-upload path —
+     * see [UPLOAD_BUILD_MIN_VERSION]. It also keeps the `pack`/zstd-mapping
+     * path live ([PACK_MIN_VERSION] = 0.2.0).
      */
-    const val DEFAULT_VERSION: String = "0.2.0"
+    const val DEFAULT_VERSION: String = "0.3.0"
 
     /**
      * Lowest CLI version that ships the `pack` subcommand (the normalized

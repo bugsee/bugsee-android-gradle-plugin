@@ -163,6 +163,23 @@ class CliBinaryResolverTest {
         )
     }
 
+    @Test fun `default pinned version now satisfies the upload-build gate (activated)`() {
+        // Activation: DEFAULT_VERSION has been bumped to 0.3.0, the first
+        // release shipping `upload build`, so BundleUploadTask routes ALL
+        // artefact uploads through the CLI (the native Bundle/ChunkedBundle
+        // path becomes the fallback). Before this bump (DEFAULT_VERSION 0.2.0)
+        // the gate was below UPLOAD_BUILD_MIN_VERSION and the path stayed inert.
+        // If DEFAULT_VERSION is ever rolled BACK below UPLOAD_BUILD_MIN_VERSION
+        // the native path takes over again and this test flips with it.
+        assertTrue(
+            CliBinaryResolver.versionAtLeast(
+                CliBinaryResolver.DEFAULT_VERSION,
+                CliBinaryResolver.UPLOAD_BUILD_MIN_VERSION,
+            ),
+            "bumped DEFAULT_VERSION must satisfy the >=UPLOAD_BUILD_MIN_VERSION gate",
+        )
+    }
+
     @Test fun `versionAtLeast compares numeric components`() {
         assertTrue(CliBinaryResolver.versionAtLeast("0.2.0", "0.2.0"), "equal is >=")
         assertTrue(CliBinaryResolver.versionAtLeast("0.2.1", "0.2.0"))
