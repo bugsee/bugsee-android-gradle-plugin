@@ -233,6 +233,35 @@ tasks.register<Test>("integrationTest") {
     maxHeapSize = "2g"
 }
 
+// ============================================================================
+// Unit `test` task — real-binary integration hook
+//
+// `CliUploaderRealBinaryTest` EXECS a real `bugsee-cli` binary supplied via the
+// `BUGSEE_CLI_BIN` environment variable (or the `bugsee.cli.bin` system
+// property) and `Assume`-skips when neither is set, so the fast unit loop stays
+// green offline. Two wiring concerns are handled here:
+//
+//   1. Forward `BUGSEE_CLI_BIN` from the build environment into the test JVM so
+//      the binary is visible to the test (Gradle does not propagate the ambient
+//      environment to forked test workers by default).
+//   2. Declare the binary path as a task input so a change to it busts the
+//      up-to-date check. Without this, flipping `BUGSEE_CLI_BIN` between unset
+//      and set leaves `:test` UP-TO-DATE and the real-binary tests never
+//      actually run (they'd report stale results from the previous invocation).
+//      `scripts/integration-test.sh` relies on this to make the CI lane real.
+// ============================================================================
+tasks.named<Test>("test") {
+    val cliBin: String? = System.getenv("BUGSEE_CLI_BIN")
+        ?: (System.getProperty("bugsee.cli.bin"))
+    if (cliBin != null) {
+        environment("BUGSEE_CLI_BIN", cliBin)
+        systemProperty("bugsee.cli.bin", cliBin)
+    }
+    // Pin the resolved binary path (or the literal "unset") into the task's
+    // input fingerprint so changing it re-runs the real-binary tests.
+    inputs.property("bugsee.cli.bin", cliBin ?: "unset")
+}
+
 // Integration tests are opt-in: `./gradlew build` runs the fast unit suite
 // only. To include the TestKit-driven integration tier in `check`/`build`,
 // pass `-Pbugsee.runIntegrationTests=true` (or run `./gradlew integrationTest`

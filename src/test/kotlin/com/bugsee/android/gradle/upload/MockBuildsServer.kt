@@ -48,6 +48,12 @@ internal class MockBuildsServer(
     private val requestLog = ConcurrentLinkedQueue<Recorded>()
     private val presentChunks = mutableSetOf<String>()
     private val chunkStore = mutableMapOf<String, ByteArray>()
+    // Body captured by the single-PUT artefact store (the presigned PUT the
+    // converged `upload build` flow performs after registration). Keyed by the
+    // trailing store path so multiple single PUTs (if ever) don't collide.
+    private val singlePutStore = mutableMapOf<String, ByteArray>()
+    // Last registration body captured by the single-PUT `/builds` POST handler.
+    @Volatile private var lastRegistrationBody: ByteArray? = null
     // Captured bodies from the auxiliary-blob PUTs (deps / timings).
     // Keyed by label ("dependencies" / "timings") so tests can assert
     // that the chunked-upload follow-up PUTs landed AND that the body
@@ -75,6 +81,18 @@ internal class MockBuildsServer(
 
     /** Chunk bytes captured by the PUT handler, keyed by sha1. */
     fun storedChunks(): Map<String, ByteArray> = chunkStore.toMap()
+
+    /**
+     * Bytes captured by the single-PUT artefact store, keyed by the trailing
+     * store path segment. Populated by the converged `upload build` single-PUT
+     * flow: registration POST → presigned PUT of the upload ZIP. Empty until
+     * the client performs the PUT.
+     */
+    fun storedSinglePuts(): Map<String, ByteArray> = singlePutStore.toMap()
+
+    /** The body of the most recent single-PUT `/builds` registration POST,
+     *  or `null` if the client never registered. */
+    fun lastRegistrationBody(): ByteArray? = lastRegistrationBody
 
     /** Auxiliary-blob bytes captured by the deps / timings PUT handlers,
      *  keyed by label ("dependencies" / "timings"). Empty when the
@@ -171,6 +189,10 @@ internal class MockBuildsServer(
                 }
 
                 when {
+                    method == "POST" && path.endsWith("/builds") ->
+                        handleRegisterSingle(exchange, body)
+                    method == "PUT" && path.startsWith("/single-put/") ->
+                        handleSinglePut(exchange, path, body)
                     method == "GET" && path.endsWith("/builds/chunk-options") ->
                         handleChunkOptions(exchange)
                     method == "POST" && path.endsWith("/builds/chunks/check") ->
@@ -187,6 +209,42 @@ internal class MockBuildsServer(
                 sendString(exchange, 500, "harness error: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Single-PUT build registration: `POST /v2/apps/<token>/builds`. Mirrors the
+     * appserver's registration response for the converged `upload build`
+     * single-PUT path — returns a `build_id` plus a presigned `endpoint` that
+     * points back at this server's [handleSinglePut] store, so the client's
+     * follow-up PUT of the upload ZIP lands in [singlePutStore].
+     *
+     * Echoes the build-info upload endpoint only when the registration body
+     * carried `request_build_info_upload` (the same gating the chunked submit
+     * uses), so a build with deps/timings exercises the second PUT too.
+     */
+    private fun handleRegisterSingle(exchange: HttpExchange, body: ByteArray) {
+        lastRegistrationBody = body
+        val req = try {
+            JSONObject(String(body, Charsets.UTF_8))
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val result = JSONObject().apply {
+            put("build_id", buildId)
+            put("endpoint", "$baseUrl/single-put/artefact")
+            if (req.optBoolean("request_build_info_upload", false)) {
+                put("build_info_upload_endpoint", "$baseUrl/single-put/build-info")
+            }
+        }
+        sendJsonResult(exchange, 200, result)
+    }
+
+    /** Presigned single PUT store: captures the upload ZIP (or build-info
+     *  bundle) the converged single-PUT flow uploads, keyed by trailing path. */
+    private fun handleSinglePut(exchange: HttpExchange, path: String, body: ByteArray) {
+        val key = path.removePrefix("/single-put/")
+        singlePutStore[key] = body
+        sendString(exchange, 200, "")
     }
 
     private fun handleChunkOptions(exchange: HttpExchange) {
