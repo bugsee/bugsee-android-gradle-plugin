@@ -52,6 +52,18 @@ internal class MockBuildsServer(
     // converged `upload build` flow performs after registration). Keyed by the
     // trailing store path so multiple single PUTs (if ever) don't collide.
     private val singlePutStore = mutableMapOf<String, ByteArray>()
+    // Bodies captured by the presigned-symbol metadata POST
+    // (`/apps/<token>/symbols`), in arrival order. The presigned-symbol
+    // protocol (proguard / elf debug-files uploads) POSTs `{uuid, version,
+    // build, hash, transform?}`, gets back a presigned PUT URL, then PUTs the
+    // symbol zip. See [handleSymbolMetadata] / [handleSymbolPut].
+    private val symbolMetadataBodies = ConcurrentLinkedQueue<ByteArray>()
+    // Body captured by the presigned-symbol PUT (the symbol zip).
+    @Volatile private var symbolPutBody: ByteArray? = null
+    // When true, the symbol metadata POST replies `{code: 16004}`
+    // (SymbolAlreadyExists) instead of signing a presigned URL — so a test can
+    // exercise the already-exists short-circuit (no PUT performed).
+    @Volatile private var symbolAlreadyExists: Boolean = false
     // Last registration body captured by the single-PUT `/builds` POST handler.
     @Volatile private var lastRegistrationBody: ByteArray? = null
     // Captured bodies from the auxiliary-blob PUTs (deps / timings).
@@ -100,6 +112,31 @@ internal class MockBuildsServer(
      *  `request_*_upload` flag (mock won't return a URL, client
      *  won't PUT, store stays empty). */
     fun storedAuxBlobs(): Map<String, ByteArray> = auxBlobStore.toMap()
+
+    /**
+     * Bodies captured by the presigned-symbol metadata POST
+     * (`POST /apps/<token>/symbols`), in arrival order. One entry per symbol
+     * the client (proguard / elf upload) registered. Empty until the client
+     * POSTs metadata.
+     */
+    fun symbolMetadataBodies(): List<ByteArray> = symbolMetadataBodies.toList()
+
+    /**
+     * The symbol zip body captured by the presigned-symbol PUT, or `null` if
+     * the client never PUT one (e.g. the metadata POST replied
+     * SymbolAlreadyExists). Single slot — the symbol tests upload exactly one
+     * artefact each.
+     */
+    fun storedSymbolPut(): ByteArray? = symbolPutBody
+
+    /**
+     * Make the next symbol metadata POST reply `{code: 16004}`
+     * (SymbolAlreadyExists), so the client skips the presigned PUT. Off by
+     * default — the standard flow signs a presigned URL and accepts the PUT.
+     */
+    fun setSymbolAlreadyExists(value: Boolean) {
+        this.symbolAlreadyExists = value
+    }
 
     /** Override chunk-options response values. */
     fun setChunkOptions(chunkSize: Int, maxChunks: Int) {
@@ -189,6 +226,10 @@ internal class MockBuildsServer(
                 }
 
                 when {
+                    method == "POST" && path.endsWith("/symbols") ->
+                        handleSymbolMetadata(exchange, body)
+                    method == "PUT" && path.startsWith("/symbol-put/") ->
+                        handleSymbolPut(exchange, body)
                     method == "POST" && path.endsWith("/builds") ->
                         handleRegisterSingle(exchange, body)
                     method == "PUT" && path.startsWith("/single-put/") ->
@@ -244,6 +285,46 @@ internal class MockBuildsServer(
     private fun handleSinglePut(exchange: HttpExchange, path: String, body: ByteArray) {
         val key = path.removePrefix("/single-put/")
         singlePutStore[key] = body
+        sendString(exchange, 200, "")
+    }
+
+    /**
+     * Presigned-symbol metadata POST: `POST /apps/<token>/symbols`. Mirrors
+     * the appserver's symbol-registration response that both the real CLI
+     * (`upload/presigned.rs`) and the Kotlin fallback ([SymbolUploader])
+     * consume:
+     *
+     *  - Captures the metadata body (`{uuid, version, build, hash, transform?}`)
+     *    for assertions.
+     *  - Normally signs a presigned PUT URL by returning a TOP-LEVEL
+     *    `{"code": 0, "endpoint": "<baseUrl>/symbol-put/blob"}` (NOT wrapped in
+     *    the `{result: ...}` envelope — the symbol protocol reads top-level
+     *    fields), so the client's follow-up PUT lands in [handleSymbolPut].
+     *  - When [symbolAlreadyExists] is set, replies `{"code": 16004}` instead,
+     *    so the client short-circuits and performs no PUT.
+     */
+    private fun handleSymbolMetadata(exchange: HttpExchange, body: ByteArray) {
+        symbolMetadataBodies.add(body)
+        val response = JSONObject().apply {
+            if (symbolAlreadyExists) {
+                put("code", 16004)
+            } else {
+                put("code", 0)
+                put("endpoint", "$baseUrl/symbol-put/blob")
+            }
+        }
+        // Top-level (un-wrapped) JSON — the presigned-symbol protocol reads
+        // `code` / `endpoint` at the root, not under `result`.
+        val bytes = response.toString().toByteArray(Charsets.UTF_8)
+        exchange.responseHeaders.add("Content-Type", "application/json; charset=utf-8")
+        exchange.sendResponseHeaders(200, bytes.size.toLong())
+        exchange.responseBody.use { it.write(bytes) }
+    }
+
+    /** Presigned-symbol PUT store: captures the symbol zip the two-stage
+     *  presigned flow uploads after the metadata POST signs a URL. */
+    private fun handleSymbolPut(exchange: HttpExchange, body: ByteArray) {
+        symbolPutBody = body
         sendString(exchange, 200, "")
     }
 

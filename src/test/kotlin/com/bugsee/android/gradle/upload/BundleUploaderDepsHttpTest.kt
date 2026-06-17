@@ -45,6 +45,11 @@ class BundleUploaderDepsHttpTest {
     @Volatile private var includeDependenciesEndpoint = false
     @Volatile private var artifactPutStatus = 200
     @Volatile private var depsPutStatus = 200
+    // When set, the createBuild context replies HTTP 200 with an
+    // `{ ok:false, error:{ type:<this> } }` envelope instead of a normal
+    // result — modelling the server rejecting the build (e.g. bad token)
+    // while still returning a 2xx.
+    @Volatile private var errorEnvelopeType: String? = null
 
     private val appToken = "test-token"
     private val baseUrl: String get() = "http://127.0.0.1:${server.address.port}"
@@ -61,6 +66,17 @@ class BundleUploaderDepsHttpTest {
         // presigned URLs the test enabled, plus a build_id.
         server.createContext("/v2/apps/$appToken/builds") { ex: HttpExchange ->
             recordExchange(ex)
+            val envType = errorEnvelopeType
+            if (envType != null) {
+                // 2xx-with-error envelope: the server accepted the request
+                // (HTTP 200) but rejected the build at the application layer.
+                val errResp = JSONObject().apply {
+                    put("ok", false)
+                    put("error", JSONObject().apply { put("type", envType) })
+                }
+                replyJson(ex, 200, errResp)
+                return@createContext
+            }
             val resp = JSONObject().apply {
                 put("ok", true)
                 val result = JSONObject().apply {
@@ -320,5 +336,70 @@ class BundleUploaderDepsHttpTest {
                       "deps PUT must fire even when artefact PUT returned 5xx")
         // Reaching here at all means uploadData did not throw — the
         // best-effort posture on the artefact branch survives the 5xx.
+    }
+
+    // ── 2xx-with-error envelope on the build-info-only path ──────────
+
+    @Test fun `build-info-only path throws on a 2xx ApplicationNotFoundError envelope`() {
+        // The LAST-BETA Warning: a build-info-only POST that returns HTTP
+        // 200 with `{ ok:false, error:{type:"ApplicationNotFoundError"} }`
+        // (an invalid app token) used to be logged as "Build-info upload
+        // complete." and the task reported GREEN — no build was created.
+        // The fix inspects the error envelope and throws a masked-token
+        // RuntimeException, the same as the artefact path.
+        errorEnvelopeType = "ApplicationNotFoundError"
+
+        var thrown: RuntimeException? = null
+        try {
+            BundleUploader.uploadData(
+                file = freshArtifact(),
+                json = metadataJson(withDepsFlag = false),
+                // Use the server's registered token so the POST routes to the
+                // builds context (the server then returns the error envelope).
+                appToken = appToken,
+                endpoint = baseUrl,
+                requestArtifactUpload = false,
+                logger = logger,
+                debug = false,
+            )
+        } catch (e: RuntimeException) {
+            thrown = e
+        }
+        assertNotNull(thrown, "an invalid-token 2xx error envelope must fail the build-info upload")
+        assertTrue(
+            thrown.message?.contains("App token is invalid") == true,
+            "must surface the masked-token message; got: ${thrown.message}",
+        )
+        // The full token must NOT leak into the exception message.
+        assertTrue(
+            thrown.message?.contains(appToken) != true,
+            "the full app token must be masked in the failure message; got: ${thrown.message}",
+        )
+    }
+
+    @Test fun `build-info-only path throws on any other 2xx error envelope`() {
+        // A non-ApplicationNotFoundError error envelope must also fail the
+        // step (not silently succeed), surfacing the error type.
+        errorEnvelopeType = "ServerError"
+
+        var thrown: RuntimeException? = null
+        try {
+            BundleUploader.uploadData(
+                file = freshArtifact(),
+                json = metadataJson(withDepsFlag = false),
+                appToken = appToken,
+                endpoint = baseUrl,
+                requestArtifactUpload = false,
+                logger = logger,
+                debug = false,
+            )
+        } catch (e: RuntimeException) {
+            thrown = e
+        }
+        assertNotNull(thrown, "a non-null error envelope must fail the build-info upload")
+        assertTrue(
+            thrown.message?.contains("ServerError") == true,
+            "the failure must mention the server error type; got: ${thrown.message}",
+        )
     }
 }

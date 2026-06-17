@@ -644,12 +644,14 @@ abstract class BundleUploadTask : DefaultTask() {
             // build-info bundle from the same registration. The plugin owns
             // *what* (the metadata body + which files); the CLI owns *how*.
             //
-            // Gated on the pinned CLI shipping `upload build` (so this stays
-            // INERT until DEFAULT_VERSION is bumped to >= UPLOAD_BUILD_MIN_VERSION)
-            // and not forced legacy. A structural CLI failure / unavailable
-            // binary falls through to the native Bundle/ChunkedBundleUploader
-            // path below; a substantive failure (bad token / server) is NOT
-            // retried natively — the native path would hit the same error.
+            // Gated on the pinned CLI shipping `upload build`. DEFAULT_VERSION
+            // (0.6.0) is >= UPLOAD_BUILD_MIN_VERSION, so this path is ACTIVE by
+            // default; the gate exists so the path CAN be made inert by pinning
+            // an older `cliVersion`. Also requires not-forced-legacy. A
+            // structural CLI failure / unavailable binary falls through to the
+            // native Bundle/ChunkedBundleUploader path below; a substantive
+            // failure (bad token / server) is NOT retried natively — the native
+            // path would hit the same error.
             var uploadHandled = false
             if (wantsArtifactUpload && !legacyGzip && cliSupportsUploadBuild()) {
                 val cli = resolveCli()
@@ -1038,9 +1040,11 @@ abstract class BundleUploadTask : DefaultTask() {
         // Only worth a subprocess when there's a mapping to compress: with no
         // mapping the ZIP is just the STORED artefact, for which the CLI and
         // native packers emit identical bytes. Gated on the pinned CLI
-        // supporting `pack` (see cliSupportsPack) so the path stays inert
-        // until DEFAULT_VERSION is bumped; the BUGSEE_LEGACY_BUILDINFO_GZIP
-        // escape hatch forces native too. ANY CLI failure falls through to the
+        // supporting `pack` (see cliSupportsPack). DEFAULT_VERSION (0.6.0) is
+        // >= PACK_MIN_VERSION, so this path is ACTIVE by default; the gate
+        // exists so the path CAN be made inert by pinning an older cliVersion.
+        // The BUGSEE_LEGACY_BUILDINFO_GZIP escape hatch forces native too.
+        // ANY CLI failure falls through to the
         // native packer, which always produces a valid (if larger) ZIP —
         // writeNormalizedUploadZip truncates zipTemp, discarding a partial CLI
         // write — so a CLI hiccup never breaks the build.
@@ -1083,8 +1087,9 @@ abstract class BundleUploadTask : DefaultTask() {
      * Same gate shape as [cliSupportsPack]: an explicit [cliPath] is trusted
      * (fall back at run time if too old); otherwise the auto-downloaded
      * [cliVersion] (or [CliBinaryResolver.DEFAULT_VERSION]) must be
-     * >= [CliBinaryResolver.UPLOAD_BUILD_MIN_VERSION]. Keeps the full-CLI-upload
-     * migration inert until DEFAULT_VERSION is bumped to a release that has it.
+     * >= [CliBinaryResolver.UPLOAD_BUILD_MIN_VERSION]. At the current
+     * DEFAULT_VERSION (0.6.0) this returns true by default — the full-CLI
+     * upload path is active; pinning an older `cliVersion` makes it inert.
      */
     private fun cliSupportsUploadBuild(): Boolean {
         if (!cliPath.orNull.isNullOrBlank()) return true

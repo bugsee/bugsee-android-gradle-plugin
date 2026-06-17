@@ -373,4 +373,153 @@ class CliUploaderTest {
             )
         }
     }
+
+    // ── verifyAndExec exit-code → CliUploadResult mapping ────────────
+    //
+    // The pure shouldFallback(Int) predicate above is tested, but the
+    // END-TO-END mapping in verifyAndExec — exit code → (success,
+    // shouldFallback, fallbackReason) — was previously unverified: every
+    // fake/real exec in the suite either threw or returned exit 0. These
+    // tests drive the real uploadMapping entry point through a fake
+    // ExecOperations that returns a configurable exit value (and writes to
+    // spec.errorOutput, exercising the stderr-forwarding branch), pinning
+    // the full result for representative codes.
+
+    /**
+     * A fake [ExecOperations] whose `exec` captures the [ExecSpec]'s
+     * `errorOutput`, writes [stderr] into it (exercising the
+     * stderr-forwarding branch), and returns [exitValue]. The [ExecSpec]
+     * is a [java.lang.reflect.Proxy] that records the `setErrorOutput`
+     * call and replays it from `getErrorOutput` — no Mockito needed
+     * (not on the test classpath), and no need to implement every method
+     * of the wide ExecSpec interface.
+     */
+    private class FakeExec(
+        private val cliExitValue: Int,
+        private val stderr: String = "",
+    ) : ExecOperations {
+        override fun exec(action: Action<in ExecSpec>): ExecResult {
+            // Capture into a local so the anonymous ExecResult below
+            // references THIS value — not its own getExitValue() (a name
+            // clash with the Java `exitValue` property → infinite recursion).
+            val resultExit = cliExitValue
+            var capturedErr: java.io.OutputStream? = null
+            val spec = java.lang.reflect.Proxy.newProxyInstance(
+                ExecSpec::class.java.classLoader,
+                arrayOf(ExecSpec::class.java),
+            ) { proxy, method, args ->
+                when (method.name) {
+                    "setErrorOutput" -> { capturedErr = args[0] as? java.io.OutputStream; proxy }
+                    "getErrorOutput" -> capturedErr
+                    // Defaults for the few getters Gradle might probe — the
+                    // production code only sets executable/args/errorOutput.
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "equals" -> proxy === args[0]
+                    "toString" -> "FakeExecSpec"
+                    else -> if (method.returnType == java.lang.Boolean.TYPE) false else proxy
+                }
+            } as ExecSpec
+
+            action.execute(spec)
+            if (stderr.isNotEmpty()) {
+                capturedErr?.write(stderr.toByteArray(Charsets.UTF_8))
+                capturedErr?.flush()
+            }
+            return object : ExecResult {
+                override fun getExitValue(): Int = resultExit
+                override fun assertNormalExitValue(): ExecResult = this
+                override fun rethrowFailure(): ExecResult = this
+            }
+        }
+
+        override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+            throw AssertionError("javaexec must not be called")
+    }
+
+    private fun executableCliStub(): File {
+        val f = File.createTempFile("bugsee-cli-stub", "")
+        f.deleteOnExit()
+        f.writeText("#!/bin/sh\nexit 0\n")
+        f.setExecutable(true)
+        return f
+    }
+
+    private fun runUploadMapping(exec: ExecOperations, cli: File): CliUploadResult =
+        CliUploader.uploadMapping(
+            execOps = exec,
+            cliBinary = cli,
+            mappingFile = mappingFile,
+            iconFile = null,
+            appToken = "tok",
+            endpoint = "https://api.bugsee.com",
+            version = "1.0",
+            build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000",
+            logger = Logging.getLogger("test"),
+            debug = false,
+        )
+
+    @Test fun `verifyAndExec maps exit 0 to success with no fallback`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 0), executableCliStub())
+        assertTrue(result.success, "exit 0 → success")
+        assertEquals(0, result.exitCode)
+        assertFalse(result.shouldFallback, "exit 0 → no fallback")
+        assertEquals(null, result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 1 to structural fallback with reason exit-1`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 1, stderr = "boom"), executableCliStub())
+        assertFalse(result.success)
+        assertEquals(1, result.exitCode)
+        assertTrue(result.shouldFallback, "exit 1 (Unexpected) → structural fallback")
+        assertEquals("exit-1", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 2 to structural fallback with reason exit-2`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 2), executableCliStub())
+        assertFalse(result.success)
+        assertEquals(2, result.exitCode)
+        assertTrue(result.shouldFallback, "exit 2 (Usage) → structural fallback")
+        assertEquals("exit-2", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps substantive exit codes to no-fallback failures`() {
+        // 10 (Input), 20 (Config), 40 (reserved) — substantive failures the
+        // Kotlin uploader would also hit, so NO fallback and NO reason.
+        for (code in listOf(10, 20, 40)) {
+            val result = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertFalse(result.success, "exit $code → failure")
+            assertEquals(code, result.exitCode)
+            assertFalse(result.shouldFallback, "exit $code is substantive → no fallback")
+            assertEquals(null, result.fallbackReason, "substantive failure carries no fallback reason")
+        }
+    }
+
+    @Test fun `verifyAndExec reports binary-missing without exec'ing`() {
+        val neverExec = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult =
+                throw AssertionError("must not exec when the binary is missing")
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("must not javaexec")
+        }
+        val result = runUploadMapping(neverExec, File("/definitely/not/here/bugsee-cli"))
+        assertFalse(result.success)
+        assertEquals(-1, result.exitCode)
+        assertTrue(result.shouldFallback)
+        assertEquals("binary-missing", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec reports exec-failed when exec throws`() {
+        val throwingExec = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult =
+                throw RuntimeException("spawn failed")
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("must not javaexec")
+        }
+        val result = runUploadMapping(throwingExec, executableCliStub())
+        assertFalse(result.success)
+        assertEquals(-1, result.exitCode)
+        assertTrue(result.shouldFallback)
+        assertEquals("exec-failed", result.fallbackReason)
+    }
 }

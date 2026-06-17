@@ -57,8 +57,11 @@ internal object SymbolUploader {
 
         // 1. Create request, get presigned URL
         val httpPost = HttpPost("$endpoint/apps/$appToken/symbols")
-        val body = StringEntity(json)
-        body.contentType = BasicHeader(HTTP.CONTENT_TYPE, "application/json")
+        // Encode the JSON body as UTF-8 explicitly: the single-arg StringEntity
+        // defaults to ISO-8859-1, which would mangle any non-ASCII symbol
+        // metadata on the wire. Match the UTF-8 the CLI and chunked transport use.
+        val body = StringEntity(json, "UTF-8")
+        body.contentType = BasicHeader(HTTP.CONTENT_TYPE, "application/json; charset=utf-8")
         httpPost.entity = body
         httpPost.addHeader("X-Bugsee-Uploader", uploaderTag)
 

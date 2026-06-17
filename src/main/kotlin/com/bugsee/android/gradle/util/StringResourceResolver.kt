@@ -45,7 +45,17 @@ internal object StringResourceResolver {
         val docBuilderFactory =
             com.bugsee.android.gradle.manifest.ManifestModifier.secureDocumentBuilderFactory()
         for (xmlFile in stringResourceFiles) {
-            val doc = docBuilderFactory.newDocumentBuilder().parse(xmlFile)
+            // Per-file try/catch: a single malformed strings.xml (e.g. one
+            // merged in from a compromised or merely broken dependency) must
+            // NOT crash the whole build during @string/foo resolution — the
+            // requested string may well live in another, valid strings.xml.
+            // Warn naming the offending file and continue to the next.
+            val doc = try {
+                docBuilderFactory.newDocumentBuilder().parse(xmlFile)
+            } catch (e: Exception) {
+                logger.warn("Bugsee: failed to parse ${xmlFile.absolutePath}: ${e.message}; skipping.")
+                continue
+            }
             val strings = doc.getElementsByTagName("string")
             for (i in 0 until strings.length) {
                 val node = strings.item(i)

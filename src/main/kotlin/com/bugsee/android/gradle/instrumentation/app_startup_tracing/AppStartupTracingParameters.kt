@@ -11,11 +11,15 @@ import org.gradle.api.tasks.Input
  *
  * Extends [BugseeInstrumentationParameters] so the inherited
  * [BugseeInstrumentationParameters.targetClass] can carry the
- * frozen FQN of `BugseeAppStartupDispatcher` — the factory verifies the
- * class exists on the classpath via
- * `ClassContext.loadClassData` before emitting any bytecode that references
- * it, mirroring the gating pattern used by every other Bugsee
- * instrumentation factory.
+ * frozen FQN of `BugseeAppStartupDispatcher`. SDK presence is gated ONCE
+ * at apply() time in
+ * [com.bugsee.android.gradle.instrumentation.app_startup_tracing.AppStartupTracingInstrumentation.shouldApply]
+ * (a [com.bugsee.android.gradle.instrumentation.DependencyDetector] +
+ * [com.bugsee.android.gradle.instrumentation.BugseeSdkVersion] check) — NOT
+ * per-class. The factory deliberately does NOT re-probe each class via
+ * `ClassContext.loadClassData`: that probe was removed (see
+ * [com.bugsee.android.gradle.instrumentation.app_startup_tracing.AppStartupTracingClassVisitorFactory])
+ * because it was unreliable across AGP transform-isolation boundaries.
  */
 internal interface AppStartupTracingParameters : BugseeInstrumentationParameters {
 

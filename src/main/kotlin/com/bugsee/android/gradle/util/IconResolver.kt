@@ -41,13 +41,13 @@ internal object IconResolver {
             val ext = file.extension
             baseName == resourceId
                 && ext != "xml"
-                && file.parent.lowercase().contains(resourceFolderType)
+                && file.parent.orEmpty().lowercase().contains(resourceFolderType)
         }
 
         if (iconFiles.isEmpty()) return null
 
         // Prefer xxhdpi
-        val xxhdpi = iconFiles.find { it.parent.contains("xxhdpi") }
+        val xxhdpi = iconFiles.find { it.parent.orEmpty().contains("xxhdpi") }
         if (xxhdpi != null) return xxhdpi
 
         // Fall back to the largest icon

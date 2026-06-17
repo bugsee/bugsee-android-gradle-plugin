@@ -71,6 +71,40 @@ class BugseeSdkVersionTest {
     }
 
     @Test
+    fun parse_bareSnapshot_isStableNotPreRelease() {
+        // The LAST-BETA bug: `7.0.0-SNAPSHOT` (no pre-release label) must
+        // parse to the STABLE `7.0.0`, NOT to preLabel="SNAPSHOT". The old
+        // greedy regex captured "SNAPSHOT" as the label, mis-ranking it as
+        // the LOWEST pre-release (below 7.0.0-beta11), which silently
+        // disabled app-startup tracing for the SNAPSHOT local-dev flow.
+        val snap = BugseeSdkVersion.parse("7.0.0-SNAPSHOT")
+        assertNotNull(snap)
+        assertEquals("", snap!!.preLabel)
+        assertEquals(-1, snap.preNumber)
+        // Equal to the stable parse, and ranks ABOVE the dispatcher floor.
+        assertEquals(BugseeSdkVersion.parse("7.0.0"), snap)
+    }
+
+    @Test
+    fun parse_bareLocal_isStableNotPreRelease() {
+        val local = BugseeSdkVersion.parse("7.0.0-LOCAL")
+        assertNotNull(local)
+        assertEquals("", local!!.preLabel)
+        assertEquals(BugseeSdkVersion.parse("7.0.0"), local)
+    }
+
+    @Test
+    fun gate_bareSnapshotAcceptedAboveDispatcherFloor() {
+        // Direct guard on the gate: a consumer on `7.0.0-SNAPSHOT` must
+        // pass the >= 7.0.0-beta11 dispatcher gate (the snapshot ships the
+        // dispatcher). The pre-fix parse ranked it BELOW the floor.
+        val min = BugseeSdkVersion.parse("7.0.0-beta11")!!
+        val snap = BugseeSdkVersion.parse("7.0.0-SNAPSHOT")!!
+        assertTrue("7.0.0-SNAPSHOT must be >= 7.0.0-beta11", snap >= min)
+        assertTrue("7.0.0-SNAPSHOT (stable) must outrank 7.0.0-beta11", snap > min)
+    }
+
+    @Test
     fun parse_unparseableForms_returnNull() {
         // Gradle ranges, version-catalog placeholders, project-dep
         // sentinels all parse to null → caller treats permissively.

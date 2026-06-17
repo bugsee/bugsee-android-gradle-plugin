@@ -178,10 +178,9 @@ internal object DependencyPayloadSerializer {
         // sometimes hits and keeps the output stable in tests.
         val instant = java.time.Instant.ofEpochMilli(epochMs)
         val zdt = instant.atOffset(java.time.ZoneOffset.UTC)
+        // ISO_OFFSET_DATE_TIME's appendOffsetId() already emits a literal
+        // `Z` for the zero (UTC) offset — matching the JS convention the
+        // appserver uses elsewhere — so no `+00:00`→`Z` rewrite is needed.
         return zdt.format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-            // ISO_OFFSET_DATE_TIME emits `+00:00`; switch to the
-            // shorter `Z` form so the wire shape matches the JS
-            // convention the appserver uses elsewhere.
-            .replace("+00:00", "Z")
     }
 }

@@ -48,6 +48,41 @@ class VcsMetadataResolverTest {
         assertEquals("github", vcs.vcsProvider)
     }
 
+    @Test fun `github actions extracts pr number from GITHUB_REF_NAME fallback`() {
+        // On pull_request events GITHUB_REF_NAME is `N/merge`; if GITHUB_REF
+        // is absent/odd we still recover the PR number from REF_NAME.
+        val env = mapOf(
+            "GITHUB_ACTIONS"    to "true",
+            "GITHUB_SHA"        to "b".repeat(40),
+            "GITHUB_REF_NAME"   to "42/merge",
+            "GITHUB_HEAD_REF"   to "feature-x",
+            "GITHUB_EVENT_NAME" to "pull_request"
+        )
+        val vcs = VcsMetadataResolver.resolveGithubActions(env)
+        assertEquals(42, vcs.prNumber)
+        assertEquals("feature-x", vcs.branch)
+    }
+
+    @Test fun `github actions pull_request_target sets branch but leaves pr number null`() {
+        // On pull_request_target the workflow runs in the BASE-branch
+        // context: GITHUB_REF/REF_NAME carry the base, not the PR number.
+        // We can't recover the number from default env vars, so it's null;
+        // the branch must still come from GITHUB_HEAD_REF.
+        val env = mapOf(
+            "GITHUB_ACTIONS"    to "true",
+            "GITHUB_SHA"        to "b".repeat(40),
+            "GITHUB_REF"        to "refs/heads/main",
+            "GITHUB_REF_NAME"   to "main",
+            "GITHUB_HEAD_REF"   to "feature-x",
+            "GITHUB_BASE_REF"   to "main",
+            "GITHUB_EVENT_NAME" to "pull_request_target"
+        )
+        val vcs = VcsMetadataResolver.resolveGithubActions(env)
+        assertEquals("feature-x", vcs.branch)
+        assertEquals("main", vcs.baseBranch)
+        assertNull("pull_request_target can't expose PR number via default env", vcs.prNumber)
+    }
+
     @Test fun `github actions tolerates missing envs`() {
         val vcs = VcsMetadataResolver.resolveGithubActions(mapOf("GITHUB_ACTIONS" to "true"))
         assertNull(vcs.commitSha)
@@ -90,6 +125,37 @@ class VcsMetadataResolverTest {
         assertEquals("main", vcs.baseBranch)
         assertEquals(17, vcs.prNumber)
         assertEquals("d".repeat(40), vcs.baseSha)
+    }
+
+    @Test fun `gitlab ci tag pipeline does not mislabel the tag as a branch`() {
+        // On a tag pipeline CI_COMMIT_BRANCH is unset and CI_COMMIT_REF_NAME
+        // equals the TAG name. The bare-ref fallback must NOT fire here, or
+        // the tag pollutes branch-keyed diffs. Branch must be null.
+        val env = mapOf(
+            "GITLAB_CI"          to "true",
+            "CI_COMMIT_SHA"      to "c".repeat(40),
+            "CI_COMMIT_TAG"      to "v1.2.3",
+            "CI_COMMIT_REF_NAME" to "v1.2.3",
+            "CI_PROJECT_PATH"    to "group/project"
+        )
+        val vcs = VcsMetadataResolver.resolveGitlabCi(env)
+        assertNull("a tag pipeline must not report the tag as a branch", vcs.branch)
+        assertEquals("c".repeat(40), vcs.commitSha)
+        assertEquals("group/project", vcs.vcsRepo)
+        assertNull(vcs.prNumber)
+    }
+
+    @Test fun `gitlab ci branch pipeline still resolves branch from CI_COMMIT_REF_NAME`() {
+        // No tag → the bare-ref fallback is allowed when CI_COMMIT_BRANCH
+        // is absent (e.g. older runners), so we don't lose the branch.
+        val env = mapOf(
+            "GITLAB_CI"          to "true",
+            "CI_COMMIT_SHA"      to "c".repeat(40),
+            "CI_COMMIT_REF_NAME" to "feature-y",
+            "CI_PROJECT_PATH"    to "group/project"
+        )
+        val vcs = VcsMetadataResolver.resolveGitlabCi(env)
+        assertEquals("feature-y", vcs.branch)
     }
 
     // ── CircleCI ───────────────────────────────────────────────────

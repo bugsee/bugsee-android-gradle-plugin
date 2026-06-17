@@ -30,8 +30,14 @@ internal class HttpEngineInstrumentation : Instrumentation {
             params.targetClass.set("com.bugsee.library.adapters.BugseeHttpEngineAdapter")
             params.excludes.set(excludes)
         }
+        // The injected call sites grow the operand stack (DUP / DUP2 / DUP_X2 /
+        // DUP2_X1 in HttpEngineClassVisitor), so the original method's max_stack
+        // is no longer valid. COPY_FRAMES copies it verbatim → a too-small
+        // max_stack → ART/JVM VerifyError at class load. Recompute frames+maxs
+        // for instrumented methods (matching operation_dispatch / compose_input /
+        // extensions_init, which inject similarly).
         variant.instrumentation.setAsmFramesComputationMode(
-            FramesComputationMode.COPY_FRAMES
+            FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
         )
     }
 }

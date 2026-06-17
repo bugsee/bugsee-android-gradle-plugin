@@ -78,10 +78,22 @@ object VcsMetadataResolver {
         } else {
             ref?.removePrefix("refs/heads/")?.takeIf { it != ref }
         }
-        // GITHUB_REF is `refs/pull/N/merge` on PR events — extract N.
-        val prNumber = ref
-            ?.let { Regex("""^refs/pull/(\d+)/(?:merge|head)$""").find(it) }
-            ?.groupValues?.get(1)
+        // GITHUB_REF is `refs/pull/N/merge` on `pull_request` events —
+        // extract N. As a secondary source, GITHUB_REF_NAME is `N/merge`
+        // on the same events, which also yields N when GITHUB_REF was
+        // unset/odd.
+        //
+        // NOTE: on `pull_request_target` events the workflow runs in the
+        // BASE-branch context, so GITHUB_REF is `refs/heads/<base>` and
+        // GITHUB_REF_NAME is `<base>` — NEITHER carries the PR number. The
+        // only source there is the event payload
+        // (`github.event.pull_request.number`), which is not a default env
+        // var, so prNumber stays null for that event type. The branch is
+        // still resolved correctly from GITHUB_HEAD_REF above.
+        val prRefRe = Regex("""^refs/pull/(\d+)/(?:merge|head)$""")
+        val prRefNameRe = Regex("""^(\d+)/(?:merge|head)$""")
+        val prNumber = (ref?.let { prRefRe.find(it) }?.groupValues?.get(1)
+            ?: env["GITHUB_REF_NAME"]?.let { prRefNameRe.find(it) }?.groupValues?.get(1))
             ?.toIntOrNull()
         return VcsMetadata(
             commitSha   = env["GITHUB_SHA"].nullIfBlank(),
@@ -98,6 +110,12 @@ object VcsMetadataResolver {
         val branch = if (isMr) {
             env["CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"].nullIfBlank()
                 ?: env["CI_COMMIT_REF_NAME"].nullIfBlank()
+        } else if (!env["CI_COMMIT_TAG"].isNullOrBlank()) {
+            // Tag pipeline: CI_COMMIT_BRANCH is unset and CI_COMMIT_REF_NAME
+            // equals the TAG name, so the bare-ref fallback below would
+            // mislabel the tag as a branch (polluting branch-keyed diffs).
+            // Mirror the GitHub resolver, which yields null branch for tags.
+            null
         } else {
             env["CI_COMMIT_BRANCH"].nullIfBlank()
                 ?: env["CI_COMMIT_REF_NAME"].nullIfBlank()

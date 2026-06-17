@@ -124,8 +124,13 @@ internal object BundleUploader {
         if (debug) logger.warn("Bugsee: Starting bundle upload. Body: $json")
 
         val httpPost = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken))
-        val body = StringEntity(json)
-        body.contentType = BasicHeader(HTTP.CONTENT_TYPE, "application/json")
+        // Encode the JSON body as UTF-8 explicitly: the single-arg StringEntity
+        // defaults to ISO-8859-1 (Apache HttpClient's default), which mangles
+        // non-ASCII metadata (e.g. accented/CJK/emoji git branch names in
+        // `branch`/`base_branch`) into mojibake or breaks the server's UTF-8
+        // JSON parse. The chunked transport already does this correctly.
+        val body = StringEntity(json, "UTF-8")
+        body.contentType = BasicHeader(HTTP.CONTENT_TYPE, "application/json; charset=utf-8")
         httpPost.entity = body
 
         val requestConfig = RequestConfig.custom()
@@ -192,6 +197,24 @@ internal object BundleUploader {
             // A deps-only upload still flows through here (no artefact
             // PUT, but possibly a deps PUT).
             if (!requestArtifactUpload) {
+                // The server returns HTTP 2xx with an `{ ok:false,
+                // error:{...} }` envelope on rejection (e.g. an invalid
+                // app token → `ApplicationNotFoundError`). Without
+                // inspecting it the task would report green while the
+                // backend never created a build. Mirror the artefact
+                // path's error handling so an invalid token / server
+                // rejection fails the step instead of silently
+                // succeeding.
+                val error = responseBody.optJSONObject("error") ?: payload.optJSONObject("error")
+                if (error != null) {
+                    val errorType = error.optString("type", "")
+                    if (errorType == "ApplicationNotFoundError") {
+                        throw RuntimeException(
+                            "Bugsee: App token is invalid: ${maskAppToken(appToken)}"
+                        )
+                    }
+                    throw RuntimeException("Bugsee build-info upload failed: $error")
+                }
                 if (presignedEndpoint.isNotEmpty()) {
                     // Server returned a URL we didn't ask for. Treat
                     // as a server bug rather than a hard failure —

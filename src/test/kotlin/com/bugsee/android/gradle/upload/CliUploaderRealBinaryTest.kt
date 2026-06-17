@@ -3,10 +3,14 @@ package com.bugsee.android.gradle.upload
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.process.ExecOperations
 import org.gradle.testfixtures.ProjectBuilder
+import org.json.JSONObject
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -285,6 +289,455 @@ class CliUploaderRealBinaryTest {
                 artifactBytes,
                 storedEntryBytes(uploadedZipBytes, "app.aab"),
                 "the artefact bytes that reached the mock must equal what was uploaded",
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ── e. uploadBuild --chunked full real round-trip ────────────────
+
+    @Test
+    fun `uploadBuild chunked drives the chunked protocol and reconstructs the artefact from chunk PUTs`() {
+        val bin = requireBinary()
+        val tmp = Files.createTempDirectory("bugsee-upload-chunked").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        // Tiny chunk size so a small artefact still splits into multiple chunks,
+        // exercising the chunk-slice / per-chunk-PUT / reconstruct path. (S3's
+        // 5 MiB floor doesn't apply to this mock — it just stores bytes.)
+        server.setChunkOptions(chunkSize = 16, maxChunks = 4096)
+        server.setBuildIdResponse("chunked-build-99")
+        server.start()
+        try {
+            val payload = File(tmp, "payload.json").apply {
+                writeText("""{"version":"2.0","build":"7"}""")
+            }
+            // Make the artefact comfortably larger than one chunk so we get
+            // several chunk PUTs to reconstruct.
+            val artifactBytes = byteArrayOf(0x50, 0x4B, 0x03, 0x04) +
+                ("chunked artefact payload that spans many sixteen-byte chunks " +
+                    "to force a multi-chunk upload").toByteArray()
+            val artifact = File(tmp, "app.aab").apply { writeBytes(artifactBytes) }
+            val mapping = File(tmp, "mapping.txt").apply {
+                writeText("a -> b:\nfoo.Bar -> a.b:\n")
+            }
+
+            val result = CliUploader.uploadBuild(
+                execOps = realExecOps(),
+                cliBinary = bin,
+                endpoint = server.baseUrl,
+                appToken = "tok",
+                payloadJsonFile = payload,
+                artifactFile = artifact,
+                mappingFile = mapping,
+                depsJsonFile = null,
+                timingsJsonFile = null,
+                chunked = true,
+                logger = logger,
+                debug = true,
+            )
+
+            assertTrue(result.success, "chunked uploadBuild must succeed against the mock; result=$result")
+            assertEquals(0, result.exitCode, "a successful CLI run exits 0; result=$result")
+            assertFalse(result.shouldFallback, "success must not request a fallback; result=$result")
+
+            val recorded = server.recordedRequests()
+            // Chunked protocol markers: chunk-options GET + chunks/check POST +
+            // the final chunked submit POST all landed on the v2 build paths.
+            assertEquals(
+                1,
+                recorded.countMatching("GET", "/builds/chunk-options"),
+                "exactly one chunk-options GET expected; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+            assertEquals(
+                1,
+                recorded.countMatching("POST", "/builds/chunks/check"),
+                "exactly one chunks/check POST expected; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+            val submit = recorded.singleOrNull {
+                it.method == "POST" && it.path == "/v2/apps/tok/builds/chunked"
+            }
+            assertNotNull(
+                submit,
+                "exactly one chunked submit POST to /v2/apps/tok/builds/chunked expected; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+
+            // The submit body carries the producer payload + the CLI-injected
+            // artifact-upload flag + the ordered `chunks` sha1 list.
+            val submitJson = JSONObject(String(submit.body, Charsets.UTF_8))
+            assertTrue(
+                submitJson.optBoolean("request_artifact_upload", false),
+                "chunked submit must carry request_artifact_upload=true; body=${String(submit.body)}",
+            )
+            assertEquals(
+                "2.0",
+                submitJson.optString("version"),
+                "chunked submit must preserve the producer payload; body=${String(submit.body)}",
+            )
+            val chunksArray = submitJson.getJSONArray("chunks")
+            assertTrue(chunksArray.length() > 1, "artefact must have split into >1 chunk; chunks=$chunksArray")
+
+            // At least one chunk PUT landed (a fresh server has no present chunks,
+            // so every chunk is missing and uploaded).
+            val chunkPuts = recorded.filter { it.method == "PUT" && it.path.startsWith("/chunk-store/") }
+            assertTrue(chunkPuts.isNotEmpty(), "at least one chunk PUT expected; got: " +
+                recorded.joinToString { "${it.method} ${it.path}" })
+
+            // Reconstruct the artefact ZIP from the captured chunk bytes, in the
+            // exact order the submit body declared, and prove it is the real
+            // normalized upload ZIP: artefact STORED verbatim + mapping present.
+            val stored = server.storedChunks()
+            val reconstructed = ByteArrayOutputStream().use { out ->
+                for (i in 0 until chunksArray.length()) {
+                    val sha = chunksArray.getString(i)
+                    val chunk = stored[sha]
+                    assertNotNull(chunk, "chunk $sha referenced by submit body was never PUT")
+                    out.write(chunk)
+                }
+                out.toByteArray()
+            }
+            val methods = zipEntryMethods(reconstructed)
+            assertEquals(
+                METHOD_STORED,
+                methods["app.aab"],
+                "reconstructed upload ZIP must contain the artefact 'app.aab' STORED; methods=$methods",
+            )
+            assertTrue(
+                methods.containsKey("mapping.txt"),
+                "reconstructed upload ZIP must contain the 'mapping.txt' entry; methods=$methods",
+            )
+            assertContentEquals(
+                artifactBytes,
+                storedEntryBytes(reconstructed, "app.aab"),
+                "the artefact bytes reconstructed from chunk PUTs must equal the input",
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ── f. uploadBuild with deps + timings sidecars ──────────────────
+
+    @Test
+    fun `uploadBuild with deps and timings ships the build-info bundle from the same registration`() {
+        val bin = requireBinary()
+        val tmp = Files.createTempDirectory("bugsee-upload-build-info-side").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        server.start()
+        try {
+            val payload = File(tmp, "payload.json").apply {
+                writeText("""{"version":"3.0","build":"11"}""")
+            }
+            val artifactBytes = byteArrayOf(0x50, 0x4B, 0x03, 0x04) + "sidecar artefact".toByteArray()
+            val artifact = File(tmp, "app.aab").apply { writeBytes(artifactBytes) }
+            val deps = File(tmp, "dependencies.json").apply {
+                writeText("""{"dependencies":[{"name":"foo","version":"1.0"}]}""")
+            }
+            val timings = File(tmp, "timings.json").apply {
+                writeText("""{"tasks":[{"name":":app:compile","durationMs":1234}]}""")
+            }
+
+            val result = CliUploader.uploadBuild(
+                execOps = realExecOps(),
+                cliBinary = bin,
+                endpoint = server.baseUrl,
+                appToken = "tok",
+                payloadJsonFile = payload,
+                artifactFile = artifact,
+                mappingFile = null,
+                depsJsonFile = deps,
+                timingsJsonFile = timings,
+                chunked = false,
+                logger = logger,
+                debug = true,
+            )
+
+            assertTrue(result.success, "uploadBuild with sidecars must succeed; result=$result")
+            assertEquals(0, result.exitCode, "a successful CLI run exits 0; result=$result")
+            assertFalse(result.shouldFallback, "success must not request a fallback; result=$result")
+
+            val recorded = server.recordedRequests()
+            // Exactly ONE registration POST (the build-info bundle ships from the
+            // SAME registration — no second POST).
+            val registrations = recorded.filter {
+                it.method == "POST" && it.path == "/v2/apps/tok/builds"
+            }
+            assertEquals(
+                1,
+                registrations.size,
+                "exactly one registration POST expected (build-info rides the same one); got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+            val regBody = String(registrations.single().body, Charsets.UTF_8)
+            val regJson = JSONObject(regBody)
+            assertTrue(
+                regJson.optBoolean("request_artifact_upload", false),
+                "registration must carry request_artifact_upload=true; body=$regBody",
+            )
+            // Sidecars present → the CLI must inject request_build_info_upload so
+            // the server signs the build-info endpoint.
+            assertTrue(
+                regJson.optBoolean("request_build_info_upload", false),
+                "registration must carry request_build_info_upload=true when deps/timings present; body=$regBody",
+            )
+
+            // Artefact PUT landed at the artefact single-put store.
+            assertNotNull(
+                server.storedSinglePuts()["artefact"],
+                "artefact PUT must have landed at /single-put/artefact",
+            )
+
+            // The build-info bundle PUT landed at /single-put/build-info, and the
+            // bundle is a ZIP carrying dependencies.json + timings.json.
+            val biBytes = server.storedSinglePuts()["build-info"]
+            assertNotNull(
+                biBytes,
+                "build-info bundle PUT must have landed at /single-put/build-info; puts: " +
+                    server.storedSinglePuts().keys.joinToString(),
+            )
+            assertTrue(biBytes.isNotEmpty(), "build-info bundle body must be non-empty")
+            val biMethods = zipEntryMethods(biBytes)
+            assertTrue(
+                biMethods.containsKey("dependencies.json"),
+                "build-info bundle must contain 'dependencies.json'; methods=$biMethods",
+            )
+            assertTrue(
+                biMethods.containsKey("timings.json"),
+                "build-info bundle must contain 'timings.json'; methods=$biMethods",
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ── g. uploadBuildInfo standalone (self-contained registration) ──
+
+    @Test
+    fun `uploadBuildInfo standalone presigned PUTs the bundle to the build-info upload endpoint`() {
+        val bin = requireBinary()
+        val tmp = Files.createTempDirectory("bugsee-upload-build-info").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        server.start()
+        try {
+            // The plugin's standalone build-info flow already registered the build
+            // and received the presigned build-info endpoint. We mint that URL
+            // directly off the mock so the CLI PUTs the bundle to it. (Standalone
+            // pre-signed mode: --upload-url, no second registration POST.)
+            val uploadUrl = "${server.baseUrl}/single-put/build-info"
+            val deps = File(tmp, "dependencies.json").apply {
+                writeText("""{"dependencies":[{"name":"bar","version":"2.0"}]}""")
+            }
+            val timings = File(tmp, "timings.json").apply {
+                writeText("""{"tasks":[{"name":":lib:test","durationMs":42}]}""")
+            }
+
+            val result = CliUploader.uploadBuildInfo(
+                execOps = realExecOps(),
+                cliBinary = bin,
+                uploadUrl = uploadUrl,
+                depsJsonFile = deps,
+                timingsJsonFile = timings,
+                logger = logger,
+                debug = true,
+            )
+
+            assertTrue(result.success, "uploadBuildInfo must succeed against the mock; result=$result")
+            assertEquals(0, result.exitCode, "a successful CLI run exits 0; result=$result")
+            assertFalse(result.shouldFallback, "success must not request a fallback; result=$result")
+
+            val recorded = server.recordedRequests()
+            // Pre-signed mode: NO registration POST — the only request is the
+            // bundle PUT to the presigned build-info URL.
+            assertTrue(
+                recorded.none { it.method == "POST" && it.path == "/v2/apps/tok/builds" },
+                "standalone presigned build-info must NOT register a build; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+            val puts = recorded.filter { it.method == "PUT" && it.path == "/single-put/build-info" }
+            assertEquals(
+                1,
+                puts.size,
+                "exactly one build-info bundle PUT to /single-put/build-info expected; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+
+            val biBytes = server.storedSinglePuts()["build-info"]
+            assertNotNull(biBytes, "the mock must have captured the build-info bundle PUT body")
+            assertTrue(biBytes.isNotEmpty(), "build-info bundle body must be non-empty")
+            val biMethods = zipEntryMethods(biBytes)
+            assertTrue(
+                biMethods.containsKey("dependencies.json"),
+                "build-info bundle must contain 'dependencies.json'; methods=$biMethods",
+            )
+            assertTrue(
+                biMethods.containsKey("timings.json"),
+                "build-info bundle must contain 'timings.json'; methods=$biMethods",
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ── h. uploadMapping (proguard) presigned symbol round-trip ──────
+
+    @Test
+    fun `uploadMapping POSTs proguard symbol metadata and PUTs the mapping zip to the presigned URL`() {
+        val bin = requireBinary()
+        val tmp = Files.createTempDirectory("bugsee-upload-mapping").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        server.start()
+        try {
+            val mapping = File(tmp, "mapping.txt").apply {
+                writeText("a -> b:\ncom.example.Foo -> a.b.C:\n    void bar() -> a:\n")
+            }
+            // A real R8/Java UUID the plugin would have resolved upstream
+            // (BugseeBuildIdResolveTask). The CLI accepts it via --uuid.
+            val uuid = "11111111-2222-3333-4444-555555555555"
+
+            val result = CliUploader.uploadMapping(
+                execOps = realExecOps(),
+                cliBinary = bin,
+                mappingFile = mapping,
+                iconFile = null,
+                appToken = "tok",
+                endpoint = server.baseUrl,
+                version = "1.2.3",
+                build = "456",
+                uuid = uuid,
+                logger = logger,
+                debug = true,
+            )
+
+            assertTrue(result.success, "uploadMapping must succeed against the mock; result=$result")
+            assertEquals(0, result.exitCode, "a successful CLI run exits 0; result=$result")
+            assertFalse(result.shouldFallback, "success must not request a fallback; result=$result")
+
+            val recorded = server.recordedRequests()
+            // Stage 1: exactly one metadata POST landed at /apps/tok/symbols (NO
+            // /v2 — the presigned-symbol protocol is mounted at /apps/<token>).
+            val metaPosts = recorded.filter {
+                it.method == "POST" && it.path == "/apps/tok/symbols"
+            }
+            assertEquals(
+                1,
+                metaPosts.size,
+                "exactly one symbol metadata POST to /apps/tok/symbols expected; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+            // The metadata carries the proguard wire fields: uuid + version +
+            // build + a SHA-1 hash, and NO transform (proguard, not breakpad).
+            val meta = JSONObject(String(metaPosts.single().body, Charsets.UTF_8))
+            assertEquals(uuid, meta.optString("uuid"), "metadata uuid must be the supplied --uuid; meta=$meta")
+            assertEquals("1.2.3", meta.optString("version"), "metadata version mismatch; meta=$meta")
+            assertEquals("456", meta.optString("build"), "metadata build mismatch; meta=$meta")
+            assertEquals(
+                40,
+                meta.optString("hash").length,
+                "metadata must carry a 40-char SHA-1 content hash; meta=$meta",
+            )
+            assertFalse(
+                meta.has("transform"),
+                "proguard metadata must NOT carry transform=breakpad; meta=$meta",
+            )
+
+            // Stage 2: the mapping zip PUT landed at the presigned URL, and its
+            // body is a real ZIP carrying mapping.txt.
+            val symPut = server.storedSymbolPut()
+            assertNotNull(symPut, "the presigned symbol PUT body must have been captured")
+            assertTrue(symPut.isNotEmpty(), "the symbol zip body must be non-empty")
+            val methods = zipEntryMethods(symPut)
+            assertTrue(
+                methods.containsKey("mapping.txt"),
+                "the uploaded symbol zip must contain 'mapping.txt'; methods=$methods",
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ── i. uploadElf presigned symbol round-trip ─────────────────────
+
+    @Test
+    fun `uploadElf POSTs elf symbol metadata with breakpad transform and PUTs the symbols zip`() {
+        val bin = requireBinary()
+        val tmp = Files.createTempDirectory("bugsee-upload-elf").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        server.start()
+        try {
+            // The CLI requires --type elf inputs to be a pre-built zip (AGP's
+            // native-debug-symbols.zip), which NativeUploadTask supplies. Build a
+            // small but valid zip with a fake .so entry.
+            val symbolsZip = File(tmp, "native-debug-symbols.zip")
+            ZipOutputStream(symbolsZip.outputStream()).use { zos ->
+                zos.putNextEntry(ZipEntry("libfake.so"))
+                zos.write("ELF fake native debug symbols".toByteArray())
+                zos.closeEntry()
+            }
+            assertTrue(symbolsZip.length() > 0L, "precondition: the symbols zip must be non-empty")
+
+            // The resolved BUILD_UUID NativeUploadTask passes as --uuid.
+            val uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+            val result = CliUploader.uploadElf(
+                execOps = realExecOps(),
+                cliBinary = bin,
+                symbolsZip = symbolsZip,
+                appToken = "tok",
+                endpoint = server.baseUrl,
+                version = "1.2.3",
+                build = "456",
+                uuid = uuid,
+                logger = logger,
+                debug = true,
+            )
+
+            assertTrue(result.success, "uploadElf must succeed against the mock; result=$result")
+            assertEquals(0, result.exitCode, "a successful CLI run exits 0; result=$result")
+            assertFalse(result.shouldFallback, "success must not request a fallback; result=$result")
+
+            val recorded = server.recordedRequests()
+            val metaPosts = recorded.filter {
+                it.method == "POST" && it.path == "/apps/tok/symbols"
+            }
+            assertEquals(
+                1,
+                metaPosts.size,
+                "exactly one symbol metadata POST to /apps/tok/symbols expected; got: " +
+                    recorded.joinToString { "${it.method} ${it.path}" },
+            )
+            val meta = JSONObject(String(metaPosts.single().body, Charsets.UTF_8))
+            assertEquals(uuid, meta.optString("uuid"), "metadata uuid must be the supplied --uuid; meta=$meta")
+            assertEquals("1.2.3", meta.optString("version"), "metadata version mismatch; meta=$meta")
+            assertEquals("456", meta.optString("build"), "metadata build mismatch; meta=$meta")
+            assertEquals(
+                40,
+                meta.optString("hash").length,
+                "metadata must carry a 40-char SHA-1 content hash; meta=$meta",
+            )
+            // ELF symbols are uploaded with the breakpad transform marker (this is
+            // the field that routes them through the native-symbol pipeline).
+            assertEquals(
+                "breakpad",
+                meta.optString("transform"),
+                "elf metadata must carry transform=breakpad; meta=$meta",
+            )
+
+            // Stage 2: the symbols zip PUT landed verbatim (elf is a pass-through —
+            // the CLI PUTs the input zip as-is, no re-pack).
+            val symPut = server.storedSymbolPut()
+            assertNotNull(symPut, "the presigned symbol PUT body must have been captured")
+            assertContentEquals(
+                symbolsZip.readBytes(),
+                symPut,
+                "elf upload is a pass-through; the PUT body must equal the input zip verbatim",
             )
         } finally {
             server.stop()

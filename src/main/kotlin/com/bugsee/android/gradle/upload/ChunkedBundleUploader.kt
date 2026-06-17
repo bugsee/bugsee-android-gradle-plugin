@@ -269,7 +269,10 @@ internal object ChunkedBundleUploader {
                                   endpoint: String, appToken: String): JSONObject {
         val get = HttpGet(ApiEndpoint.buildsUrl(endpoint, appToken, "/chunk-options"))
         http.execute(get).use { response ->
-            val body = response.entity?.let { EntityUtils.toString(it) } ?: ""
+            // Decode as UTF-8 for symmetry with the request side (the
+            // single-arg overload falls back to ISO-8859-1 when the server
+            // omits a charset on its application/json Content-Type).
+            val body = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
             if (response.statusLine.statusCode !in 200..299) {
                 throw RuntimeException("chunk-options failed: ${response.statusLine} $body")
             }
@@ -287,7 +290,7 @@ internal object ChunkedBundleUploader {
         }.toString()
         post.entity = StringEntity(body, "UTF-8")
         http.execute(post).use { response ->
-            val responseBody = response.entity?.let { EntityUtils.toString(it) } ?: ""
+            val responseBody = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
             if (response.statusLine.statusCode !in 200..299) {
                 throw RuntimeException("chunks/check failed: ${response.statusLine} $responseBody")
             }
@@ -366,7 +369,7 @@ internal object ChunkedBundleUploader {
         }
         post.entity = StringEntity(body.toString(), "UTF-8")
         http.execute(post).use { response ->
-            val responseBody = response.entity?.let { EntityUtils.toString(it) } ?: ""
+            val responseBody = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
             if (response.statusLine.statusCode !in 200..299) {
                 throw RuntimeException("/builds/chunked failed: ${response.statusLine} $responseBody")
             }

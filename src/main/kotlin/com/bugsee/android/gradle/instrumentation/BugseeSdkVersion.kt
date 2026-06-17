@@ -90,21 +90,32 @@ internal data class BugseeSdkVersion(
     }
 
     companion object {
-        // Matches MAJOR.MINOR.PATCH[-LABEL[NUMBER]][-SNAPSHOT|-LOCAL].
-        // Examples accepted:
-        //   7.0.0
-        //   7.0.0-beta11
-        //   7.0.0-rc1
-        //   7.0.0-alpha
-        //   7.0.0-beta11-SNAPSHOT
-        //   7.0.0-SNAPSHOT
+        // Matches MAJOR.MINOR.PATCH[-LABEL[NUMBER]] AFTER the snapshot/local
+        // suffix has been stripped (see [parse]).
+        // Examples accepted (post-strip core in parens):
+        //   7.0.0                  -> 7.0.0
+        //   7.0.0-beta11           -> 7.0.0-beta11
+        //   7.0.0-rc1              -> 7.0.0-rc1
+        //   7.0.0-alpha            -> 7.0.0-alpha
+        //   7.0.0-beta11-SNAPSHOT  -> 7.0.0-beta11   (stable pre-release rank kept)
+        //   7.0.0-SNAPSHOT         -> 7.0.0          (STABLE — ranks above any -betaN)
         private val PATTERN = Regex(
-            """^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z]+)(\d+)?)?(?:-(?:SNAPSHOT|LOCAL))?$"""
+            """^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z]+)(\d+)?)?$"""
         )
 
         fun parse(s: String?): BugseeSdkVersion? {
             if (s.isNullOrBlank()) return null
-            val match = PATTERN.matchEntire(s.trim()) ?: return null
+            // Strip a trailing snapshot/local suffix FIRST so a bare
+            // `7.0.0-SNAPSHOT` parses to the STABLE `7.0.0` (preLabel="")
+            // rather than letting the greedy `[A-Za-z]+` label group
+            // capture "SNAPSHOT" — which mis-ranked it as the LOWEST
+            // pre-release and silently disabled the dispatcher gate for
+            // local snapshot SDK builds. `-beta11-SNAPSHOT` keeps its
+            // `-beta11` rank because only the trailing suffix is removed.
+            val core = s.trim()
+                .removeSuffix("-SNAPSHOT")
+                .removeSuffix("-LOCAL")
+            val match = PATTERN.matchEntire(core) ?: return null
             val (mj, mn, pt, lbl, num) = match.destructured
             return BugseeSdkVersion(
                 major = mj.toInt(),

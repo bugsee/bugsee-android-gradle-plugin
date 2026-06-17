@@ -100,6 +100,19 @@ abstract class BugseeManifestTask : DefaultTask() {
 
         if (!manifestFile.isFile) {
             logger.warn("Bugsee: Manifest file not found: ${manifestFile.absolutePath}")
+            // Write ALL declared @OutputFiles even on this early-return path.
+            // Leaving updatedManifest / fallbackBuildId unwritten violates
+            // the MERGED_MANIFEST artifact-transform contract and breaks the
+            // downstream BugseeBuildIdResolveTask, whose fallbackBuildId is a
+            // NON-optional @InputFile (it would fail with a missing-input
+            // error). The placeholders are deterministic: an empty manifest
+            // and an empty fallback id.
+            val outFile = updatedManifest.get().asFile
+            outFile.parentFile?.mkdirs()
+            outFile.writeText("")
+            val fallback = fallbackBuildId.get().asFile
+            fallback.parentFile?.mkdirs()
+            fallback.writeText("")
             writeDetectedExtensions(detectedFile, emptyList())
             return
         }

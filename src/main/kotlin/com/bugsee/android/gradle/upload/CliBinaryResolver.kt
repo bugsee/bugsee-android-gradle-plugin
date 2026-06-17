@@ -7,7 +7,6 @@ import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
 
 /**
  * Resolves a `bugsee-cli` binary path for [MappingUploadTask] /
@@ -31,7 +30,10 @@ import java.util.concurrent.TimeUnit
  *
  * Concurrency: a per-triple lock file under the cache root prevents two
  * parallel builds from racing the download. The second build to enter
- * blocks on the lock, then sees the cache hit and skips.
+ * blocks on the lock, then sees the cache hit and skips. The SAME lock
+ * also covers the self-update self-replace (`bugsee-cli update`), so a
+ * cache-hit task self-replacing the binary can't race a parallel
+ * download or another task's self-update of the same file.
  */
 internal object CliBinaryResolver {
 
@@ -122,7 +124,10 @@ internal object CliBinaryResolver {
     ): File? {
         // Layer 1: explicit path. If set, trust the user — but verify the
         // file is actually executable so the eventual exec fails loudly
-        // here rather than mid-task.
+        // here rather than mid-task. An explicit cliPath bypasses
+        // self-update entirely (autoUpdate is honored only for the
+        // auto-downloaded binary): we never self-replace a user's
+        // hand-built or pinned binary.
         if (!cliPath.isNullOrBlank()) {
             val f = File(cliPath)
             return when {
@@ -164,24 +169,76 @@ internal object CliBinaryResolver {
         val cacheRoot = File(gradleUserHome, "caches/bugsee-cli/$version/$triple")
         val binaryName = if (triple.contains("windows")) "bugsee-cli.exe" else "bugsee-cli"
         val cachedBinary = File(cacheRoot, binaryName)
+        val lockFile = lockFileFor(cacheRoot, triple)
 
         // Fast path: cache hit.
         if (cachedBinary.isFile && cachedBinary.canExecute()) {
             if (debug) logger.warn("Bugsee: bugsee-cli cache hit at ${cachedBinary.absolutePath}")
-            return maybeSelfUpdate(cachedBinary, autoUpdate, execOps, logger, debug)
+            // Self-update self-replaces the binary in place, so it MUST run
+            // under the same per-triple lock the download path uses —
+            // otherwise two parallel tasks (or builds) can self-replace the
+            // same file while a third execs it. See [withTripleLock].
+            return withTripleLock(lockFile) {
+                maybeSelfUpdate(cachedBinary, autoUpdate, execOps, logger, debug)
+            }
         }
 
         return try {
-            val binary = downloadAndExtract(
-                version, triple, cacheRoot, binaryName, execOps, logger, debug,
-            )
-            maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+            withTripleLock(lockFile) {
+                val binary = downloadAndExtract(
+                    version, triple, cacheRoot, binaryName, logger, debug,
+                ) { execOps.exec(it) }
+                maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+            }
         } catch (e: Throwable) {
             logger.warn(
                 "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
                     "using the Kotlin uploader.",
             )
             null
+        }
+    }
+
+    /**
+     * The per-triple lock file path. Both [resolve] (self-update) and
+     * [downloadAndExtract] acquire THIS file's exclusive lock so that
+     * download, self-replace, and other tasks' self-update attempts are
+     * serialized within and across builds that share the same cache root.
+     */
+    private fun lockFileFor(cacheRoot: File, triple: String): File {
+        val parentDir = cacheRoot.parentFile ?: error("cache root has no parent: $cacheRoot")
+        parentDir.mkdirs()
+        return File(parentDir, "$triple.lock")
+    }
+
+    /**
+     * Runs [body] while holding the exclusive lock on [lockFile]. The lock
+     * serializes all cache mutation for one triple (download + self-replace)
+     * across parallel tasks in one JVM and across separate builds sharing
+     * the per-user cache root. A second entrant blocks here, then re-checks
+     * the cache inside [body].
+     *
+     * Lock acquisition is itself best-effort: if the lock file can't be
+     * opened/locked (e.g. a read-only or exotic filesystem where
+     * `FileChannel.lock` is unsupported), [body] still runs UNLOCKED rather
+     * than failing resolution — an un-serialized self-update is degraded but
+     * acceptable, and the CLI's own `--max-age` throttle still collapses the
+     * redundant work.
+     */
+    private fun <T> withTripleLock(lockFile: File, body: () -> T): T {
+        lockFile.parentFile?.mkdirs()
+        val raf = try {
+            java.io.RandomAccessFile(lockFile, "rw")
+        } catch (e: Throwable) {
+            return body()
+        }
+        raf.use {
+            val lock = try {
+                it.channel.lock()
+            } catch (e: Throwable) {
+                return body()
+            }
+            lock.use { return body() }
         }
     }
 
@@ -269,82 +326,79 @@ internal object CliBinaryResolver {
         return "$DOWNLOAD_BASE/v$version/bugsee-cli-$triple.$ext"
     }
 
+    /**
+     * Downloads + verifies + extracts the CLI into [cacheRoot]. The caller
+     * MUST already hold the per-triple lock (via [withTripleLock]) — this
+     * function no longer acquires it itself, so that the lock also covers the
+     * subsequent self-update self-replace of the same binary. [exec] is the
+     * lock-free shim used to run `tar`.
+     */
     private fun downloadAndExtract(
         version: String,
         triple: String,
         cacheRoot: File,
         binaryName: String,
-        execOps: ExecOperations,
         logger: Logger,
         debug: Boolean,
+        exec: (org.gradle.api.Action<in org.gradle.process.ExecSpec>) -> org.gradle.process.ExecResult,
     ): File {
         cacheRoot.mkdirs()
-        val parentDir = cacheRoot.parentFile ?: error("cache root has no parent: $cacheRoot")
-        parentDir.mkdirs()
 
-        val lockFile = File(parentDir, "$triple.lock")
-        lockFile.parentFile.mkdirs()
-
-        // File-lock the parent directory of the cache. A second build that
-        // enters here while the first is downloading blocks here, then
-        // sees the cache hit on re-check.
-        java.io.RandomAccessFile(lockFile, "rw").use { raf ->
-            raf.channel.lock().use {
-                val cachedBinary = File(cacheRoot, binaryName)
-                if (cachedBinary.isFile && cachedBinary.canExecute()) {
-                    if (debug) logger.warn("Bugsee: cache hit after lock acquire: $cachedBinary")
-                    return cachedBinary
-                }
-
-                val artifactUrl = artifactUrl(version, triple)
-                val sha256Url = "$artifactUrl.sha256"
-                val tarballName = artifactUrl.substringAfterLast('/')
-                val tarballFile = File(cacheRoot, tarballName)
-
-                logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
-                downloadToFile(artifactUrl, tarballFile)
-
-                val expectedSha = parseSha256Sidecar(downloadAsString(sha256Url))
-                val actualSha = sha256Hex(tarballFile)
-                if (!expectedSha.equals(actualSha, ignoreCase = true)) {
-                    tarballFile.delete()
-                    throw IOException(
-                        "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
-                    )
-                }
-
-                // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
-                // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
-                // (`bugsee-cli-<triple>/...`) so the binary lands directly in cacheRoot.
-                val extractResult = execOps.exec { spec ->
-                    spec.executable = "tar"
-                    spec.args = listOf(
-                        "-xf",
-                        tarballFile.absolutePath,
-                        "-C",
-                        cacheRoot.absolutePath,
-                        "--strip-components=1",
-                    )
-                    spec.isIgnoreExitValue = true
-                }
-                if (extractResult.exitValue != 0) {
-                    throw IOException(
-                        "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
-                    )
-                }
-
-                tarballFile.delete()
-
-                if (!cachedBinary.isFile) {
-                    throw IOException(
-                        "extraction completed but $binaryName not found in $cacheRoot",
-                    )
-                }
-                cachedBinary.setExecutable(true)
-                logger.warn("Bugsee: bugsee-cli v$version installed at ${cachedBinary.absolutePath}")
-                return cachedBinary
-            }
+        val cachedBinary = File(cacheRoot, binaryName)
+        // Re-check under the (caller-held) lock: a second build that blocked
+        // on the lock while the first downloaded now sees the cache hit.
+        if (cachedBinary.isFile && cachedBinary.canExecute()) {
+            if (debug) logger.warn("Bugsee: cache hit after lock acquire: $cachedBinary")
+            return cachedBinary
         }
+
+        val artifactUrl = artifactUrl(version, triple)
+        val sha256Url = "$artifactUrl.sha256"
+        val tarballName = artifactUrl.substringAfterLast('/')
+        val tarballFile = File(cacheRoot, tarballName)
+
+        logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
+        downloadToFile(artifactUrl, tarballFile)
+
+        val expectedSha = parseSha256Sidecar(downloadAsString(sha256Url))
+        val actualSha = sha256Hex(tarballFile)
+        if (!expectedSha.equals(actualSha, ignoreCase = true)) {
+            tarballFile.delete()
+            throw IOException(
+                "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
+            )
+        }
+
+        // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
+        // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
+        // (`bugsee-cli-<triple>/...`) so the binary lands directly in cacheRoot.
+        val extractResult = exec { spec ->
+            spec.executable = "tar"
+            spec.args = listOf(
+                "-xf",
+                tarballFile.absolutePath,
+                "-C",
+                cacheRoot.absolutePath,
+                "--strip-components=1",
+            )
+            spec.isIgnoreExitValue = true
+        }
+        if (extractResult.exitValue != 0) {
+            throw IOException(
+                "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
+            )
+        }
+
+        tarballFile.delete()
+
+        if (!cachedBinary.isFile) {
+            throw IOException(
+                "extraction completed but $binaryName not found in $cacheRoot",
+            )
+        }
+        cachedBinary.setExecutable(true)
+        logger.warn("Bugsee: bugsee-cli v$version installed at ${cachedBinary.absolutePath}")
+        return cachedBinary
     }
 
     /**
@@ -396,7 +450,4 @@ internal object CliBinaryResolver {
         }
         return conn
     }
-
-    @Suppress("unused") // for future use if we ever need to bound wait time on the lock
-    private val lockAcquireTimeoutMs: Long = TimeUnit.MINUTES.toMillis(2)
 }
