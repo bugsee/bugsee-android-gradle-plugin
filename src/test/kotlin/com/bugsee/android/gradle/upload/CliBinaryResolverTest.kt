@@ -1,8 +1,18 @@
 package com.bugsee.android.gradle.upload
 
+import org.gradle.api.Action
+import org.gradle.api.logging.Logging
+import org.gradle.process.ExecOperations
+import org.gradle.process.ExecResult
+import org.gradle.process.ExecSpec
+import org.gradle.process.JavaExecSpec
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -210,5 +220,198 @@ class CliBinaryResolverTest {
         assertFalse(CliBinaryResolver.versionAtLeast("", "0.2.0"))
         assertFalse(CliBinaryResolver.versionAtLeast("garbage", "0.2.0"))
         assertFalse(CliBinaryResolver.versionAtLeast("v-next", "0.2.0"))
+    }
+
+    // ── floor bump ───────────────────────────────────────────────────
+
+    @Test fun `default floor version is 0_6_0`() {
+        // The pinned download floor — must be >= 0.6.0, the first CLI release
+        // with the `update` self-update command this resolver invokes. If this
+        // is rolled back, the pack / upload-build gate tests above shift with
+        // it — this pins the intended floor explicitly. Keeping the CLI current
+        // beyond this floor is delegated to the CLI's own `update --max-age 12h`.
+        assertEquals("0.6.0", CliBinaryResolver.DEFAULT_VERSION)
+    }
+
+    // ── self-update delegation (resolve → `update --max-age 12h`) ─────
+
+    @Test fun `resolve on a cache hit with autoUpdate true invokes update --max-age 12h`() {
+        // The CLI owns version discovery now: once a binary is on disk the
+        // plugin just runs `<binary> update --max-age 12h`, best-effort. On a
+        // cache hit (binary already present) there is NO network in resolve
+        // itself — only the self-update exec, whose spec we capture here.
+        val home = gradleHomeWithCachedBinary()
+        val rec = RecordingExecOps()
+
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = null,
+            cliPath = null,
+            execOps = rec,
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = true,
+        )
+
+        assertNotNull(resolved, "cache hit must resolve to the cached binary")
+        assertEquals(1, rec.specs.size, "exactly one exec (the self-update) must run")
+        val spec = rec.specs.single()
+        assertEquals(
+            resolved.absolutePath,
+            spec.executable,
+            "self-update must exec the resolved binary in place",
+        )
+        assertEquals(
+            listOf("update", "--max-age", "12h"),
+            spec.args,
+            "self-update must delegate the whole update contract to the CLI",
+        )
+        assertTrue(
+            spec.ignoreExitValue,
+            "self-update is best-effort: a non-zero exit must NOT fail the build",
+        )
+    }
+
+    @Test fun `resolve with autoUpdate false does NOT invoke update`() {
+        // Opt-out path: a user who disabled cliAutoUpdate must never have the
+        // binary self-replace. The cached binary is still returned verbatim.
+        val home = gradleHomeWithCachedBinary()
+        val rec = RecordingExecOps()
+
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = null,
+            cliPath = null,
+            execOps = rec,
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = false,
+        )
+
+        assertNotNull(resolved, "cache hit must still resolve to the cached binary")
+        assertTrue(rec.specs.isEmpty(), "autoUpdate=false must not exec `update`")
+    }
+
+    @Test fun `resolve still returns the binary when the self-update exec throws`() {
+        // Self-update is strictly best-effort. If the exec itself blows up
+        // (binary vanished mid-build, OS denies exec, etc.), resolution must
+        // STILL return the binary — the failure can never break the upload.
+        val home = gradleHomeWithCachedBinary()
+        val throwing = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult =
+                throw RuntimeException("exec blew up")
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = null,
+            cliPath = null,
+            execOps = throwing,
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = true,
+        )
+
+        assertNotNull(resolved, "a thrown self-update exec must NOT break resolution")
+    }
+
+    // ── fixtures ─────────────────────────────────────────────────────
+
+    @get:Rule
+    val tmp = TemporaryFolder()
+
+    private val logger = Logging.getLogger("test")
+
+    /**
+     * A Gradle-user-home temp dir pre-seeded with an executable cached
+     * `bugsee-cli` binary at the exact host-triple path `resolve` looks up,
+     * so `resolve(autoUpdate=...)` takes the cache-hit fast path with no
+     * network. Returns the home dir.
+     */
+    private fun gradleHomeWithCachedBinary(): File {
+        val home = tmp.newFolder()
+        val triple = CliBinaryResolver.detectHostTriple()
+            ?: error("host triple unsupported; cannot seed a cache fixture on this host")
+        val binaryName = if (triple.contains("windows")) "bugsee-cli.exe" else "bugsee-cli"
+        val cacheDir = File(home, "caches/bugsee-cli/${CliBinaryResolver.DEFAULT_VERSION}/$triple")
+        cacheDir.mkdirs()
+        val binary = File(cacheDir, binaryName)
+        binary.writeText("#!/bin/sh\nexit 0\n")
+        binary.setExecutable(true)
+        return home
+    }
+
+    /** Captured snapshot of the fields `maybeSelfUpdate` sets on the spec. */
+    private class CapturedSpec(
+        val executable: String?,
+        val args: List<String>,
+        val ignoreExitValue: Boolean,
+    )
+
+    /**
+     * Fake [ExecOperations] that drives a recording [ExecSpec] proxy through
+     * the supplied action and snapshots what was set on it. `exec` returns a
+     * zero-exit [ExecResult] (no real process is spawned).
+     */
+    private class RecordingExecOps : ExecOperations {
+        val specs = mutableListOf<CapturedSpec>()
+
+        override fun exec(action: Action<in ExecSpec>): ExecResult {
+            val recorder = SpecRecorder()
+            val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                ExecSpec::class.java.classLoader,
+                arrayOf(ExecSpec::class.java),
+                recorder,
+            ) as ExecSpec
+            action.execute(proxy)
+            specs.add(
+                CapturedSpec(recorder.executable, recorder.args.toList(), recorder.ignoreExitValue),
+            )
+            return ZeroExitResult
+        }
+
+        override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+            throw AssertionError("javaexec must not be reached")
+    }
+
+    /**
+     * `InvocationHandler` for an [ExecSpec] proxy. Records the three setters
+     * `maybeSelfUpdate` calls (`setExecutable`, `setArgs`, `setIgnoreExitValue`)
+     * and returns the proxy for any builder-style setter so chaining is safe.
+     * Every other method returns a benign default.
+     */
+    private class SpecRecorder : java.lang.reflect.InvocationHandler {
+        var executable: String? = null
+        var args: List<String> = emptyList()
+        var ignoreExitValue: Boolean = false
+
+        override fun invoke(proxy: Any, method: java.lang.reflect.Method, rawArgs: Array<Any?>?): Any? {
+            val a = rawArgs ?: emptyArray()
+            when (method.name) {
+                "setExecutable" -> executable = a.getOrNull(0)?.toString()
+                "setArgs" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    args = (a.getOrNull(0) as? List<Any?>)?.map { it.toString() } ?: emptyList()
+                }
+                "setIgnoreExitValue" -> ignoreExitValue = (a.getOrNull(0) as? Boolean) ?: false
+            }
+            // Builder-style setters on ExecSpec return the spec; mirror that so
+            // any fluent chaining keeps working. Primitive returns default.
+            return when (method.returnType) {
+                Void.TYPE -> null
+                Boolean::class.javaPrimitiveType -> false
+                Int::class.javaPrimitiveType -> 0
+                else -> if (method.returnType.isAssignableFrom(proxy.javaClass)) proxy else null
+            }
+        }
+    }
+
+    /** Minimal zero-exit [ExecResult] for the recording fake. */
+    private object ZeroExitResult : ExecResult {
+        override fun getExitValue(): Int = 0
+        override fun assertNormalExitValue(): ExecResult = this
+        override fun rethrowFailure(): ExecResult = this
     }
 }

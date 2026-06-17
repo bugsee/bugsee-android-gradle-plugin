@@ -456,6 +456,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // download.bugsee.com into the per-user Gradle cache.
             task.cliPath.set(extension.cliPath)
             task.cliVersion.set(extension.cliVersion)
+            task.cliAutoUpdate.set(extension.cliAutoUpdate)
             // Gradle user home wired CC-safely as a File (eagerly captured).
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
             task.uploader.set(extension.uploader)
@@ -518,6 +519,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // download.bugsee.com into the per-user Gradle cache.
             task.cliPath.set(extension.cliPath)
             task.cliVersion.set(extension.cliVersion)
+            task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
             task.uploader.set(extension.uploader)
             task.group = "bugsee"
@@ -705,6 +707,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // root, captured CC-safely as a File.
             task.cliPath.set(extension.cliPath)
             task.cliVersion.set(extension.cliVersion)
+            task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
             // Escape hatch: `BUGSEE_LEGACY_BUILDINFO_GZIP=1` forces the
             // legacy per-blob gzip PUTs even when the server signed a
@@ -776,6 +779,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // root, captured CC-safely as a File.
             task.cliPath.set(extension.cliPath)
             task.cliVersion.set(extension.cliVersion)
+            task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
             // Escape hatch: `BUGSEE_LEGACY_BUILDINFO_GZIP=1` forces the
             // legacy per-blob gzip PUTs even when the server signed a

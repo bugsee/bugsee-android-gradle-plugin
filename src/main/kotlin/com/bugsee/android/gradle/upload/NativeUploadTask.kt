@@ -76,12 +76,22 @@ abstract class NativeUploadTask : DefaultTask() {
     abstract val cliPath: Property<String>
 
     /**
-     * `bugsee-cli` version to auto-download when [cliPath] is unset. Wired
-     * from [com.bugsee.android.gradle.BugseePluginExtension.cliVersion],
+     * `bugsee-cli` FLOOR version to auto-download when [cliPath] is unset.
+     * Wired from [com.bugsee.android.gradle.BugseePluginExtension.cliVersion],
      * which defaults to [CliBinaryResolver.DEFAULT_VERSION].
      */
     @get:Input
     abstract val cliVersion: Property<String>
+
+    /**
+     * Whether to auto-update the `bugsee-cli` binary to the latest
+     * non-breaking release above [cliVersion]. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.cliAutoUpdate]
+     * (default `true`). `@Optional` — defaults to `true` when unset.
+     */
+    @get:Input
+    @get:Optional
+    abstract val cliAutoUpdate: Property<Boolean>
 
     /**
      * Gradle user home directory. Captured at task registration so the
@@ -217,6 +227,7 @@ abstract class NativeUploadTask : DefaultTask() {
                 gradleUserHome = gradleUserHomeDir.get().asFile,
                 logger = logger,
                 debug = isDebug,
+                autoUpdate = cliAutoUpdate.orNull ?: true,
             )
         } else {
             null

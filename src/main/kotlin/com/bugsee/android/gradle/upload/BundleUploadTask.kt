@@ -321,10 +321,18 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Internal
     abstract val cliPath: Property<String>
 
-    /** `bugsee-cli` version to auto-download when [cliPath] is unset. */
+    /** `bugsee-cli` FLOOR version to auto-download when [cliPath] is unset. */
     @get:Input
     @get:Optional
     abstract val cliVersion: Property<String>
+
+    /** Whether to auto-update the `bugsee-cli` binary to the latest
+     *  non-breaking release above [cliVersion]. Wired from
+     *  `BugseePluginExtension.cliAutoUpdate` (default `true`). `@Optional` —
+     *  defaults to `true` when unset. */
+    @get:Input
+    @get:Optional
+    abstract val cliAutoUpdate: Property<Boolean>
 
     /** Gradle user home — the auto-download cache root for the CLI. */
     @get:Internal
@@ -418,6 +426,7 @@ abstract class BundleUploadTask : DefaultTask() {
                     gradleUserHome = gradleUserHome,
                     logger = logger,
                     debug = isDebug,
+                    autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
             } else {
                 null

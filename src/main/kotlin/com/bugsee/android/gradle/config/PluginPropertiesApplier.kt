@@ -128,6 +128,7 @@ internal object PluginPropertiesApplier {
         stringBinding("endpoint", ext.endpoint),
         stringBinding("cliPath", ext.cliPath),
         stringBinding("cliVersion", ext.cliVersion),
+        boolBinding("cliAutoUpdate", ext.cliAutoUpdate),
         enumBinding("uploader", ext.uploader, UploaderStrategy::class.java),
         boolBinding("debug", ext.debug),
         boolBinding("feedback", ext.feedback),

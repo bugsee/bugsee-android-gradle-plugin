@@ -65,19 +65,51 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
     val cliPath: Property<String> = objects.property(String::class.java)
 
     /**
-     * `bugsee-cli` version the plugin pins to. Used to construct the
-     * download URL (`https://download.bugsee.com/cli/v<version>/`) when
-     * [cliPath] is unset.
+     * `bugsee-cli` FLOOR (minimum) version. Used to construct the download
+     * URL (`https://download.bugsee.com/cli/v<version>/`) when [cliPath] is
+     * unset.
      *
      * Defaults to the version the plugin was built against
-     * (`CliBinaryResolver.DEFAULT_VERSION`). Override to test newer
-     * releases without waiting for a plugin update — at your own risk,
-     * since CLI wire-format / argv changes could break the integration.
+     * (`CliBinaryResolver.DEFAULT_VERSION`). This is a FLOOR, not an exact
+     * pin: unless [cliAutoUpdate] is `false`, the plugin may auto-update to a
+     * NEWER non-breaking release — same major as this floor, never below it —
+     * that was published after the plugin shipped. Set [cliAutoUpdate] to
+     * `false` to use this exact version with no network check.
+     *
+     * Override to test a different release without waiting for a plugin
+     * update — at your own risk, since CLI wire-format / argv changes could
+     * break the integration.
      */
     val cliVersion: Property<String> =
         objects
             .property(String::class.java)
             .convention(com.bugsee.android.gradle.upload.CliBinaryResolver.DEFAULT_VERSION)
+
+    /**
+     * Auto-update the `bugsee-cli` binary to the latest NON-BREAKING release.
+     *
+     * When `true` (default) and [cliPath] is unset, the plugin checks the
+     * `bugsee-cli` major-line pointer
+     * (`https://download.bugsee.com/cli/v<major>.x/version.txt`) at most once
+     * per ~12 hours and downloads the newest release that shares the major
+     * of [cliVersion] and is not below it. A major bump (potentially
+     * breaking) is never crossed automatically; the resolved version never
+     * drops below the [cliVersion] floor.
+     *
+     * The check is fully offline-safe and quiet: any failure (offline,
+     * firewalled, pointer not yet published) silently falls back to the last
+     * resolved version, else the [cliVersion] floor — never failing the build
+     * and never logging above DEBUG.
+     *
+     * Set to `false` to pin the exact [cliVersion] with no network check.
+     * Can also be disabled via the `BUGSEE_CLI_AUTO_UPDATE` env var
+     * (`0`/`false`/`no`/`off`). An explicit [cliPath] always bypasses the
+     * check entirely.
+     *
+     * Default: `true`
+     */
+    val cliAutoUpdate: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(true)
 
     /**
      * Which uploader strategy runs for symbol uploads.

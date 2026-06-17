@@ -36,17 +36,24 @@ import java.util.concurrent.TimeUnit
 internal object CliBinaryResolver {
 
     /**
-     * Default CLI version the plugin pins to. Bumped in lock-step with
-     * `bugsee-cli` releases that introduce wire-format or argv changes
+     * FLOOR (minimum) CLI version the plugin pins to. Bumped in lock-step
+     * with `bugsee-cli` releases that introduce wire-format or argv changes
      * the plugin needs to keep up with.
      *
-     * `0.3.0` is the first release carrying `upload build` (converged
-     * registration + artefact single/chunked + build-info), so this bump
-     * is the activation switch for the full-CLI artefact-upload path —
-     * see [UPLOAD_BUILD_MIN_VERSION]. It also keeps the `pack`/zstd-mapping
-     * path live ([PACK_MIN_VERSION] = 0.2.0).
+     * `0.6.0` is the FIRST release that ships the `update` self-update command
+     * the plugin relies on below — so the floor must be at least this. It also
+     * carries `upload build` (converged registration + artefact single/chunked
+     * + build-info) and the `pack`/zstd-mapping path, so it satisfies both
+     * [UPLOAD_BUILD_MIN_VERSION] and [PACK_MIN_VERSION].
+     *
+     * This is the version the plugin downloads. Keeping the CLI current is
+     * the CLI's own job: once a binary is on disk, the plugin invokes
+     * `bugsee-cli update --max-age 12h`, which discovers the newest
+     * same-major release, caps at the same major (non-breaking), downloads +
+     * verifies, and self-replaces in place — all throttled and best-effort.
+     * The plugin no longer re-implements any version discovery.
      */
-    const val DEFAULT_VERSION: String = "0.3.0"
+    const val DEFAULT_VERSION: String = "0.6.0"
 
     /**
      * Lowest CLI version that ships the `pack` subcommand (the normalized
@@ -111,6 +118,7 @@ internal object CliBinaryResolver {
         gradleUserHome: File,
         logger: Logger,
         debug: Boolean,
+        autoUpdate: Boolean = true,
     ): File? {
         // Layer 1: explicit path. If set, trust the user — but verify the
         // file is actually executable so the eventual exec fails loudly
@@ -136,7 +144,12 @@ internal object CliBinaryResolver {
             }
         }
 
-        // Layer 2: auto-download. Pick the version + host triple.
+        // Layer 2: auto-download the pinned floor version, then let the CLI
+        // keep itself current. We download exactly [DEFAULT_VERSION] (or the
+        // configured `cliVersion`); discovering and adopting a newer
+        // same-major release is delegated to the CLI's own
+        // `update --max-age 12h` (see maybeSelfUpdate) — the plugin no longer
+        // re-implements any version discovery.
         val version = cliVersion?.takeIf { it.isNotBlank() } ?: DEFAULT_VERSION
         val triple = detectHostTriple()
         if (triple == null) {
@@ -155,11 +168,14 @@ internal object CliBinaryResolver {
         // Fast path: cache hit.
         if (cachedBinary.isFile && cachedBinary.canExecute()) {
             if (debug) logger.warn("Bugsee: bugsee-cli cache hit at ${cachedBinary.absolutePath}")
-            return cachedBinary
+            return maybeSelfUpdate(cachedBinary, autoUpdate, execOps, logger, debug)
         }
 
         return try {
-            downloadAndExtract(version, triple, cacheRoot, binaryName, execOps, logger, debug)
+            val binary = downloadAndExtract(
+                version, triple, cacheRoot, binaryName, execOps, logger, debug,
+            )
+            maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
         } catch (e: Throwable) {
             logger.warn(
                 "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
@@ -167,6 +183,51 @@ internal object CliBinaryResolver {
             )
             null
         }
+    }
+
+    /**
+     * Let the CLI keep itself current. When [autoUpdate] is on, runs
+     * `bugsee-cli update --max-age 12h` on [binary]. The CLI owns
+     * EVERYTHING about updating: it discovers the newest same-major version,
+     * caps at the same major (non-breaking), downloads + SHA-256-verifies,
+     * and atomically self-replaces in place — so after this returns the SAME
+     * [binary] path holds the (possibly newer) version. `--max-age 12h` makes
+     * the CLI throttle internally (records a last-check timestamp next to the
+     * binary and no-ops if checked within the window) and treat ANY failure
+     * (offline, missing pointer, download/permission error) as best-effort,
+     * exiting 0.
+     *
+     * Because the CLI is the single source of truth for the throttle /
+     * best-effort / self-replace semantics, the plugin just invokes it. The
+     * call is wrapped so it can NEVER fail resolution: a thrown exec error
+     * (e.g. the binary went away mid-build) is swallowed at DEBUG and the
+     * original [binary] is still returned.
+     */
+    private fun maybeSelfUpdate(
+        binary: File,
+        autoUpdate: Boolean,
+        execOps: ExecOperations,
+        logger: Logger,
+        debug: Boolean,
+    ): File {
+        if (!autoUpdate) return binary
+        try {
+            if (debug) {
+                logger.warn("Bugsee: bugsee-cli self-update check (${binary.absolutePath} update --max-age 12h)")
+            }
+            execOps.exec { spec ->
+                spec.executable = binary.absolutePath
+                spec.args = listOf("update", "--max-age", "12h")
+                spec.isIgnoreExitValue = true
+            }
+        } catch (e: Throwable) {
+            // Self-update is strictly best-effort — never let it break
+            // resolution. DEBUG only so quiet/offline builds stay quiet.
+            if (debug) {
+                logger.warn("Bugsee: bugsee-cli self-update check failed: ${e.message}")
+            }
+        }
+        return binary
     }
 
     /**
