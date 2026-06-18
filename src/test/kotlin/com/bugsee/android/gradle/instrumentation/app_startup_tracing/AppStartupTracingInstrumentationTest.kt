@@ -126,8 +126,8 @@ class AppStartupTracingInstrumentationTest {
         // mutation that bumps the MIN constant to a stricter value
         // — `COMPATIBLE_SDK_VERSION` (exact-min) and `6.5.0` (clearly
         // below) wouldn't catch a one-tick-too-strict shift, but
-        // 7.0.0-beta12 here will.
-        addBugseeAndroidDependency(project, "7.0.0-beta12")
+        // 7.0.0-beta13 here will.
+        addBugseeAndroidDependency(project, "7.0.0-beta13")
         extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         org.junit.Assert.assertTrue(instrumentation.shouldApply(project))

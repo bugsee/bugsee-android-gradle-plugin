@@ -30,7 +30,7 @@ class CoreSdkAutoLoadRangeTest {
     fun prerelease_floor_keeps_label_intact() {
         // The prerelease suffix is part of the floor verbatim; the
         // ceiling is still next-MINOR-stable.
-        assertEquals("[7.0.0-beta12,7.1.0)", CoreSdkAutoLoad.range("7.0.0-beta12"))
+        assertEquals("[7.0.0-beta13,7.1.0)", CoreSdkAutoLoad.range("7.0.0-beta13"))
     }
 
     @Test

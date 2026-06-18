@@ -96,8 +96,8 @@ class DependencyDetectorTest {
         val app = child("app")
         val lib = child("lib")
         app.addProjectDep(lib)
-        lib.addExternal("com.bugsee:bugsee-android:7.0.0-beta12")
-        assertEquals("7.0.0-beta12", DependencyDetector.getBugseeDependencyVersion(app, "bugsee-android"))
+        lib.addExternal("com.bugsee:bugsee-android:7.0.0-beta13")
+        assertEquals("7.0.0-beta13", DependencyDetector.getBugseeDependencyVersion(app, "bugsee-android"))
     }
 
     @Test
