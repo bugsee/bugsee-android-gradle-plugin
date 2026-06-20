@@ -18,8 +18,9 @@ internal class HttpEngineInstrumentation : Instrumentation {
     override val name: String = "HttpEngine"
     override val key: String = "http_engine"
 
-    override fun shouldApply(project: Project): Boolean {
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-android", "library")
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        return coreSdkAutoLoad ||
+            DependencyDetector.hasBugseeDependency(project, "bugsee-android", "library")
     }
 
     override fun apply(variant: Variant, excludes: Set<String>) {

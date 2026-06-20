@@ -37,11 +37,11 @@ internal class ExtensionsInitInstrumentation(
     // We own our own gate via [pluginExtension.optimizeExtensionsLoading].
     override val isTierDriven: Boolean = true
 
-    override fun shouldApply(project: Project): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
         if (!pluginExtension.optimizeExtensionsLoading.getOrElse(true)) {
             return false
         }
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
+        return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
     override fun apply(variant: Variant, excludes: Set<String>) {

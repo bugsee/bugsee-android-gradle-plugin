@@ -27,8 +27,10 @@ internal class ComposeInputInstrumentation : Instrumentation {
     override val name: String = "ComposeInput"
     override val key: String = "composeInput"
 
-    override fun shouldApply(project: Project): Boolean {
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-android") &&
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        // Needs the core SDK (adapter class) AND a Compose UI dependency.
+        // The Compose requirement still stands even when the core is auto-loaded.
+        return (coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")) &&
                 hasComposeDependency(project)
     }
 

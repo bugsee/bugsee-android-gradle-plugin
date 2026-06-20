@@ -121,16 +121,24 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     // via `bugsee { sdkAutoLoad.set(false) }` for
                     // builds that ship the core SDK via a manual classpath
                     // path or a locally-published artefact.
+                    // Version shared by EVERY auto-added Bugsee module — core
+                    // AND extensions. Prefer the version the consumer already
+                    // declared for the core SDK; otherwise the dynamic range
+                    // floored at MIN_SDK_VERSION. Extensions are published under
+                    // the SDK's version line, so they must track the SDK version
+                    // (never the plugin version — see autoAddModule).
+                    val sdkVersion = declaredCoreSdkVersion(project)
+                        ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
+
                     if (extension.sdkAutoLoad.get() && !isCoreSdkPresent(project)) {
-                        val range = CoreSdkAutoLoad.range(MIN_SDK_VERSION)
                         if (isDebug) {
                             project.logger.warn(
-                                "Bugsee: Auto-adding bugsee-android runtime dependency $range"
+                                "Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion"
                             )
                         }
                         deps.add(
                             project.dependencies.create(
-                                "com.bugsee:bugsee-android:$range"
+                                "com.bugsee:bugsee-android:$sdkVersion"
                             )
                         )
                     }
@@ -140,13 +148,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     // DSL. Same already-declared check as the
                     // auto-instrumented modules below.
                     if (extension.ndk.enabled.get()) {
-                        autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug, sdkVersion)
                     }
                     if (extension.leak.enabled.get()) {
-                        autoAddModule(project, deps, "bugsee-android-leak", "leak", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-leak", "leak", isDebug, sdkVersion)
                     }
                     if (extension.feedback.get()) {
-                        autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug, sdkVersion)
                     }
 
                     // Compose AAR carries three independent capabilities (tag
@@ -160,19 +168,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                                 isAutoAddEnabled(project, inst.composeSecure, "composeSecure") ||
                                 isAutoAddEnabled(project, inst.composeInput, "composeInput")
                     if (hasComposeDependency(project) && composeEnabled) {
-                        autoAddModule(project, deps, "bugsee-android-compose", "compose", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-compose", "compose", isDebug, sdkVersion)
                     }
                     if (hasOkHttpDependency(project) && isAutoAddEnabled(project, inst.okhttp, "okhttp")) {
-                        autoAddModule(project, deps, "bugsee-android-okhttp", "okhttp", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-okhttp", "okhttp", isDebug, sdkVersion)
                     }
                     if (hasKtorDependency(project, 2) && isAutoAddEnabled(project, inst.ktor, "ktor")) {
-                        autoAddModule(project, deps, "bugsee-android-ktor-2", "ktor-2", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-ktor-2", "ktor-2", isDebug, sdkVersion)
                     }
                     if (hasKtorDependency(project, 3) && isAutoAddEnabled(project, inst.ktor, "ktor")) {
-                        autoAddModule(project, deps, "bugsee-android-ktor-3", "ktor-3", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-ktor-3", "ktor-3", isDebug, sdkVersion)
                     }
                     if (hasCronetDependency(project) && isAutoAddEnabled(project, inst.cronet, "cronet")) {
-                        autoAddModule(project, deps, "bugsee-android-cronet", "cronet", isDebug)
+                        autoAddModule(project, deps, "bugsee-android-cronet", "cronet", isDebug, sdkVersion)
                     }
                 }
             }
@@ -287,10 +295,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 val extras = listOf(
                     ExtensionsInitInstrumentation(extension, manifestTaskProvider),
                 )
+                // Core-only instrumentations must also apply when the plugin
+                // is going to auto-add the core SDK: at this point that
+                // dependency is still a pending `withDependencies` addition and
+                // is therefore invisible to DependencyDetector's declared-deps scan.
+                val coreSdkAutoLoad = extension.sdkAutoLoad.get() && !isCoreSdkPresent(project)
                 val registrar = InstrumentationRegistrar(
                     project, project.logger, isDebug, configResolver,
                     extension.instrumentation.excludes.getOrElse(emptySet()),
                     extras,
+                    coreSdkAutoLoad,
                 )
                 registrar.applyAll(variant)
             } else {
@@ -1223,6 +1237,27 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     /**
+     * The version string of the consumer-declared core
+     * `com.bugsee:bugsee-android` dependency on any configuration, or `null`
+     * when none is declared with an explicit version. Auto-added extension
+     * modules use this so they always resolve at the SAME version as the core
+     * SDK the app actually consumes, rather than the plugin's own version.
+     */
+    private fun declaredCoreSdkVersion(project: Project): String? {
+        for (config in project.configurations) {
+            for (dep in config.dependencies) {
+                if (dep.group == BUGSEE_GROUP &&
+                    dep.name == "bugsee-android" &&
+                    !dep.version.isNullOrBlank()
+                ) {
+                    return dep.version
+                }
+            }
+        }
+        return null
+    }
+
+    /**
      * Adds a Bugsee extension module dependency if not already present.
      * Checks both Maven coordinates (`com.bugsee:{artifactName}`) and
      * project dependencies (`:${projectName}`) to avoid duplicates. Scans
@@ -1233,7 +1268,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         deps: DependencySet,
         artifactName: String,
         projectName: String,
-        isDebug: Boolean
+        isDebug: Boolean,
+        sdkVersion: String
     ) {
         val alreadyPresent = project.configurations.any { config ->
             config.dependencies.any { dep ->
@@ -1244,8 +1280,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
         if (!alreadyPresent) {
-            if (isDebug) project.logger.warn("Bugsee: Auto-adding $artifactName runtime dependency")
-            deps.add(project.dependencies.create("com.bugsee:$artifactName:$PLUGIN_VERSION"))
+            // [sdkVersion] tracks the CORE SDK version, NOT the plugin version.
+            // Extension AARs (bugsee-android-ndk, -okhttp, -feedback, …) are
+            // published under the SDK's version line, so versioning them with
+            // PLUGIN_VERSION produced a non-existent coordinate (e.g.
+            // `com.bugsee:bugsee-android-ndk:4.0.0-beta14`) and failed the build.
+            if (isDebug) {
+                project.logger.warn(
+                    "Bugsee: Auto-adding $artifactName runtime dependency $sdkVersion"
+                )
+            }
+            deps.add(project.dependencies.create("com.bugsee:$artifactName:$sdkVersion"))
         }
     }
 

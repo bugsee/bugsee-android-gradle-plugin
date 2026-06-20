@@ -18,7 +18,9 @@ internal class OkHttpInstrumentation : Instrumentation {
     override val name: String = "OkHttp"
     override val key: String = "okhttp"
 
-    override fun shouldApply(project: Project): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        // Extension-gated: requires the okhttp extension AAR specifically, so
+        // core-SDK auto-load alone does not enable it.
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")
     }
 

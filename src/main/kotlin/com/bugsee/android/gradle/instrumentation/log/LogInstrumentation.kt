@@ -19,8 +19,8 @@ internal class LogInstrumentation : Instrumentation {
     override val name: String = "Log"
     override val key: String = "log"
 
-    override fun shouldApply(project: Project): Boolean {
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
     override fun apply(variant: Variant, excludes: Set<String>) {

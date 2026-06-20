@@ -39,7 +39,7 @@ class AppStartupTracingInstrumentationTest {
         val instrumentation = AppStartupTracingInstrumentation(resolver)
         // No bugsee-android dependency present in this fresh ProjectBuilder
         // project; OFF should short-circuit before the dependency probe.
-        assertFalse(instrumentation.shouldApply(project))
+        assertFalse(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `tier set but no Bugsee dependency present returns false`() {
@@ -48,13 +48,13 @@ class AppStartupTracingInstrumentationTest {
         // The dependency probe fails on a bare ProjectBuilder project, so
         // shouldApply returns false for the dependency reason. Phase 5
         // will add an end-to-end test against a sample app with the SDK.
-        assertFalse(instrumentation.shouldApply(project))
+        assertFalse(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `default tier (no DSL set) still requires dependency`() {
         // No tier set → DEFAULT (STANDARD); still needs SDK on classpath.
         val instrumentation = AppStartupTracingInstrumentation(resolver)
-        assertFalse(instrumentation.shouldApply(project))
+        assertFalse(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `isTierDriven is true so registrar bypasses the boolean gate`() {
@@ -80,7 +80,7 @@ class AppStartupTracingInstrumentationTest {
         addBugseeAndroidDependency(project, COMPATIBLE_SDK_VERSION)
         extension.startupTier.set(StartupTier.OFF)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
-        org.junit.Assert.assertFalse(instrumentation.shouldApply(project))
+        org.junit.Assert.assertFalse(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `tier STANDARD with bugsee-android dependency present returns true`() {
@@ -91,7 +91,7 @@ class AppStartupTracingInstrumentationTest {
         addBugseeAndroidDependency(project, COMPATIBLE_SDK_VERSION)
         extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
-        org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
+        org.junit.Assert.assertTrue(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `tier STANDARD with too-old bugsee-android version returns false`() {
@@ -103,7 +103,7 @@ class AppStartupTracingInstrumentationTest {
         addBugseeAndroidDependency(project, "6.5.0")
         extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
-        org.junit.Assert.assertFalse(instrumentation.shouldApply(project))
+        org.junit.Assert.assertFalse(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `tier STANDARD with unparseable version still returns true`() {
@@ -116,7 +116,7 @@ class AppStartupTracingInstrumentationTest {
         addBugseeAndroidDependency(project, "7.+")
         extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
-        org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
+        org.junit.Assert.assertTrue(instrumentation.shouldApply(project, false))
     }
 
     @Test fun `tier STANDARD with one-tick-above-min version returns true`() {
@@ -130,7 +130,29 @@ class AppStartupTracingInstrumentationTest {
         addBugseeAndroidDependency(project, "7.0.0-beta13")
         extension.startupTier.set(StartupTier.STANDARD)
         val instrumentation = AppStartupTracingInstrumentation(resolver)
-        org.junit.Assert.assertTrue(instrumentation.shouldApply(project))
+        org.junit.Assert.assertTrue(instrumentation.shouldApply(project, false))
+    }
+
+    // ── BUG-2 regression: core-SDK auto-load (no declared dependency) ──
+
+    @Test fun `no declared SDK but coreSdkAutoLoad true applies`() {
+        // A plugin-only app declares NO `com.bugsee:bugsee-android` (the plugin
+        // auto-adds it in a later withDependencies pass). At gating time the
+        // dependency is invisible to DependencyDetector, so before the fix this
+        // returned false and cold-start tracing was silently dropped. The
+        // auto-add floor is always >= MIN_SDK_VERSION_WITH_DISPATCHER, so the
+        // version gate is correctly skipped here.
+        extension.startupTier.set(StartupTier.STANDARD)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertTrue(instrumentation.shouldApply(project, true))
+    }
+
+    @Test fun `tier OFF wins even when coreSdkAutoLoad is true`() {
+        // coreSdkAutoLoad compensates only for a missing *declared* dependency;
+        // it must never override an explicit OFF tier.
+        extension.startupTier.set(StartupTier.OFF)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertFalse(instrumentation.shouldApply(project, true))
     }
 
     /**

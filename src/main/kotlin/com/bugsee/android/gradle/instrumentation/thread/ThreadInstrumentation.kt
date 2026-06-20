@@ -22,8 +22,8 @@ internal class ThreadInstrumentation : Instrumentation {
     override val name: String = "Thread"
     override val key: String = "thread"
 
-    override fun shouldApply(project: Project): Boolean {
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-android")
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
     override fun apply(variant: Variant, excludes: Set<String>) {

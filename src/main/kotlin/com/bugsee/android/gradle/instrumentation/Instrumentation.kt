@@ -27,8 +27,19 @@ internal interface Instrumentation {
      */
     val isTierDriven: Boolean get() = false
 
-    /** Returns true if this instrumentation should be applied (dependency is present). */
-    fun shouldApply(project: Project): Boolean
+    /**
+     * Returns true if this instrumentation should be applied.
+     *
+     * @param coreSdkAutoLoad `true` when the plugin will auto-add the core
+     *   `com.bugsee:bugsee-android` SDK (sdkAutoLoad enabled AND the consumer
+     *   has not declared the core themselves). That auto-add happens in a later
+     *   `withDependencies` pass, so at gating time the core is NOT yet a
+     *   *declared* dependency the [DependencyDetector] can see. Instrumentations
+     *   gated solely on the core SDK must therefore treat it as present when
+     *   this is `true`; extension-gated instrumentations (OkHttp, Compose, …)
+     *   ignore it and keep requiring their own dependency.
+     */
+    fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean
 
     /**
      * Registers the ASM class visitor factory with the given variant.

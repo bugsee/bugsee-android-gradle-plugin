@@ -27,6 +27,16 @@ internal class InstrumentationRegistrar(
     private val configResolver: InstrumentationConfigResolver,
     private val excludes: Set<String>,
     extras: List<Instrumentation> = emptyList(),
+    /**
+     * `true` when the plugin will auto-add the core `com.bugsee:bugsee-android`
+     * SDK (sdkAutoLoad enabled AND the consumer has not declared the core
+     * itself). In that case the core SDK is a pending `withDependencies`
+     * addition not yet visible to [DependencyDetector], so core-gated
+     * instrumentations would otherwise be wrongly skipped. Forwarded to each
+     * [Instrumentation.shouldApply] so the gate can account for it. Defaults
+     * to `false`.
+     */
+    private val coreSdkAutoLoad: Boolean = false,
 ) {
     private val instrumentations: List<Instrumentation> = listOf(
         OkHttpInstrumentation(),
@@ -52,7 +62,11 @@ internal class InstrumentationRegistrar(
                 if (debug) logger.warn("Bugsee: Skipping ${instrumentation.name} instrumentation (disabled by configuration)")
                 continue
             }
-            if (instrumentation.shouldApply(project)) {
+            // Each instrumentation decides whether the core SDK counts as
+            // present given the pending auto-add (see [coreSdkAutoLoad]).
+            // Extension-gated entries (OkHttp, Compose, …) ignore the flag.
+            val applies = instrumentation.shouldApply(project, coreSdkAutoLoad)
+            if (applies) {
                 if (debug) logger.warn("Bugsee: Applying ${instrumentation.name} instrumentation to variant ${variant.name}")
                 instrumentation.apply(variant, excludes)
             } else {

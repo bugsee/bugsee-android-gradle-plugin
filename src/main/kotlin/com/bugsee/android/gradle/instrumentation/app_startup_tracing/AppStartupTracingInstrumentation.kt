@@ -55,12 +55,16 @@ internal class AppStartupTracingInstrumentation(
     override val key: String = "appStartupTracing"
     override val isTierDriven: Boolean = true
 
-    override fun shouldApply(project: Project): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
         if (configResolver.resolveStartupTier() == StartupTier.OFF) {
             return false
         }
         if (!DependencyDetector.hasBugseeDependency(project, "bugsee-android")) {
-            return false
+            // No declared core SDK. Apply only when the plugin will auto-add it.
+            // The auto-add floor (MIN_SDK_VERSION) is always >= the version that
+            // first ships BugseeAppStartupDispatcher, so the version gate below
+            // is unnecessary here — and there is no declared version to inspect.
+            return coreSdkAutoLoad
         }
 
         // SDK-version gating: refuse to instrument when the runtime
