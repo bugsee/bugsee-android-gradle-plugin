@@ -6,42 +6,42 @@ import org.junit.Test
 /**
  * Pins the contract of [CoreSdkAutoLoad.range]: given the
  * SDK minimum version recorded in `sdk-min-version.txt`, return a
- * Gradle dynamic-version range whose ceiling is the next MINOR.
+ * Gradle dynamic-version range whose ceiling is the next MAJOR.
  *
- * The auto-pulled core SDK must track the **latest patch** of the
- * MAJOR.MINOR series the plugin was released against — never silently
- * cross into a newer MINOR that may have breaking changes.
+ * The auto-pulled core SDK must track the **latest release** of the
+ * MAJOR series the plugin was released against — including newer
+ * minor and patch releases, but never silently crossing into a newer
+ * MAJOR that may have breaking changes.
  */
 class CoreSdkAutoLoadRangeTest {
 
     @Test
-    fun stable_minor_floor() {
-        assertEquals("[7.0.0,7.1.0)", CoreSdkAutoLoad.range("7.0.0"))
+    fun stable_major_floor() {
+        assertEquals("[7.0.0,8.0.0)", CoreSdkAutoLoad.range("7.0.0"))
     }
 
     @Test
-    fun stable_patch_floor_does_not_pin_patch_ceiling() {
-        // The ceiling is the next MINOR, not the next PATCH — a 7.0.5
-        // floor still allows 7.0.99 but not 7.1.0.
-        assertEquals("[7.0.5,7.1.0)", CoreSdkAutoLoad.range("7.0.5"))
+    fun stable_patch_floor_allows_newer_minor_releases() {
+        // The ceiling is the next MAJOR, not the next PATCH or MINOR —
+        // a 7.0.5 floor still allows 7.1.x and 7.9.x but not 8.0.0.
+        assertEquals("[7.0.5,8.0.0)", CoreSdkAutoLoad.range("7.0.5"))
     }
 
     @Test
     fun prerelease_floor_keeps_label_intact() {
         // The prerelease suffix is part of the floor verbatim; the
-        // ceiling is still next-MINOR-stable.
-        assertEquals("[7.0.0-beta13,7.1.0)", CoreSdkAutoLoad.range("7.0.0-beta13"))
+        // ceiling is still next-MAJOR-stable.
+        assertEquals("[7.0.0-beta13,8.0.0)", CoreSdkAutoLoad.range("7.0.0-beta13"))
     }
 
     @Test
     fun rc_prerelease_floor() {
-        assertEquals("[8.2.3-rc1,8.3.0)", CoreSdkAutoLoad.range("8.2.3-rc1"))
+        assertEquals("[8.2.3-rc1,9.0.0)", CoreSdkAutoLoad.range("8.2.3-rc1"))
     }
 
     @Test
-    fun minor_rollover_increments_minor_not_major() {
-        // 7.9.x → 7.10.0 (NOT 8.0.0). The ceiling is per-MINOR.
-        assertEquals("[7.9.0,7.10.0)", CoreSdkAutoLoad.range("7.9.0"))
+    fun minor_rollover_keeps_next_major_ceiling() {
+        assertEquals("[7.9.0,8.0.0)", CoreSdkAutoLoad.range("7.9.0"))
     }
 
     @Test

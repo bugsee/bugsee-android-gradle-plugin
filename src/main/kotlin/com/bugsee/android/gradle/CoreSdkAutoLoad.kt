@@ -14,12 +14,11 @@ internal object CoreSdkAutoLoad {
 
     /**
      * Builds the Gradle dynamic-version range for the auto-loaded
-     * core SDK so consumers pick up the latest patch within the
-     * same `MAJOR.MINOR` series as `sdk-min-version`. Floor is the
-     * parsed [min] (inclusive); ceiling is `MAJOR.(MINOR+1).0`
-     * exclusive, so a `7.0.x` floor pulls any `7.0.y` (including
-     * future patches and pre-release builds) but never crosses
-     * into `7.1`.
+     * core SDK so consumers pick up the latest release within the
+     * same `MAJOR` series as `sdk-min-version`. Floor is the parsed
+     * [min] (inclusive); ceiling is `(MAJOR+1).0.0` exclusive, so a
+     * `7.0.x` floor pulls any future `7.y.z` release but never
+     * crosses into `8.0.0`.
      *
      * Falls back to the open-ended legacy range `[$min,)` when
      * [min] isn't parseable as SemVer — for the same reason
@@ -28,7 +27,7 @@ internal object CoreSdkAutoLoad {
      */
     fun range(min: String): String {
         val parsed = BugseeSdkVersion.parse(min) ?: return "[$min,)"
-        val ceiling = "${parsed.major}.${parsed.minor + 1}.0"
+        val ceiling = "${parsed.major + 1}.0.0"
         return "[$min,$ceiling)"
     }
 }
