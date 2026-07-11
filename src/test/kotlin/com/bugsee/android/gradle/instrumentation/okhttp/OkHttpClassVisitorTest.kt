@@ -40,6 +40,11 @@ class OkHttpClassVisitorTest {
     private val buildDescriptor = "()Lokhttp3/OkHttpClient;"
     private val addIfAbsentDescriptor = "(Lokhttp3/OkHttpClient\$Builder;)Lokhttp3/OkHttpClient\$Builder;"
 
+    private val webSocketsClass = "com/bugsee/library/okhttp/BugseeOkHttpWebSockets"
+    private val newWebSocketDesc = "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;"
+    private val newWebSocketStaticDesc =
+        "(Lokhttp3/WebSocket\$Factory;Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;"
+
     /**
      * Build a class `Probe` with a single static method `body()V`
      * whose body is supplied by [build]. Same pattern as
@@ -252,6 +257,72 @@ class OkHttpClassVisitorTest {
                     it.name == "addIfAbsent"
             },
             "addIfAbsent must only fire for OkHttpClient.Builder.build()",
+        )
+    }
+
+    // ---- WebSocket capture (7.0 regression fix) ----
+
+    @Test fun `OkHttpClient newWebSocket is replaced with the capturing static`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL) // client (is-a WebSocket.Factory)
+            mv.visitInsn(Opcodes.ACONST_NULL) // request
+            mv.visitInsn(Opcodes.ACONST_NULL) // listener
+            mv.visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL, "okhttp3/OkHttpClient", "newWebSocket", newWebSocketDesc, false,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+        val insns = methodInsns(transformOkHttp(bytes), "body")
+
+        assertTrue(
+            insns.none { it is MethodInsnNode && it.name == "newWebSocket" && it.opcode == Opcodes.INVOKEVIRTUAL },
+            "the original OkHttpClient.newWebSocket call must be replaced, not emitted",
+        )
+        val staticCall = insns.filterIsInstance<MethodInsnNode>().single {
+            it.opcode == Opcodes.INVOKESTATIC && it.owner == webSocketsClass && it.name == "newWebSocket"
+        }
+        assertEquals(newWebSocketStaticDesc, staticCall.desc)
+    }
+
+    @Test fun `WebSocket Factory newWebSocket interface call is replaced`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL) // factory
+            mv.visitInsn(Opcodes.ACONST_NULL) // request
+            mv.visitInsn(Opcodes.ACONST_NULL) // listener
+            mv.visitMethodInsn(
+                Opcodes.INVOKEINTERFACE, "okhttp3/WebSocket\$Factory", "newWebSocket", newWebSocketDesc, true,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+        val insns = methodInsns(transformOkHttp(bytes), "body")
+
+        assertTrue(
+            insns.none { it is MethodInsnNode && it.name == "newWebSocket" && it.opcode == Opcodes.INVOKEINTERFACE },
+            "the WebSocket.Factory.newWebSocket interface call must be replaced",
+        )
+        assertTrue(
+            insns.any {
+                it is MethodInsnNode && it.opcode == Opcodes.INVOKESTATIC &&
+                    it.owner == webSocketsClass && it.name == "newWebSocket"
+            },
+            "must emit the capturing static",
+        )
+    }
+
+    @Test fun `newWebSocket with a non-matching descriptor is NOT replaced`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL, "okhttp3/OkHttpClient", "newWebSocket",
+                "(Ljava/lang/String;)Lokhttp3/WebSocket;", false,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+        val insns = methodInsns(transformOkHttp(bytes), "body")
+        assertTrue(
+            insns.none { it is MethodInsnNode && it.owner == webSocketsClass },
+            "a non-matching newWebSocket descriptor must not be rewritten",
         )
     }
 }

@@ -92,11 +92,41 @@ private class OkHttpMethodVisitor(
             )
         }
 
+        // WebSocket capture: WS frames flow through neither the OkHttp Interceptor nor
+        // HttpURLConnection, so replace `newWebSocket(request, listener)` call sites with the
+        // capturing producer. OkHttpClient implements WebSocket.Factory, so the receiver + 2
+        // args already on the stack (factory, request, listener) are assignment-compatible
+        // with the static's params — no stack manipulation, identical stack effect (3 refs ->
+        // 1), so COPY_FRAMES holds. Covers both the OkHttpClient.newWebSocket call (a
+        // virtual on the concrete class) and WebSocket$Factory.newWebSocket (an interface
+        // call — notably Ktor's OkHttp engine
+        // (io.ktor.client.engine.okhttp.OkHttpWebsocketSession) creates its socket via
+        // `webSocketFactory.newWebSocket(...)`, so this branch also captures Ktor-on-OkHttp
+        // WebSockets for free; that class is not under com.bugsee.*/okhttp3.* so it is
+        // instrumented). We do NOT emit the original.
+        if (name == "newWebSocket"
+            && descriptor == "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;"
+            && (
+                (opcode == Opcodes.INVOKEVIRTUAL && owner == "okhttp3/OkHttpClient")
+                    || (opcode == Opcodes.INVOKEINTERFACE && owner == "okhttp3/WebSocket\$Factory")
+                )
+        ) {
+            mv.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                WEBSOCKETS_CLASS,
+                "newWebSocket",
+                "(Lokhttp3/WebSocket\$Factory;Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
+                false
+            )
+            return
+        }
+
         // Always emit the original instruction
         super.visitMethodInsn(opcode, owner, name, descriptor, isInterface)
     }
 
     companion object {
         private const val INTERCEPTOR_CLASS = "com/bugsee/library/okhttp/BugseeOkHttpInterceptor"
+        private const val WEBSOCKETS_CLASS = "com/bugsee/library/okhttp/BugseeOkHttpWebSockets"
     }
 }
