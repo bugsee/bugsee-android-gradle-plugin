@@ -8,14 +8,24 @@ import org.gradle.api.tasks.Input
 /**
  * Shared instrumentation parameters carrying the target adapter class name.
  *
- * Each factory checks whether the target class actually exists on the classpath
- * (via [com.android.build.api.instrumentation.ClassContext.loadClassData]) before
- * applying any bytecode transformations. This prevents runtime crashes when the
- * Bugsee SDK version does not include the expected adapter class.
+ * SDK / extension presence is verified ONCE at configuration time in each
+ * `Instrumentation.shouldApply` (via `DependencyDetector.hasBugseeDependency`),
+ * NOT per-class via [com.android.build.api.instrumentation.ClassContext.loadClassData].
+ * That per-class probe is unreliable across AGP's artifact-transform isolation
+ * boundaries: classes from third-party JARs are transformed on a classpath that
+ * cannot see the consumer's `:library` dependency, so the probe spuriously returns
+ * `null` and silently skips valid instrumentation targets living in those JARs
+ * (e.g. OkHttp/Cronet/Log call sites inside third-party SDKs, or androidx.compose's
+ * `AndroidComposeView`). SDK version skew instead surfaces at runtime as a
+ * `NoClassDefFoundError` pointing at the adapter FQN, which is sufficient.
+ *
+ * [targetClass] is consulted by `AppStartupTracingClassVisitorFactory` as the
+ * dispatcher FQN to inject; the other factories set it for consistency but hardcode
+ * their adapter FQN in the injected bytecode and no longer read it.
  */
 internal interface BugseeInstrumentationParameters : InstrumentationParameters {
 
-    /** Fully-qualified (dot-separated) class name of the adapter that must exist. */
+    /** Fully-qualified (dot-separated) class name of the adapter the injected bytecode targets. */
     @get:Input
     val targetClass: Property<String>
 

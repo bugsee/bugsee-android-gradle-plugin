@@ -21,9 +21,14 @@ abstract class LogClassVisitorFactory :
         classContext: ClassContext,
         nextClassVisitor: ClassVisitor
     ): ClassVisitor {
-        if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
-            return nextClassVisitor
-        }
+        // SDK presence is verified once at configuration time in
+        // LogInstrumentation.shouldApply (DependencyDetector.hasBugseeDependency).
+        // Do NOT re-probe per-class via ClassContext.loadClassData: that probe is
+        // unreliable across AGP's artifact-transform isolation boundaries — a class
+        // from a third-party JAR is transformed on a classpath that cannot see the
+        // consumer's :library dep, so the probe spuriously returns null and silently
+        // skips android.util.Log call sites inside those JARs. (Same fix as
+        // ComposeInput / AppStartupTracing.)
         return LogClassVisitor(nextClassVisitor, classContext.currentClassData.className)
     }
 

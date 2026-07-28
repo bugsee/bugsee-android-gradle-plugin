@@ -20,9 +20,14 @@ abstract class ThreadClassVisitorFactory :
         classContext: ClassContext,
         nextClassVisitor: ClassVisitor
     ): ClassVisitor {
-        if (classContext.loadClassData(parameters.get().targetClass.get()) == null) {
-            return nextClassVisitor
-        }
+        // SDK presence is verified once at configuration time in
+        // ThreadInstrumentation.shouldApply (DependencyDetector.hasBugseeDependency).
+        // Do NOT re-probe per-class via ClassContext.loadClassData: that probe is
+        // unreliable across AGP's artifact-transform isolation boundaries — a class
+        // from a third-party JAR is transformed on a classpath that cannot see the
+        // consumer's :library dep, so the probe spuriously returns null and silently
+        // skips thread call sites (and HandlerThread subclasses) inside those JARs.
+        // (Same fix as ComposeInput / AppStartupTracing.)
         val extendsHandlerThread = HANDLER_THREAD in classContext.currentClassData.superClasses
         return ThreadClassVisitor(
             nextClassVisitor,
