@@ -17,10 +17,13 @@ import org.gradle.api.Project
  * because `AndroidComposeView` overrides `dispatchTouchEvent` without
  * calling `super`.
  *
- * Gated on the presence of both `com.bugsee:bugsee-android` (which contains
- * the adapter class) and `androidx.compose.ui:ui` (which contains the target
- * class). If the adapter class is not on the classpath (e.g. older/incompatible
- * SDK version), the class visitor factory skips transformation.
+ * Gated once at configuration time (in [shouldApply]) on the presence of both
+ * `com.bugsee:bugsee-android` (which contains the adapter class) and
+ * `androidx.compose.ui:ui` (which contains the target class). The class visitor
+ * factory does NOT re-probe the adapter per class (see
+ * [ComposeInputClassVisitorFactory] for why that probe is unreliable across
+ * AGP's transform-boundary isolation); SDK/version skew instead surfaces at
+ * runtime as a `NoClassDefFoundError` on the adapter FQN.
  */
 internal class ComposeInputInstrumentation : Instrumentation {
 

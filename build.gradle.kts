@@ -72,6 +72,12 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
 
+    // AGP instrumentation API (ClassContext / ClassData / AsmClassVisitorFactory)
+    // is compileOnly for main; the unit test for
+    // ComposeInputClassVisitorFactory drives createClassVisitor() with a fake
+    // ClassContext, so it needs these types on the TEST compile classpath.
+    testImplementation("com.android.tools.build:gradle-api:8.6.0")
+
     // ASM toolchain used by the app-startup-tracing test harness
     // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
     // for CFG-correctness assertions, tree + core for transform code).
