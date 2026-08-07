@@ -3,7 +3,6 @@ package com.bugsee.android.gradle.instrumentation.okhttp
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
-import com.bugsee.android.gradle.instrumentation.BugseeInstrumentationParameters
 import com.bugsee.android.gradle.instrumentation.util.InstrumentationExcludes
 import org.objectweb.asm.ClassVisitor
 
@@ -14,7 +13,7 @@ import org.objectweb.asm.ClassVisitor
  * those in the bugsee and okhttp3 packages (to avoid infinite recursion).
  */
 abstract class OkHttpClassVisitorFactory :
-    AsmClassVisitorFactory<BugseeInstrumentationParameters> {
+    AsmClassVisitorFactory<OkHttpInstrumentationParameters> {
 
     override fun createClassVisitor(
         classContext: ClassContext,
@@ -29,7 +28,12 @@ abstract class OkHttpClassVisitorFactory :
         // extension dep, so the probe spuriously returns null and silently skips
         // OkHttp call sites inside those JARs. (Same fix as ComposeInput /
         // AppStartupTracing.)
-        return OkHttpClassVisitor(nextClassVisitor, classContext.currentClassData.className)
+        return OkHttpClassVisitor(
+            nextClassVisitor,
+            classContext.currentClassData.className,
+            // Resolved once at configuration time; see OkHttpInstrumentationParameters.
+            parameters.get().webSocketCapture.getOrElse(false),
+        )
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

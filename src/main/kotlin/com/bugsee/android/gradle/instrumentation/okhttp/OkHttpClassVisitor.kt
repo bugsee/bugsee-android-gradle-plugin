@@ -12,6 +12,13 @@ import org.objectweb.asm.Opcodes
 internal class OkHttpClassVisitor(
     nextClassVisitor: ClassVisitor,
     private val className: String,
+    /**
+     * Whether `newWebSocket` call sites may be rewritten. False when the
+     * resolved okhttp extension predates `BugseeOkHttpWebSockets`, in which case
+     * rewriting would hand the app an INVOKESTATIC to a class that is not on its
+     * runtime classpath. The interceptor rewrite is unaffected either way.
+     */
+    private val webSocketCapture: Boolean = false,
 ) : ClassVisitor(Opcodes.ASM9, nextClassVisitor) {
 
     override fun visitMethod(
@@ -25,7 +32,7 @@ internal class OkHttpClassVisitor(
         // Wrap so a failure in our transform (or AGP's frame recomputation)
         // is attributed to this class+method and re-thrown, never swallowed
         // into corrupt bytecode. See CatchingMethodVisitor.
-        return CatchingMethodVisitor(Opcodes.ASM9, OkHttpMethodVisitor(mv), className, name, descriptor)
+        return CatchingMethodVisitor(Opcodes.ASM9, OkHttpMethodVisitor(mv, webSocketCapture), className, name, descriptor)
     }
 }
 
@@ -64,7 +71,9 @@ internal class OkHttpClassVisitor(
  * visible in a tiny named method instead of buried in ASM.
  */
 private class OkHttpMethodVisitor(
-    methodVisitor: MethodVisitor
+    methodVisitor: MethodVisitor,
+    /** See [OkHttpClassVisitor.webSocketCapture]. */
+    private val webSocketCapture: Boolean,
 ) : MethodVisitor(Opcodes.ASM9, methodVisitor) {
 
     override fun visitMethodInsn(
@@ -104,7 +113,8 @@ private class OkHttpMethodVisitor(
         // `webSocketFactory.newWebSocket(...)`, so this branch also captures Ktor-on-OkHttp
         // WebSockets for free; that class is not under com.bugsee.*/okhttp3.* so it is
         // instrumented). We do NOT emit the original.
-        if (name == "newWebSocket"
+        if (webSocketCapture
+            && name == "newWebSocket"
             && descriptor == "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;"
             && (
                 (opcode == Opcodes.INVOKEVIRTUAL && owner == "okhttp3/OkHttpClient")

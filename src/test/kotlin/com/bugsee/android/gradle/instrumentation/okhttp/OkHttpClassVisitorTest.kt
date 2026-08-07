@@ -63,9 +63,11 @@ class OkHttpClassVisitorTest {
         return cw.toByteArray()
     }
 
-    private fun transformOkHttp(bytes: ByteArray): ByteArray =
+    // Defaults to WebSocket capture ENABLED so the existing cases keep asserting
+    // the full rewrite; the gate itself is covered by its own cases below.
+    private fun transformOkHttp(bytes: ByteArray, webSocketCapture: Boolean = true): ByteArray =
         AsmTestHarness.transform(bytes) { writer ->
-            OkHttpClassVisitor(writer, className = "fixtures.Test")
+            OkHttpClassVisitor(writer, className = "fixtures.Test", webSocketCapture = webSocketCapture)
         }
 
     private fun methodInsns(bytes: ByteArray, methodName: String): List<Any> {
@@ -323,6 +325,88 @@ class OkHttpClassVisitorTest {
         assertTrue(
             insns.none { it is MethodInsnNode && it.owner == webSocketsClass },
             "a non-matching newWebSocket descriptor must not be rewritten",
+        )
+    }
+
+    // ── the WebSocket gate ────────────────────────────────────────────────
+    //
+    // Plugin and SDK are not released in lockstep, so the plugin must not emit a
+    // call to a class the resolved SDK may not carry: the injected INVOKESTATIC
+    // sits in the host app's own method, where a missing class is an
+    // unrecoverable NoClassDefFoundError at the app's call site.
+
+    @Test fun `newWebSocket is left alone when WebSocket capture is gated off`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL, "okhttp3/OkHttpClient", "newWebSocket", newWebSocketDesc, false,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+
+        val insns = methodInsns(transformOkHttp(bytes, webSocketCapture = false), "body")
+
+        assertTrue(
+            insns.none {
+                it is MethodInsnNode && it.owner == webSocketsClass && it.name == "newWebSocket"
+            },
+            "no call to BugseeOkHttpWebSockets may be emitted when the gate is off — " +
+                "the SDK on the consumer's classpath may not contain that class",
+        )
+        assertTrue(
+            insns.any {
+                it is MethodInsnNode && it.opcode == Opcodes.INVOKEVIRTUAL &&
+                    it.owner == "okhttp3/OkHttpClient" && it.name == "newWebSocket"
+            },
+            "the original call must be preserved verbatim so the app's socket still opens",
+        )
+    }
+
+    @Test fun `Factory newWebSocket is left alone when WebSocket capture is gated off`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitMethodInsn(
+                Opcodes.INVOKEINTERFACE, "okhttp3/WebSocket\$Factory", "newWebSocket", newWebSocketDesc, true,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+
+        val insns = methodInsns(transformOkHttp(bytes, webSocketCapture = false), "body")
+
+        assertTrue(
+            insns.none { it is MethodInsnNode && it.owner == webSocketsClass },
+            "the interface-call lane must respect the gate too — it is the one Ktor uses",
+        )
+    }
+
+    /**
+     * The reason the gate is per-branch rather than per-lane. Older SDKs lack
+     * BugseeOkHttpWebSockets but DO have BugseeOkHttpInterceptor, so disabling the
+     * whole lane would trade a missing WebSocket feature for the loss of ordinary
+     * HTTP request capture — a far worse regression than the one being avoided.
+     */
+    @Test fun `interceptor injection still happens when WebSocket capture is gated off`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL, "okhttp3/OkHttpClient\$Builder", "build",
+                "()Lokhttp3/OkHttpClient;", false,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+
+        val insns = methodInsns(transformOkHttp(bytes, webSocketCapture = false), "body")
+
+        assertTrue(
+            insns.any {
+                it is MethodInsnNode && it.opcode == Opcodes.INVOKESTATIC &&
+                    it.name == "addIfAbsent"
+            },
+            "HTTP capture must be unaffected by the WebSocket gate",
         )
     }
 }

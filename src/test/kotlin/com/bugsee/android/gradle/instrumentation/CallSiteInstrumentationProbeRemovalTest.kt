@@ -11,6 +11,7 @@ import com.bugsee.android.gradle.instrumentation.main_thread_misuse.MainThreadMi
 import com.bugsee.android.gradle.instrumentation.main_thread_misuse.MainThreadMisuseClassVisitorFactory
 import com.bugsee.android.gradle.instrumentation.okhttp.OkHttpClassVisitor
 import com.bugsee.android.gradle.instrumentation.okhttp.OkHttpClassVisitorFactory
+import com.bugsee.android.gradle.instrumentation.okhttp.OkHttpInstrumentationParameters
 import com.bugsee.android.gradle.instrumentation.operation_dispatch.OperationDispatchClassVisitor
 import com.bugsee.android.gradle.instrumentation.operation_dispatch.OperationDispatchClassVisitorFactory
 import com.bugsee.android.gradle.instrumentation.thread.ThreadClassVisitor
@@ -20,6 +21,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.objectweb.asm.ClassVisitor
+import org.gradle.testfixtures.ProjectBuilder
 import org.objectweb.asm.Opcodes
 
 private val noParams = UnsupportedOperationException("createClassVisitor must not read parameters")
@@ -111,8 +113,9 @@ class CallSiteInstrumentationProbeRemovalTest {
      */
     @Test
     fun `instrumenting visitors delegate class events to the next visitor`() {
+        // OkHttp is checked separately below: its factory is parameterised by
+        // OkHttpInstrumentationParameters, a subtype, so it does not fit this map.
         val factories = mapOf<String, com.android.build.api.instrumentation.AsmClassVisitorFactory<BugseeInstrumentationParameters>>(
-            "OkHttp" to TestOkHttp(),
             "HttpEngine" to TestHttpEngine(),
             "Log" to TestLog(),
             "MainThreadMisuse" to TestMainThreadMisuse(),
@@ -126,6 +129,12 @@ class CallSiteInstrumentationProbeRemovalTest {
                     null, "java/lang/Object", null)
             assertTrue("$name visitor must delegate to nextClassVisitor", recording.visited)
         }
+
+        val okHttpRecording = RecordingClassVisitor()
+        TestOkHttp().createClassVisitor(throwingProbeContext("com.thirdparty.OkHttp.Client"), okHttpRecording)
+            .visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "com/thirdparty/OkHttp/Client",
+                    null, "java/lang/Object", null)
+        assertTrue("OkHttp visitor must delegate to nextClassVisitor", okHttpRecording.visited)
     }
 
     // ── test doubles ─────────────────────────────────────────────────────
@@ -144,8 +153,21 @@ class CallSiteInstrumentationProbeRemovalTest {
     // Concrete factories for tests. Only `createClassVisitor` is exercised; the
     // Gradle-managed `parameters` / `instrumentationContext` are never read on the
     // fixed code path, so they throw to catch any accidental new dependency.
+    /**
+     * Unlike its siblings this double supplies REAL parameters, because
+     * OkHttp's createClassVisitor reads `webSocketCapture` from them (the
+     * WebSocket rewrite is gated on the resolved SDK version). That is a
+     * legitimate, long-established pattern — AppStartupTracing does the same.
+     * The invariant this test exists to protect is the ClassContext probe, and
+     * `throwingProbeContext` still enforces it.
+     */
     private class TestOkHttp : OkHttpClassVisitorFactory() {
-        override val parameters: Property<BugseeInstrumentationParameters> get() = throw noParams
+        private val objects = ProjectBuilder.builder().build().objects
+
+        override val parameters: Property<OkHttpInstrumentationParameters> =
+            objects.property(OkHttpInstrumentationParameters::class.java)
+                .value(objects.newInstance(OkHttpInstrumentationParameters::class.java))
+
         override val instrumentationContext: InstrumentationContext get() = throw noContext
     }
 
