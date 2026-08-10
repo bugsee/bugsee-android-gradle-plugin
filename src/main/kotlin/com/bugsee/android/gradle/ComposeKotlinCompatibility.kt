@@ -5,9 +5,25 @@ package com.bugsee.android.gradle
  *
  * Kotlin compiler-plugin APIs are not stable across minor releases, and this artifact is compiled
  * against exactly one of them. Loading it into a compiler whose extension API has moved does not
- * degrade — it aborts the consumer's compilation. On Kotlin 2.4 the registrar dies with
- * `ClassCastException: IrGenerationExtension$Companion cannot be cast to
- * ProjectExtensionDescriptor`, which an app author can neither diagnose nor work around.
+ * degrade — it aborts the consumer's compilation, a failure an app author can neither diagnose nor
+ * work around.
+ *
+ * Every bound below was established by running the real compiler of each line against a Compose
+ * consumer with this artifact loaded (see `compose-compiler-plugin/src/test`), not by reading
+ * release notes:
+ *
+ * | Kotlin  | Result                                                                       |
+ * |---------|------------------------------------------------------------------------------|
+ * | 1.9.22  | compiles                                                                      |
+ * | 2.1.x   | compiles — the line this artifact is built against                            |
+ * | 2.2.x   | `NoSuchMethodError: irCall(IrBuilderWithScope, IrSimpleFunctionSymbol)`       |
+ * | 2.3.x   | same, wrapped in `IrGenerationExtensionException`                             |
+ * | 2.4.x   | `ClassCastException: IrGenerationExtension$Companion → ProjectExtensionDescriptor` |
+ *
+ * 2.2 widened the `irCall`/`irString` builder receiver from `IrBuilderWithScope` to `IrBuilder`;
+ * a compiled call site binds the exact descriptor, so the widening alone is a binary break. 2.4
+ * additionally moved extension registration onto `ExtensionPointDescriptor` and removed the
+ * `valueParameters` / `putValueArgument` / `extensionReceiver` IR API.
  *
  * Deliberately free of Gradle and Kotlin-plugin types so it stays unit-testable: the Kotlin
  * Gradle plugin API is `compileOnly` here and is absent at test runtime.
@@ -19,10 +35,13 @@ internal object ComposeKotlinCompatibility {
     /**
      * Highest Kotlin MINOR line the Compose compiler plugin is verified against.
      *
-     * Raise this only alongside a compiler-plugin build actually tested on that line. Kotlin can
-     * move the extension-registration API with no deprecation cycle — which is what 2.4 did.
+     * Raise this only alongside a compiler-plugin build actually tested on that line — and "tested"
+     * means a real compile that reaches the transformer. This constant said `3` through 4.0.3 on
+     * the strength of a check that never exercised the IR pass; 2.2 and 2.3 in fact abort the
+     * consumer's build. Kotlin moves these APIs with no deprecation cycle, so an untested line is
+     * an unsupported line.
      */
-    const val MAX_SUPPORTED_MINOR = 3
+    const val MAX_SUPPORTED_MINOR = 1
 
     /**
      * Whether the Compose compiler plugin can safely be loaded into [version]'s compiler.
