@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
+import com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import org.gradle.api.Project
 
@@ -31,10 +32,17 @@ internal class MainThreadMisuseInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeMainThreadGuardAdapter")
+            params.symbolAvailable.set(
+                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeMainThreadGuardAdapter", "main-thread misuse detection", LOGGER_)
+            )
             params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES
         )
+    }
+
+    private companion object {
+        val LOGGER_ = org.gradle.api.logging.Logging.getLogger(MainThreadMisuseInstrumentation::class.java)
     }
 }

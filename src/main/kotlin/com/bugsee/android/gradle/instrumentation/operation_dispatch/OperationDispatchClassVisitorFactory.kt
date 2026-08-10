@@ -36,6 +36,13 @@ abstract class OperationDispatchClassVisitorFactory :
 
     override fun isInstrumentable(classData: ClassData): Boolean {
         val className = classData.className
+        // Graceful degradation: the SDK on this classpath may predate the symbol this lane
+        // injects. Emitting the call anyway would put an unlinkable INVOKESTATIC into the host
+        // app's own bytecode — NoClassDefFoundError at runtime, or an R8 "Missing class" failure.
+        // Resolved once from the actual artifacts (see SdkSymbolAvailability), not per class.
+        if (!parameters.get().symbolAvailable.getOrElse(true)) {
+            return false
+        }
         if (InstrumentationExcludes.isExcluded(className, parameters.get().excludes.get())) {
             return false
         }

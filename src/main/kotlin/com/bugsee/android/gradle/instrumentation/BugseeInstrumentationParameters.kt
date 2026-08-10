@@ -37,4 +37,15 @@ internal interface BugseeInstrumentationParameters : InstrumentationParameters {
      */
     @get:Input
     val excludes: SetProperty<String>
+
+    /**
+     * Whether the SDK on this variant's classpath actually defines [targetClass].
+     *
+     * Set from [com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability]; consulted by
+     * each factory's `isInstrumentable` so a lane whose target is missing skips quietly instead
+     * of emitting a call the host app cannot link. Defaults to permissive when unset, so a lane
+     * that has not opted in behaves exactly as before.
+     */
+    @get:Input
+    val symbolAvailable: Property<Boolean>
 }

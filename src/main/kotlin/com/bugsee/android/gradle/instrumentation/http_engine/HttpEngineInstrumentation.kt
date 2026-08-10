@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
+import com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import org.gradle.api.Project
 
@@ -29,6 +30,9 @@ internal class HttpEngineInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeHttpEngineAdapter")
+            params.symbolAvailable.set(
+                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeHttpEngineAdapter", "HttpEngine network capture", LOGGER_)
+            )
             params.excludes.set(excludes)
         }
         // The injected call sites grow the operand stack (DUP / DUP2 / DUP_X2 /
@@ -40,5 +44,9 @@ internal class HttpEngineInstrumentation : Instrumentation {
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
         )
+    }
+
+    private companion object {
+        val LOGGER_ = org.gradle.api.logging.Logging.getLogger(HttpEngineInstrumentation::class.java)
     }
 }

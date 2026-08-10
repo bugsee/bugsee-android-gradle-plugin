@@ -5,6 +5,7 @@ import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
+import com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
@@ -108,6 +109,9 @@ internal class AppStartupTracingInstrumentation(
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeAppStartupDispatcher")
+            params.symbolAvailable.set(
+                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeAppStartupDispatcher", "app-startup tracing", LOGGER_)
+            )
             params.tier.set(tier)
             params.excludes.set(excludes)
         }
@@ -117,6 +121,8 @@ internal class AppStartupTracingInstrumentation(
     }
 
     private companion object {
+        val LOGGER_ = org.gradle.api.logging.Logging.getLogger(AppStartupTracingInstrumentation::class.java)
+
         /**
          * First `com.bugsee:bugsee-android` release that ships
          * [com.bugsee.library.adapters.BugseeAppStartupDispatcher] — the
@@ -138,6 +144,17 @@ internal class AppStartupTracingInstrumentation(
          *
          * <p>Update this constant when the dispatcher's class FQN or
          * method signatures change in a backward-incompatible way.
+         *
+         * <p><b>Still required alongside the artifact probe.</b>
+         * [com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability]
+         * now checks whether the dispatcher CLASS is present on the resolved
+         * classpath, which covers cases a version string cannot (ranges,
+         * platform-managed versions, project dependencies, and a class
+         * stripped from the published artifact). It does NOT inspect method
+         * signatures, so it cannot detect a dispatcher whose class is present
+         * but whose methods changed shape — which is the other half of what
+         * this constant guards. The two are complementary; neither subsumes
+         * the other.
          */
         val MIN_SDK_VERSION_WITH_DISPATCHER = BugseeSdkVersion(
             major = 7,

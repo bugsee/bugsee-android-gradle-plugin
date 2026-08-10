@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
+import com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import org.gradle.api.Project
 
@@ -32,10 +33,17 @@ internal class ThreadInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeThreadAdapter")
+            params.symbolAvailable.set(
+                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeThreadAdapter", "thread tracking", LOGGER_)
+            )
             params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES
         )
+    }
+
+    private companion object {
+        val LOGGER_ = org.gradle.api.logging.Logging.getLogger(ThreadInstrumentation::class.java)
     }
 }

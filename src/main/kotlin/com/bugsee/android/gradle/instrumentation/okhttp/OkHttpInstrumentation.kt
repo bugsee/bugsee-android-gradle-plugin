@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.instrumentation.SdkClassProbe
+import com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability
 import org.gradle.api.provider.Provider
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.instrumentation.Instrumentation
@@ -88,6 +89,9 @@ internal class OkHttpInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.okhttp.BugseeOkHttpInterceptor")
+            params.symbolAvailable.set(
+                SdkSymbolAvailability.of(variant, "com.bugsee.library.okhttp.BugseeOkHttpInterceptor", "OkHttp request capture", LOGGER_)
+            )
             params.excludes.set(excludes)
             params.webSocketCapture.set(webSocketCaptureProvider(variant))
         }
@@ -97,6 +101,8 @@ internal class OkHttpInstrumentation : Instrumentation {
     }
 
     private companion object {
+        val LOGGER_ = org.gradle.api.logging.Logging.getLogger(OkHttpInstrumentation::class.java)
+
         private val LOGGER = org.gradle.api.logging.Logging.getLogger(OkHttpInstrumentation::class.java)
 
         /** JVM internal name of the class the WebSocket rewrite targets. */
