@@ -37,6 +37,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     private var pluginExtension: BugseePluginExtension? = null
 
+    // The project this plugin instance was applied to. Needed because
+    // KotlinCompilerPluginSupportPlugin.getPluginArtifact() takes no arguments, yet the artifact we
+    // resolve depends on the CONSUMER's Kotlin version — see ComposeKotlinCompatibility. A plugin
+    // instance is created per project, so this reference is unambiguous.
+    private var appliedProject: Project? = null
+
     // Injected by Gradle at plugin apply time — the service registry
     // we need to hook the BuildTimingService into the task-completion
     // event stream. Gradle provides this via abstract @Inject on the
@@ -47,6 +53,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     override fun apply(project: Project) {
         val extension = project.extensions.create(PLUGIN_NAME, BugseePluginExtension::class.java)
         pluginExtension = extension
+        appliedProject = project
 
         // Apply <rootProject>/bugsee.properties `plugin.*` overrides as
         // Gradle Property conventions BEFORE the user's `bugsee { … }`
@@ -819,11 +826,26 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     override fun getCompilerPluginId(): String = "com.bugsee.compose.compiler"
 
-    override fun getPluginArtifact(): SubpluginArtifact = SubpluginArtifact(
-        groupId = "com.bugsee",
-        artifactId = "bugsee-compose-compiler-plugin",
-        version = PLUGIN_VERSION
-    )
+    /**
+     * The compiler-plugin artifact matching the CONSUMER's Kotlin version.
+     *
+     * A compiler plugin binds the exact descriptors of the compiler API it was built against, so we
+     * publish one artifact per Kotlin line-group and choose between them here — see
+     * [ComposeKotlinCompatibility] for the boundaries and the evidence behind each.
+     *
+     * Falls back to the base artifact when the version cannot be read. That combination is never
+     * actually loaded: [isApplicable] refuses an unreadable version first, so this only keeps the
+     * method total.
+     */
+    override fun getPluginArtifact(): SubpluginArtifact {
+        val kotlinVersion = appliedProject?.let { consumerKotlinVersion(it) }
+        return SubpluginArtifact(
+            groupId = "com.bugsee",
+            artifactId = ComposeKotlinCompatibility.artifactIdFor(kotlinVersion)
+                ?: ComposeKotlinCompatibility.ARTIFACT_BASE,
+            version = PLUGIN_VERSION
+        )
+    }
 
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>): Boolean {
         val project = kotlinCompilation.target.project
@@ -1344,7 +1366,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project.logger.warn(
             "Bugsee gradle plugin: Compose instrumentation is disabled because the project " +
                 "uses Kotlin ${version ?: "(undetermined)"}, which this plugin's Compose " +
-                "compiler plugin does not support (verified up to " +
+                "compiler plugin has not been verified against (supported up to Kotlin " +
                 "${ComposeKotlinCompatibility.SUPPORTED_MAJOR}.${ComposeKotlinCompatibility.MAX_SUPPORTED_MINOR}). Everything else — " +
                 "network, logs, crashes, ANRs — is unaffected. Update the Bugsee Gradle " +
                 "plugin to regain Compose tagging."

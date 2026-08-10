@@ -10,7 +10,14 @@
 # Artifacts published:
 #   com.bugsee:bugsee-android-gradle-plugin:<version>
 #   com.bugsee.android.gradle:com.bugsee.android.gradle.gradle.plugin:<version>  (marker)
-#   com.bugsee:bugsee-compose-compiler-plugin:<version>
+#   com.bugsee:bugsee-compose-compiler-plugin:<version>      (Kotlin <= 2.1)
+#   com.bugsee:bugsee-compose-compiler-plugin-k22:<version>  (Kotlin 2.2 - 2.3)
+#   com.bugsee:bugsee-compose-compiler-plugin-k24:<version>  (Kotlin 2.4+)
+#
+# The Compose compiler plugin ships one artifact per Kotlin line because it binds the exact
+# descriptors of the compiler API it was built against; the Gradle plugin picks between them from
+# the consumer's Kotlin version. All three MUST be published together — a consumer on a line whose
+# artifact is missing gets Compose instrumentation silently disabled.
 #
 # Required gradle properties (typically in ~/.gradle/gradle.properties):
 #   NEXUS_USERNAME, NEXUS_PASSWORD
