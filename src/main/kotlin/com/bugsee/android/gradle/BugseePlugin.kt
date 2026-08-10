@@ -25,6 +25,7 @@ import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.build.event.BuildEventsListenerRegistry
+import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilerPluginSupportPlugin
 import org.jetbrains.kotlin.gradle.plugin.SubpluginArtifact
@@ -830,6 +831,24 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         if (!hasComposeDependency(project)) {
             return false
         }
+
+        // Kotlin compiler-plugin APIs are not stable across Kotlin minor releases, and this
+        // plugin is compiled against ONE of them. Loading it into a compiler whose extension
+        // API has moved does not degrade — it aborts the consumer's compilation outright. On
+        // Kotlin 2.4 the registrar dies with
+        //   ClassCastException: IrGenerationExtension$Companion cannot be cast to
+        //   ProjectExtensionDescriptor
+        // which the app author can neither diagnose nor work around.
+        //
+        // So when the consumer's Kotlin is outside the range this artifact was built and
+        // verified against, stand down: Compose tag/secure instrumentation is lost, but the
+        // build still succeeds. Losing an optional capability is recoverable; failing the
+        // build is not.
+        val kotlinVersion = consumerKotlinVersion(project)
+        if (!ComposeKotlinCompatibility.isSupported(kotlinVersion)) {
+            warnUnsupportedKotlinOnce(project, kotlinVersion)
+            return false
+        }
         // Apply the compiler plugin if EITHER subfeature is enabled. Each
         // subfeature is gated independently inside the compiler plugin via
         // its own SubpluginOption, so the user can keep one on while
@@ -1296,7 +1315,44 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
     }
 
+    /**
+     * The Kotlin version the CONSUMER compiles with, or null if it cannot be determined.
+     *
+     * Read from the applied Kotlin plugin rather than from our own build: what matters is the
+     * compiler our extension gets loaded into, which is the consumer's, not ours.
+     */
+    /**
+     * The Kotlin version the CONSUMER compiles with, or null if it cannot be determined.
+     *
+     * Read from the applied Kotlin plugin rather than from our own build: what matters is the
+     * compiler our extension is loaded into, which is the consumer's, not ours.
+     *
+     * Uses `withType`, NOT `findPlugin`. [KotlinBasePlugin] is an INTERFACE, and
+     * `PluginContainer.findPlugin` does not resolve interface types — it silently returns null,
+     * which would make every consumer look undeterminable and disable Compose instrumentation
+     * for all of them.
+     */
+    private fun consumerKotlinVersion(project: Project): String? = runCatching {
+        project.plugins.withType(KotlinBasePlugin::class.java).firstOrNull()?.pluginVersion
+    }.getOrNull()
+
+    private fun warnUnsupportedKotlinOnce(project: Project, version: String?) {
+        val key = "bugsee.composeCompilerKotlinWarned"
+        val root = project.gradle.rootProject.extensions.extraProperties
+        if (root.has(key)) return
+        root.set(key, true)
+        project.logger.warn(
+            "Bugsee gradle plugin: Compose instrumentation is disabled because the project " +
+                "uses Kotlin ${version ?: "(undetermined)"}, which this plugin's Compose " +
+                "compiler plugin does not support (verified up to " +
+                "${ComposeKotlinCompatibility.SUPPORTED_MAJOR}.${ComposeKotlinCompatibility.MAX_SUPPORTED_MINOR}). Everything else — " +
+                "network, logs, crashes, ANRs — is unaffected. Update the Bugsee Gradle " +
+                "plugin to regain Compose tagging."
+        )
+    }
+
     companion object {
+
         private const val PLUGIN_NAME = "bugsee"
         // Maven group of all Bugsee artifacts. Centralised so dependency
         // detection and auto-add logic agree.
