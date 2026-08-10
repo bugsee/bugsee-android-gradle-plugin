@@ -3,9 +3,11 @@
 # Bugsee Android Gradle Plugin — Test Runner
 #
 # Modes:
-#   ./scripts/test.sh                              # All tests (unit + integration)
+#   ./scripts/test.sh                              # All tests (unit + integration + matrix)
 #   ./scripts/test.sh unit                         # Unit tests only (~10s)
 #   ./scripts/test.sh integration                  # TestKit integration tests (~30s warm, ~3 min cold)
+#   ./scripts/test.sh matrix                       # Compose compiler-plugin variants x Kotlin lines
+#                                                  # (~20s warm, ~400 MB / several min cold)
 #   ./scripts/test.sh specific <class-name>        # Run a single unit test class
 #                                                  # e.g. ./scripts/test.sh specific StartupTierTest
 #   ./scripts/test.sh specific integration <class> # Run a single integration test class
@@ -24,6 +26,15 @@
 #    `pluginManagement.includeBuild(...)` from the fixture, NOT via
 #    TestKit's `withPluginClasspath()`. That keeps the plugin loaded
 #    into the same classloader as AGP at fixture build time.
+#  - The matrix runs every Compose compiler-plugin variant through the
+#    REAL compiler of each Kotlin line we support, and asserts the
+#    injected call reaches the emitted bytecode. Exit code alone proves
+#    nothing here: the IR pass returns early when the Bugsee Compose
+#    runtime is absent, so a broken plugin still compiles a Compose
+#    project cleanly — which is how 4.0.3 shipped claiming Kotlin 2.2/2.3
+#    support that aborted the consumer's build. It is part of `check`, so
+#    CI covers it via scripts/build.sh; it is included in `all` here so a
+#    local run covers it too. First run downloads one compiler per line.
 #  - This script does NOT bring up an Android emulator. The plugin
 #    has no on-device test surface — connected tests for the
 #    bugsee-android-gradle-plugin live in the consuming SDK repo
@@ -107,12 +118,22 @@ run_specific_integration() {
     print_success "Integration test $class_name passed."
 }
 
+run_matrix() {
+    print_status "Running Compose variant matrix (./gradlew :compose-compiler-plugin:composeVariantMatrix)..."
+    print_status "First run downloads a Kotlin compiler per supported line (~400 MB)."
+    ./gradlew :compose-compiler-plugin:composeVariantMatrix --console=plain
+    print_success "Compose variant matrix passed."
+}
+
 case "$MODE" in
     unit)
         run_unit
         ;;
     integration|integ)
         run_integration
+        ;;
+    matrix)
+        run_matrix
         ;;
     specific)
         if [ "$2" = "integration" ] || [ "$2" = "integ" ]; then
@@ -124,9 +145,10 @@ case "$MODE" in
     all|"")
         run_unit
         run_integration
+        run_matrix
         ;;
     -h|--help|help)
-        sed -n '3,30p' "$0"
+        sed -n '3,41p' "$0"
         ;;
     *)
         print_error "Unknown mode: $MODE"
