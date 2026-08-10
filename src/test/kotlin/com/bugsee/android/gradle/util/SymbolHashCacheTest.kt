@@ -1,25 +1,32 @@
 package com.bugsee.android.gradle.util
 
-import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.File
 
 class SymbolHashCacheTest {
+
+    /**
+     * An ISOLATED directory, not the shared system temp dir.
+     *
+     * `File.createTempFile` put the cache in the machine-wide temp directory, which made the
+     * orphan-scan test below inspect `parentFile` — i.e. every `.tmp` file any other process on
+     * the machine happened to leave there. It failed intermittently for reasons entirely
+     * unrelated to the cache, and the failure looked like a product bug rather than a test one.
+     */
+    @get:Rule
+    val temp = TemporaryFolder()
 
     private lateinit var cacheFile: File
 
     @Before
     fun setUp() {
-        cacheFile = File.createTempFile("symbol-cache-test", ".json")
-        cacheFile.delete() // start with no file on disk
-    }
-
-    @After
-    fun tearDown() {
-        cacheFile.delete()
+        // Not created on disk — the tests exercise the "no file yet" path first.
+        cacheFile = File(temp.newFolder(), "symbol-cache-test.json")
     }
 
     // ── isCached ─────────────────────────────────────────────────
