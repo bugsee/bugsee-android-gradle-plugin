@@ -6,6 +6,7 @@ import com.android.build.api.variant.ApplicationVariant
 import com.bugsee.android.gradle.config.PluginPropertiesApplier
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
+import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
 import com.bugsee.android.gradle.manifest.BugseeAssetInjectionTask
@@ -1214,7 +1215,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun isCoreSdkPresent(project: Project): Boolean {
         return project.configurations.any { config ->
             config.dependencies.any { dep ->
-                isCoreSdkExternal(dep) || isCoreSdkProjectDep(dep)
+                isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep)
             }
         }
     }
@@ -1229,9 +1230,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * via the SDK repo's `gradle.properties`) so that an unrelated consumer
      * submodule named `library` does not false-match.
      */
-    private fun isCoreSdkProjectDep(dep: Dependency): Boolean {
+    private fun isCoreSdkProjectDep(from: Project, dep: Dependency): Boolean {
         if (dep !is ProjectDependency) return false
-        val depProject = dep.dependencyProject
+        val depProject = ProjectDependencyCompat.targetProject(from, dep) ?: return false
         if (depProject.findProperty("GROUP") != BUGSEE_GROUP) return false
         return depProject.name == "library" || depProject.name == "stub"
     }
@@ -1275,8 +1276,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             config.dependencies.any { dep ->
                 (dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
                     (dep is ProjectDependency &&
-                        dep.dependencyProject.findProperty("GROUP") == BUGSEE_GROUP &&
-                        dep.dependencyProject.name == projectName)
+                        ProjectDependencyCompat.targetProject(project, dep)?.let {
+                            it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
+                        } == true)
             }
         }
         if (!alreadyPresent) {

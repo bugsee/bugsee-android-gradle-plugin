@@ -58,13 +58,17 @@ internal object DependencyDetector {
             config.dependencies.any { dep ->
                 when {
                     isMatchingExternal(dep, artifactPrefix) -> true
-                    isMatchingProject(dep, projectName) -> true
+                    isMatchingProject(project, dep, projectName) -> true
                     // Recurse through intermediate project modules: the external
                     // SDK dep may be declared by a wrapper/aggregator project that
                     // this project depends on (e.g. KMP `:composeApp` -> `:library`
                     // -> com.bugsee:bugsee-android).
                     dep is ProjectDependency ->
-                        hasBugseeDependency(evaluated(project, dep.dependencyProject), artifactPrefix, projectName, visited)
+                        ProjectDependencyCompat.targetProject(project, dep)?.let { target ->
+                            hasBugseeDependency(
+                                evaluated(project, target), artifactPrefix, projectName, visited
+                            )
+                        } ?: false
                     else -> false
                 }
             }
@@ -129,7 +133,10 @@ internal object DependencyDetector {
         for (config in project.configurations) {
             for (dep in config.dependencies) {
                 if (dep is ProjectDependency) {
-                    val v = getBugseeDependencyVersion(evaluated(project, dep.dependencyProject), artifactPrefix, visited)
+                    val target = ProjectDependencyCompat.targetProject(project, dep)
+                    val v = target?.let {
+                        getBugseeDependencyVersion(evaluated(project, it), artifactPrefix, visited)
+                    }
                     if (v != null) return v
                 }
             }
@@ -141,9 +148,9 @@ internal object DependencyDetector {
         return dep.group == BUGSEE_GROUP && dep.name.startsWith(artifactPrefix)
     }
 
-    private fun isMatchingProject(dep: Dependency, projectName: String?): Boolean {
+    private fun isMatchingProject(from: Project, dep: Dependency, projectName: String?): Boolean {
         if (dep !is ProjectDependency) return false
-        val depProject = dep.dependencyProject
+        val depProject = ProjectDependencyCompat.targetProject(from, dep) ?: return false
         if (depProject.findProperty("GROUP") != BUGSEE_GROUP) return false
         return projectName == null || depProject.name == projectName
     }
