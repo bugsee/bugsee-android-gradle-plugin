@@ -18,14 +18,6 @@ java {
     targetCompatibility = JavaVersion.VERSION_11
 }
 
-// Empty sources/javadoc JARs — Maven Central requires them but this is proprietary.
-val emptySourcesJar by tasks.registering(Jar::class) {
-    archiveClassifier.set("sources")
-}
-val emptyJavadocJar by tasks.registering(Jar::class) {
-    archiveClassifier.set("javadoc")
-}
-
 kotlin {
     jvmToolchain(11)
 }
@@ -201,6 +193,28 @@ tasks.named("check") { dependsOn(composeVariantMatrix) }
 // only needs to define its publication — publishToSonatype from the root
 // will aggregate it into the same staging repository as the main plugin.
 
+// Empty sources/javadoc JARs — Maven Central requires them but this is proprietary.
+// Each publication gets its own pair: shared jars make every Sign task claim the same
+// `.asc` outputs, which Gradle 8.7 rejects as an undeclared dependency between
+// e.g. publishK22* and signK24Publication.
+fun emptyJars(name: String): Pair<TaskProvider<Jar>, TaskProvider<Jar>> {
+    val cap = name.replaceFirstChar { it.uppercase() }
+    val sources = tasks.register<Jar>("emptySourcesJar$cap") {
+        archiveClassifier.set("sources")
+        archiveAppendix.set(name)
+    }
+    val javadoc = tasks.register<Jar>("emptyJavadocJar$cap") {
+        archiveClassifier.set("javadoc")
+        archiveAppendix.set(name)
+    }
+    return sources to javadoc
+}
+
+val (emptySourcesJar, emptyJavadocJar) = emptyJars("k21")
+val variantEmptyJars = composeVariants.associate { variant ->
+    variant.id to emptyJars(variant.id)
+}
+
 publishing {
     publications {
         create<MavenPublication>("maven") {
@@ -237,11 +251,12 @@ publishing {
         // already-published coordinates keep meaning what they meant; newer lines get their own
         // artifactId, which the Gradle plugin selects from the consumer's Kotlin version.
         composeVariants.forEach { variant ->
+            val (sourcesJar, javadocJar) = variantEmptyJars.getValue(variant.id)
             create<MavenPublication>(variant.id) {
                 artifactId = "bugsee-compose-compiler-plugin-${variant.id}"
                 artifact(variantJars.getValue(variant.id))
-                artifact(emptySourcesJar)
-                artifact(emptyJavadocJar)
+                artifact(sourcesJar)
+                artifact(javadocJar)
 
                 pom {
                     name.set("Bugsee Compose Compiler Plugin (${variant.id})")
@@ -285,4 +300,14 @@ signing {
 // no-credentials Gradle 8.7+ shapes rather than returning null.
 tasks.withType<Sign>().configureEach {
     enabled = !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
+}
+
+// Same defense as the root project: custom artifacts + signing can leave
+// PublishToMaven* without an explicit edge to every Sign task Gradle later
+// validates against.
+tasks.withType<PublishToMavenRepository>().configureEach {
+    dependsOn(tasks.withType<Sign>())
+}
+tasks.withType<PublishToMavenLocal>().configureEach {
+    dependsOn(tasks.withType<Sign>())
 }

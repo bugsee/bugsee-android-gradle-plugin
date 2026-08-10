@@ -24,9 +24,10 @@ import java.nio.file.Files
  *
  * ### Why the negative cases are asserted too
  *
- * Each variant is pinned to the lines it does NOT support. Those assertions are what justify
- * shipping three artifacts: they fail the moment someone tries to collapse the variants, and they
- * document the exact API breaks (see the messages below).
+ * Each variant is pinned to the lines it does NOT support. Those rows must fail the compiler
+ * (linkage/registration errors), not merely skip injection — a silent no-op would pass the
+ * positive-only check that shipped 4.0.3. They fail the moment someone tries to collapse the
+ * variants, and document the exact API breaks (see the messages below).
  */
 class ComposeVariantMatrixTest {
 
@@ -63,7 +64,11 @@ class ComposeVariantMatrixTest {
         val failures = mutableListOf<String>()
         for (case in cases) {
             val outcome = compileFixture(case.variant, case.kotlin)
-            val ok = if (case.expectInjection) outcome is Outcome.Injected else outcome !is Outcome.Injected
+            val ok = if (case.expectInjection) {
+                outcome is Outcome.Injected
+            } else {
+                outcome is Outcome.Failed
+            }
             if (!ok) {
                 failures += "${case.variant} on Kotlin ${case.kotlin}: expected " +
                     (if (case.expectInjection) "injection" else "failure") +
