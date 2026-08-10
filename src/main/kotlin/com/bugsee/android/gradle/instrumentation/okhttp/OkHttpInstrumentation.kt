@@ -3,7 +3,8 @@ package com.bugsee.android.gradle.instrumentation.okhttp
 import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
-import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
+import com.bugsee.android.gradle.instrumentation.SdkClassProbe
+import org.gradle.api.provider.Provider
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import org.gradle.api.Project
@@ -36,21 +37,10 @@ internal class OkHttpInstrumentation : Instrumentation {
     override val name: String = "OkHttp"
     override val key: String = "okhttp"
 
-    /**
-     * Resolved in [shouldApply] and read by [apply]. The registrar calls the two
-     * back to back for each variant (shouldApply first), so the value is always
-     * current for the variant being configured.
-     */
-    private var webSocketCapture: Boolean = false
-
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
         // Extension-gated: requires the okhttp extension AAR specifically, so
         // core-SDK auto-load alone does not enable it.
-        if (!DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")) {
-            return false
-        }
-        webSocketCapture = resolveWebSocketCapture(project)
-        return true
+        return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")
     }
 
     /**
@@ -63,23 +53,34 @@ internal class OkHttpInstrumentation : Instrumentation {
      * composite or a range, which is the common case in this repo's own sample
      * app. We stand down only when the version is parseable AND provably too old.
      */
-    /** Internal rather than private so the version gate can be tested directly. */
-    internal fun resolveWebSocketCapture(project: Project): Boolean {
-        val declared =
-            DependencyDetector.getBugseeDependencyVersion(project, "bugsee-android-okhttp")
-        val parsed = BugseeSdkVersion.parse(declared) ?: return true
-        if (parsed < MIN_SDK_VERSION_WITH_WEBSOCKETS) {
-            project.logger.warn(
-                "Bugsee gradle plugin: OkHttp WebSocket capture requires " +
-                    "`com.bugsee:bugsee-android-okhttp` $MIN_SDK_VERSION_WITH_WEBSOCKETS or " +
-                    "newer (found $declared). Skipping the newWebSocket rewrite to avoid " +
-                    "NoClassDefFoundError on BugseeOkHttpWebSockets; HTTP request capture is " +
-                    "unaffected. Upgrade the SDK to capture WebSocket frames."
-            )
-            return false
+    /**
+     * Whether the SDK on this variant's classpath actually defines
+     * `BugseeOkHttpWebSockets`, as a lazy provider evaluated at execution time.
+     *
+     * This asks the same question the injected bytecode will ask of the runtime
+     * classpath, so it is correct for cases a version comparison cannot reach:
+     * Gradle ranges, platform/BOM-managed versions, project and composite
+     * dependencies — none of which expose a usable version string — and a class
+     * that was present in source but stripped from the published artifact, which
+     * is exactly how this symbol was missing from every release before 7.1.0.
+     *
+     * Resolution stays lazy: `artifacts.elements` is a Gradle provider, so the
+     * classpath is resolved when the transform runs rather than during
+     * configuration.
+     */
+    private fun webSocketCaptureProvider(variant: Variant): Provider<Boolean> =
+        variant.runtimeConfiguration.incoming.artifacts.resolvedArtifacts.map { artifacts ->
+            val present = SdkClassProbe.containsClass(artifacts.map { it.file }, WEBSOCKETS_CLASS)
+            if (!present) {
+                LOGGER.warn(
+                    "Bugsee gradle plugin: the resolved Bugsee SDK does not contain " +
+                        "BugseeOkHttpWebSockets, so OkHttp WebSocket capture is unavailable. " +
+                        "Skipping the newWebSocket rewrite; HTTP request capture is unaffected. " +
+                        "Upgrade the Bugsee SDK to capture WebSocket frames."
+                )
+            }
+            present
         }
-        return true
-    }
 
     override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
@@ -88,7 +89,7 @@ internal class OkHttpInstrumentation : Instrumentation {
         ) { params ->
             params.targetClass.set("com.bugsee.library.okhttp.BugseeOkHttpInterceptor")
             params.excludes.set(excludes)
-            params.webSocketCapture.set(webSocketCapture)
+            params.webSocketCapture.set(webSocketCaptureProvider(variant))
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES
@@ -96,22 +97,10 @@ internal class OkHttpInstrumentation : Instrumentation {
     }
 
     private companion object {
-        /**
-         * First `bugsee-android-okhttp` release whose published AAR actually
-         * contains `BugseeOkHttpWebSockets`.
-         *
-         * The class existed in source earlier, but self-R8 stripped it from every
-         * published AAR until the keep rule landed for 7.1.0 — so "the source has
-         * it" was never the right question to ask; "the artifact has it" is.
-         */
-        private val MIN_SDK_VERSION_WITH_WEBSOCKETS = BugseeSdkVersion(
-            major = 7,
-            minor = 1,
-            patch = 0,
-            // Stable: "" ranks above any 7.1.0-betaN, so a pre-release of the
-            // same line is (correctly) treated as not yet carrying the class.
-            preLabel = "",
-            preNumber = -1,
-        )
+        private val LOGGER = org.gradle.api.logging.Logging.getLogger(OkHttpInstrumentation::class.java)
+
+        /** JVM internal name of the class the WebSocket rewrite targets. */
+        private const val WEBSOCKETS_CLASS = "com/bugsee/library/okhttp/BugseeOkHttpWebSockets"
+
     }
 }
