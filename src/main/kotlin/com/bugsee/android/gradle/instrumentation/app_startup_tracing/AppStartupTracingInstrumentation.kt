@@ -56,7 +56,14 @@ internal class AppStartupTracingInstrumentation(
     override val key: String = "appStartupTracing"
     override val isTierDriven: Boolean = true
 
+    /**
+     * Captured in [shouldApply] for use by [apply], which AGP's Variant API does not hand a
+     * Project. The registrar calls the two back to back for each variant, shouldApply first.
+     */
+    private var hostProject: Project? = null
+
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        hostProject = project
         if (configResolver.resolveStartupTier() == StartupTier.OFF) {
             return false
         }
@@ -109,9 +116,11 @@ internal class AppStartupTracingInstrumentation(
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeAppStartupDispatcher")
-            params.symbolAvailable.set(
-                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeAppStartupDispatcher", "app-startup tracing", LOGGER_)
-            )
+            hostProject?.let { p ->
+                params.symbolAvailable.set(
+                    SdkSymbolAvailability.of(p, "com.bugsee.library.adapters.BugseeAppStartupDispatcher", "app-startup tracing", LOGGER_)
+                )
+            }
             params.tier.set(tier)
             params.excludes.set(excludes)
         }

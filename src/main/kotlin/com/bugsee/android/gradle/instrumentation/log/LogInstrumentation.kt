@@ -20,7 +20,14 @@ internal class LogInstrumentation : Instrumentation {
     override val name: String = "Log"
     override val key: String = "log"
 
+    /**
+     * Captured in [shouldApply] for use by [apply], which AGP's Variant API does not hand a
+     * Project. The registrar calls the two back to back for each variant, shouldApply first.
+     */
+    private var hostProject: Project? = null
+
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        hostProject = project
         return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
@@ -30,9 +37,11 @@ internal class LogInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeLogAdapter")
-            params.symbolAvailable.set(
-                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeLogAdapter", "log capture", LOGGER_)
-            )
+            hostProject?.let { p ->
+                params.symbolAvailable.set(
+                    SdkSymbolAvailability.of(p, "com.bugsee.library.adapters.BugseeLogAdapter", "log capture", LOGGER_)
+                )
+            }
             params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(

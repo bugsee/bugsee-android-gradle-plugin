@@ -38,7 +38,14 @@ internal class OkHttpInstrumentation : Instrumentation {
     override val name: String = "OkHttp"
     override val key: String = "okhttp"
 
+    /**
+     * Captured in [shouldApply] for use by [apply], which AGP's Variant API does not hand a
+     * Project. The registrar calls the two back to back for each variant, shouldApply first.
+     */
+    private var hostProject: Project? = null
+
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        hostProject = project
         // Extension-gated: requires the okhttp extension AAR specifically, so
         // core-SDK auto-load alone does not enable it.
         return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")
@@ -55,33 +62,15 @@ internal class OkHttpInstrumentation : Instrumentation {
      * app. We stand down only when the version is parseable AND provably too old.
      */
     /**
-     * Whether the SDK on this variant's classpath actually defines
-     * `BugseeOkHttpWebSockets`, as a lazy provider evaluated at execution time.
+     * Whether the resolved SDK defines `BugseeOkHttpWebSockets`.
      *
-     * This asks the same question the injected bytecode will ask of the runtime
-     * classpath, so it is correct for cases a version comparison cannot reach:
-     * Gradle ranges, platform/BOM-managed versions, project and composite
-     * dependencies — none of which expose a usable version string — and a class
-     * that was present in source but stripped from the published artifact, which
-     * is exactly how this symbol was missing from every release before 7.1.0.
-     *
-     * Resolution stays lazy: `artifacts.elements` is a Gradle provider, so the
-     * classpath is resolved when the transform runs rather than during
-     * configuration.
+     * Routed through the shared [SdkSymbolAvailability] rather than resolving the variant's
+     * runtime classpath directly — doing the latter makes the ASM transform depend on the very
+     * classpath it instruments, which breaks resolution outright for consumers with Android
+     * project dependencies.
      */
-    private fun webSocketCaptureProvider(variant: Variant): Provider<Boolean> =
-        variant.runtimeConfiguration.incoming.artifacts.resolvedArtifacts.map { artifacts ->
-            val present = SdkClassProbe.containsClass(artifacts.map { it.file }, WEBSOCKETS_CLASS)
-            if (!present) {
-                LOGGER.warn(
-                    "Bugsee gradle plugin: the resolved Bugsee SDK does not contain " +
-                        "BugseeOkHttpWebSockets, so OkHttp WebSocket capture is unavailable. " +
-                        "Skipping the newWebSocket rewrite; HTTP request capture is unaffected. " +
-                        "Upgrade the Bugsee SDK to capture WebSocket frames."
-                )
-            }
-            present
-        }
+    private fun webSocketCaptureProvider(project: Project): Provider<Boolean> =
+        SdkSymbolAvailability.of(project, WEBSOCKETS_FQN, "OkHttp WebSocket capture", LOGGER_)
 
     override fun apply(variant: Variant, excludes: Set<String>) {
         variant.instrumentation.transformClassesWith(
@@ -89,11 +78,18 @@ internal class OkHttpInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.okhttp.BugseeOkHttpInterceptor")
-            params.symbolAvailable.set(
-                SdkSymbolAvailability.of(variant, "com.bugsee.library.okhttp.BugseeOkHttpInterceptor", "OkHttp request capture", LOGGER_)
-            )
+            hostProject?.let { p ->
+                params.symbolAvailable.set(
+                    SdkSymbolAvailability.of(
+                        p,
+                        "com.bugsee.library.okhttp.BugseeOkHttpInterceptor",
+                        "OkHttp request capture",
+                        LOGGER_,
+                    )
+                )
+                params.webSocketCapture.set(webSocketCaptureProvider(p))
+            }
             params.excludes.set(excludes)
-            params.webSocketCapture.set(webSocketCaptureProvider(variant))
         }
         variant.instrumentation.setAsmFramesComputationMode(
             FramesComputationMode.COPY_FRAMES
@@ -106,7 +102,7 @@ internal class OkHttpInstrumentation : Instrumentation {
         private val LOGGER = org.gradle.api.logging.Logging.getLogger(OkHttpInstrumentation::class.java)
 
         /** JVM internal name of the class the WebSocket rewrite targets. */
-        private const val WEBSOCKETS_CLASS = "com/bugsee/library/okhttp/BugseeOkHttpWebSockets"
+        private const val WEBSOCKETS_FQN = "com.bugsee.library.okhttp.BugseeOkHttpWebSockets"
 
     }
 }

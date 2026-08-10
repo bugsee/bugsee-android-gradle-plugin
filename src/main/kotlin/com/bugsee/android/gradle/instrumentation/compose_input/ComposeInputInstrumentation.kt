@@ -31,7 +31,14 @@ internal class ComposeInputInstrumentation : Instrumentation {
     override val name: String = "ComposeInput"
     override val key: String = "composeInput"
 
+    /**
+     * Captured in [shouldApply] for use by [apply], which AGP's Variant API does not hand a
+     * Project. The registrar calls the two back to back for each variant, shouldApply first.
+     */
+    private var hostProject: Project? = null
+
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        hostProject = project
         // Needs the core SDK (adapter class) AND a Compose UI dependency.
         // The Compose requirement still stands even when the core is auto-loaded.
         return (coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")) &&
@@ -44,9 +51,11 @@ internal class ComposeInputInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeComposeInputAdapter")
-            params.symbolAvailable.set(
-                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeComposeInputAdapter", "Compose input capture", LOGGER_)
-            )
+            hostProject?.let { p ->
+                params.symbolAvailable.set(
+                    SdkSymbolAvailability.of(p, "com.bugsee.library.adapters.BugseeComposeInputAdapter", "Compose input capture", LOGGER_)
+                )
+            }
             params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(

@@ -19,7 +19,14 @@ internal class HttpEngineInstrumentation : Instrumentation {
     override val name: String = "HttpEngine"
     override val key: String = "http_engine"
 
+    /**
+     * Captured in [shouldApply] for use by [apply], which AGP's Variant API does not hand a
+     * Project. The registrar calls the two back to back for each variant, shouldApply first.
+     */
+    private var hostProject: Project? = null
+
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        hostProject = project
         return coreSdkAutoLoad ||
             DependencyDetector.hasBugseeDependency(project, "bugsee-android", "library")
     }
@@ -30,9 +37,11 @@ internal class HttpEngineInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeHttpEngineAdapter")
-            params.symbolAvailable.set(
-                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeHttpEngineAdapter", "HttpEngine network capture", LOGGER_)
-            )
+            hostProject?.let { p ->
+                params.symbolAvailable.set(
+                    SdkSymbolAvailability.of(p, "com.bugsee.library.adapters.BugseeHttpEngineAdapter", "HttpEngine network capture", LOGGER_)
+                )
+            }
             params.excludes.set(excludes)
         }
         // The injected call sites grow the operand stack (DUP / DUP2 / DUP_X2 /

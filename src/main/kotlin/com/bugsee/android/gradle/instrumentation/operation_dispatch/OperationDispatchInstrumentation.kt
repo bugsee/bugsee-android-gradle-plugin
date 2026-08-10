@@ -22,7 +22,14 @@ internal class OperationDispatchInstrumentation : Instrumentation {
     override val name: String = "OperationDispatch"
     override val key: String = "operationDispatch"
 
+    /**
+     * Captured in [shouldApply] for use by [apply], which AGP's Variant API does not hand a
+     * Project. The registrar calls the two back to back for each variant, shouldApply first.
+     */
+    private var hostProject: Project? = null
+
     override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+        hostProject = project
         return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")
     }
 
@@ -32,9 +39,11 @@ internal class OperationDispatchInstrumentation : Instrumentation {
             InstrumentationScope.ALL
         ) { params ->
             params.targetClass.set("com.bugsee.library.adapters.BugseeOperationDispatcher")
-            params.symbolAvailable.set(
-                SdkSymbolAvailability.of(variant, "com.bugsee.library.adapters.BugseeOperationDispatcher", "operation dispatch", LOGGER_)
-            )
+            hostProject?.let { p ->
+                params.symbolAvailable.set(
+                    SdkSymbolAvailability.of(p, "com.bugsee.library.adapters.BugseeOperationDispatcher", "operation dispatch", LOGGER_)
+                )
+            }
             params.excludes.set(excludes)
         }
         variant.instrumentation.setAsmFramesComputationMode(
