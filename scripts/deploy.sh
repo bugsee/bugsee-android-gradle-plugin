@@ -12,12 +12,17 @@
 #   com.bugsee.android.gradle:com.bugsee.android.gradle.gradle.plugin:<version>  (marker)
 #   com.bugsee:bugsee-compose-compiler-plugin:<version>      (Kotlin <= 2.1)
 #   com.bugsee:bugsee-compose-compiler-plugin-k22:<version>  (Kotlin 2.2 - 2.3)
-#   com.bugsee:bugsee-compose-compiler-plugin-k24:<version>  (Kotlin 2.4+)
+#   com.bugsee:bugsee-compose-compiler-plugin-k24:<version>  (Kotlin 2.4)
 #
 # The Compose compiler plugin ships one artifact per Kotlin line because it binds the exact
 # descriptors of the compiler API it was built against; the Gradle plugin picks between them from
-# the consumer's Kotlin version. All three MUST be published together — a consumer on a line whose
-# artifact is missing gets Compose instrumentation silently disabled.
+# the consumer's Kotlin version.
+#
+# ALL THREE MUST BE PUBLISHED TOGETHER. The selected coordinates are added as a real dependency on
+# the consumer's compiler-plugin classpath, so if the artifact for their Kotlin line is missing from
+# Central their build FAILS on an unresolvable dependency — it does not quietly fall back or
+# disable Compose instrumentation. A partial publish therefore breaks every consumer on the missing
+# line, not just their Compose capture.
 #
 # Required gradle properties (typically in ~/.gradle/gradle.properties):
 #   NEXUS_USERNAME, NEXUS_PASSWORD

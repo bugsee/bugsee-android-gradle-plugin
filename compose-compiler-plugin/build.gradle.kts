@@ -57,7 +57,7 @@ dependencies {
 //
 //   k21  built vs 2.1.0  covers Kotlin 1.9 – 2.1   (legacy IR API)
 //   k22  built vs 2.2.0  covers Kotlin 2.2 – 2.3   (2.2 widened the irCall/irString receiver)
-//   k24  built vs 2.4.0  covers Kotlin 2.4+        (2.4 moved extension registration and
+//   k24  built vs 2.4.0  covers Kotlin 2.4          (2.4 moved extension registration and
 //                                                   removed valueParameters/putValueArgument)
 //
 // Each is built by invoking that line's own compiler, because Kotlin metadata is not readable by an
@@ -72,7 +72,7 @@ data class ComposeVariant(
 
 val composeVariants = listOf(
     ComposeVariant("k22", "2.2.0", "modernIr", "registrarPlain", "Kotlin 2.2 and 2.3"),
-    ComposeVariant("k24", "2.4.0", "modernIr", "registrarOverride", "Kotlin 2.4 and newer"),
+    ComposeVariant("k24", "2.4.0", "modernIr", "registrarOverride", "Kotlin 2.4"),
 )
 
 val variantJars = composeVariants.associate { variant ->
@@ -99,10 +99,15 @@ val variantJars = composeVariants.associate { variant ->
         "src/${variant.registrarSourceSet}/kotlin",
     ).map { file(it) }
 
+    // A FileCollection, not the Configuration itself: the argument provider below closes over this,
+    // and the configuration cache cannot serialize a Configuration ("cannot serialize object of
+    // type ... Configuration" at store time).
+    val compilerFiles = objects.fileCollection().from(compilerClasspath)
+
     val compileTask = tasks.register<JavaExec>("compile${variant.id.replaceFirstChar { it.uppercase() }}") {
         group = "build"
         description = "Compiles the Compose compiler plugin against Kotlin ${variant.kotlinVersion} (${variant.supports})."
-        classpath = compilerClasspath
+        classpath = compilerFiles
         mainClass.set("org.jetbrains.kotlin.cli.jvm.K2JVMCompiler")
         inputs.files(sourceDirs).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.property("kotlinVersion", variant.kotlinVersion)
@@ -111,7 +116,7 @@ val variantJars = composeVariants.associate { variant ->
             listOf(
                 "-no-stdlib",
                 "-jvm-target", "11",
-                "-classpath", compilerClasspath.asPath,
+                "-classpath", compilerFiles.asPath,
                 "-d", outputDir.get().asFile.absolutePath,
             ) + sourceDirs.map { it.absolutePath }
         })
@@ -139,7 +144,11 @@ val variantJars = composeVariants.associate { variant ->
 // its own source set and task because it shells out to N compilers and is far slower than the unit
 // tests — but it is the only check that can catch a variant that loads and then silently does
 // nothing, which is how the 4.0.3 bound came to be wrong.
-val matrixKotlinVersions = listOf("1.9.22", "2.1.0", "2.2.0", "2.2.21", "2.3.21", "2.4.0", "2.4.10")
+// 2.0.21 and 2.3.0 are here because the mapping CLAIMS them: 2.0 routes to the base artifact and
+// 2.3.0-exact is the boundary where the k22 registrar's plain `val pluginId` must satisfy the
+// abstract member 2.3 introduced. A claimed line with no row here is an unverified claim.
+val matrixKotlinVersions =
+    listOf("1.9.22", "2.0.21", "2.1.0", "2.2.0", "2.2.21", "2.3.0", "2.3.21", "2.4.0", "2.4.10")
 
 val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
     val cfg = configurations.create("matrixCompiler${kotlinVersion.replace(".", "_")}") {
@@ -171,15 +180,32 @@ val composeVariantMatrix by tasks.registering(Test::class) {
     useJUnit()
 
     // The k21 variant IS the module's own jar; the others come from the variant tasks.
-    dependsOn(tasks.named("jar"))
-    systemProperty("bugsee.variantJar.k21", tasks.named<Jar>("jar").get().archiveFile.get().asFile.absolutePath)
-    variantJars.forEach { (id, jarTask) ->
-        dependsOn(jarTask)
-        systemProperty("bugsee.variantJar.$id", jarTask.get().archiveFile.get().asFile.absolutePath)
+    //
+    // Their CONTENTS are declared inputs, not just their paths. Passing the paths as system
+    // properties alone leaves this task UP-TO-DATE after a variant source change: the jar rebuilds,
+    // the path string is unchanged, and the one suite that can detect a silently no-op'ing compiler
+    // plugin quietly stops running. Verified by mutation — disabling tag injection in modernIr kept
+    // this task green until these inputs existed. That is the exact failure class this suite exists
+    // to catch, so the wiring matters as much as the assertions.
+    val variantJarFiles: Map<String, Provider<RegularFile>> =
+        mapOf("k21" to tasks.named<Jar>("jar").flatMap { it.archiveFile }) +
+            variantJars.mapValues { (_, jarTask) -> jarTask.flatMap { it.archiveFile } }
+    variantJarFiles.forEach { (id, jar) ->
+        inputs.file(jar).withPropertyName("variantJar.$id").withPathSensitivity(PathSensitivity.NONE)
     }
-    matrixClasspaths.forEach { (kotlinVersion, cfg) ->
-        systemProperty("bugsee.kotlinClasspath.$kotlinVersion", cfg.asPath)
-    }
+
+    // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
+    // is no need to hash ~400 MB of compiler distributions on every up-to-date check.
+    inputs.property("matrixKotlinVersions", matrixKotlinVersions)
+    val matrixClasspathFiles: Map<String, FileCollection> =
+        matrixClasspaths.mapValues { (_, cfg) -> objects.fileCollection().from(cfg) }
+
+    // Resolved lazily: building the argument list at configuration time would force all seven
+    // compiler distributions to download merely to CONFIGURE the task (e.g. on `gradle tasks`).
+    jvmArgumentProviders.add(CommandLineArgumentProvider {
+        variantJarFiles.map { (id, jar) -> "-Dbugsee.variantJar.$id=${jar.get().asFile.absolutePath}" } +
+            matrixClasspathFiles.map { (v, files) -> "-Dbugsee.kotlinClasspath.$v=${files.asPath}" }
+    })
 
     // Each case forks a compiler; the default 10-minute Gradle test timeout is ample but the
     // downloads on a cold cache are not, so make the failure legible.

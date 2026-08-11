@@ -44,6 +44,7 @@ class ComposeVariantMatrixTest {
         val cases = listOf(
             // k21 — legacy IR API, registrar without an `override` on pluginId.
             Case("k21", "1.9.22", true, "predates the IR API changes entirely"),
+            Case("k21", "2.0.21", true, "2.0 still has the legacy IR API; the mapping routes it here"),
             Case("k21", "2.1.0", true, "the line k21 is built against"),
             Case("k21", "2.2.21", false, "2.2 widened the irCall/irString builder receiver to IrBuilder"),
             Case("k21", "2.4.10", false, "2.4 moved extension registration to ExtensionPointDescriptor"),
@@ -52,6 +53,7 @@ class ComposeVariantMatrixTest {
             Case("k22", "2.1.0", false, "the 2.2 parameters/arguments API does not exist in 2.1"),
             Case("k22", "2.2.0", true, "the line k22 is built against"),
             Case("k22", "2.2.21", true, "same line, later patch"),
+            Case("k22", "2.3.0", true, "2.3.0 exact: the boundary where pluginId became abstract"),
             Case("k22", "2.3.21", true, "2.3 shares 2.2's IR API; pluginId is satisfied by JVM resolution"),
             Case("k22", "2.4.10", false, "2.4 moved extension registration to ExtensionPointDescriptor"),
 
@@ -87,6 +89,11 @@ class ComposeVariantMatrixTest {
         /** Compiled, but no injected call reached the bytecode — a silent no-op. */
         object NoOp : Outcome() { override fun toString() = "compiled but did NOT inject (silent no-op)" }
 
+        /** Injected, but the running program behaved differently from a correct build. */
+        class Wrong(private val printed: List<String>) : Outcome() {
+            override fun toString() = "injected INCORRECTLY — expected $EXPECTED_OUTPUT but got $printed"
+        }
+
         class Failed(val marker: String) : Outcome() { override fun toString() = "build failed ($marker)" }
     }
 
@@ -113,12 +120,25 @@ class ComposeVariantMatrixTest {
             val marker = LINK_FAILURES.firstOrNull { log.contains(it) } ?: "exit $exit"
             return Outcome.Failed(marker)
         }
-        // Compiled — now check the transformer actually did something. The injected call lands in
-        // the enclosing composable's class file as a reference to the Bugsee runtime helper.
+        // Compiled — now RUN it. Presence of the helper name in the bytecode would only prove
+        // something was injected; executing the result proves it was injected at the right call
+        // sites, with the right tag, and without disturbing the other arguments. A mangled-but-
+        // compiling rewrite passes the former and fails the latter.
         val appClass = File(outDir, "com/example/app/AppKt.class")
         assertTrue("fixture did not produce AppKt.class on Kotlin $kotlinVersion", appClass.isFile())
-        val injected = appClass.readBytes().toString(Charsets.ISO_8859_1).contains("bugseeTag")
-        return if (injected) Outcome.Injected else Outcome.NoOp
+
+        val run = ProcessBuilder(
+            java, "-cp", outDir.absolutePath + File.pathSeparator + compilerClasspath,
+            "com.example.app.AppKt",
+        ).redirectErrorStream(true).start()
+        val printed = run.inputStream.bufferedReader().readLines().filter { it.isNotBlank() }
+        if (run.waitFor() != 0) return Outcome.Failed("compiled output threw: ${printed.take(2)}")
+
+        return when {
+            printed == EXPECTED_OUTPUT -> Outcome.Injected
+            printed.none { it.startsWith("TAG:") || it == "SECURE" } -> Outcome.NoOp
+            else -> Outcome.Wrong(printed)
+        }
     }
 
     private fun requireProperty(key: String): String =
@@ -161,27 +181,86 @@ class ComposeVariantMatrixTest {
                 interface Modifier { companion object : Modifier }
                 """.trimIndent()
             )
+            File(fixtureDir, "VisualTransformation.kt").writeText(
+                """
+                package androidx.compose.ui.text.input
+                interface VisualTransformation
+                class PasswordVisualTransformation : VisualTransformation
+                """.trimIndent()
+            )
+            // Same fully-qualified name as the real Material TextField, which is how the secure pass
+            // selects it.
+            File(fixtureDir, "Material.kt").writeText(
+                """
+                package androidx.compose.material
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.text.input.VisualTransformation
+
+                @Composable fun TextField(
+                    value: String,
+                    modifier: Modifier = Modifier,
+                    enabled: Boolean = true,
+                    visualTransformation: VisualTransformation? = null
+                ) { println("TextField(value=" + value + ", enabled=" + enabled + ")") }
+                """.trimIndent()
+            )
+            // The injected helpers PRINT, so running the output reports what was injected, where,
+            // and with which argument — far stronger than finding the name in a constant pool.
             File(fixtureDir, "BugseeRuntime.kt").writeText(
                 """
                 package com.bugsee.library.compose
                 import androidx.compose.ui.Modifier
-                fun Modifier.bugseeTag(tag: String): Modifier = this
-                fun Modifier.bugseeSecure(): Modifier = this
+                fun Modifier.bugseeTag(tag: String): Modifier { println("TAG:" + tag); return this }
+                fun Modifier.bugseeSecure(): Modifier { println("SECURE"); return this }
                 """.trimIndent()
             )
+            // Each call is a shape where the 2.2+ absolute `parameters`/`arguments` indexing could
+            // pick the wrong slot: an explicit modifier, an omitted one (companion-injection path),
+            // a named argument with the modifier defaulted, a MEMBER composable (whose parameter
+            // list starts with a dispatch receiver), and a password TextField for the secure pass.
             File(fixtureDir, "App.kt").writeText(
                 """
                 package com.example.app
                 import androidx.compose.runtime.Composable
                 import androidx.compose.ui.Modifier
+                import androidx.compose.material.TextField
+                import androidx.compose.ui.text.input.PasswordVisualTransformation
 
-                @Composable fun Child(modifier: Modifier = Modifier) {}
+                @Composable fun Child(modifier: Modifier = Modifier, enabled: Boolean = true) {
+                    println("Child(enabled=" + enabled + ")")
+                }
+
+                class Holder {
+                    @Composable fun Member(modifier: Modifier = Modifier, enabled: Boolean = true) {
+                        println("Member(enabled=" + enabled + ")")
+                    }
+                }
 
                 @Composable fun Screen() {
                     Child(Modifier)
+                    Child()
+                    Child(enabled = false)
+                    Holder().Member(Modifier, false)
+                    TextField("secret", Modifier, true, PasswordVisualTransformation())
                 }
+
+                fun main() { Screen() }
                 """.trimIndent()
             )
         }
+
+        /**
+         * What a correctly instrumented build prints. Encodes tag VALUE, one injection per call site,
+         * that the secure pass fires on the password field while the tag pass skips `androidx.*`, and
+         * — via the `enabled` flags — that no argument was clobbered or swapped by the rewrite.
+         */
+        private val EXPECTED_OUTPUT = listOf(
+            "TAG:Screen", "Child(enabled=true)",
+            "TAG:Screen", "Child(enabled=true)",
+            "TAG:Screen", "Child(enabled=false)",
+            "TAG:Screen", "Member(enabled=false)",
+            "SECURE", "TextField(value=secret, enabled=true)",
+        )
     }
 }
