@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.operation_dispatch
 
+import com.bugsee.android.gradle.instrumentation.util.MinifiedClassSkip
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
@@ -20,6 +21,14 @@ abstract class OperationDispatchClassVisitorFactory :
         classContext: ClassContext,
         nextClassVisitor: ClassVisitor
     ): ClassVisitor {
+        // R8-optimised classes are left completely untouched: rewriting them is the
+        // largest single source of VerifyError / dexing failures in comparable plugins,
+        // and InstrumentationScope.ALL puts third-party AARs in our path. Fails open —
+        // see MinifiedClassSkip.
+        if (MinifiedClassSkip.shouldSkip(nextClassVisitor)) {
+            return nextClassVisitor
+        }
+
         // SDK presence is verified once at configuration time in
         // OperationDispatchInstrumentation.shouldApply
         // (DependencyDetector.hasBugseeDependency). Do NOT re-probe per-class via

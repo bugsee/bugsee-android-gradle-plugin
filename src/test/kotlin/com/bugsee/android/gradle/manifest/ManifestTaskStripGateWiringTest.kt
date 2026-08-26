@@ -1,5 +1,7 @@
 package com.bugsee.android.gradle.manifest
 
+import org.junit.Assert.assertFalse
+import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.BugseePlugin
 import com.bugsee.android.gradle.BugseePluginExtension
@@ -108,6 +110,7 @@ class ManifestTaskStripGateWiringTest {
         instrumentationGloballyEnabled: Boolean,
         excludes: Set<String> = emptySet(),
         dslOptimize: Boolean = true,
+        declaredSdkVersion: BugseeSdkVersion? = BugseeSdkVersion.parse("7.1.3"),
     ): Boolean {
         val project = ProjectBuilder.builder().build()
         project.plugins.apply(BugseePlugin::class.java)
@@ -122,15 +125,28 @@ class ManifestTaskStripGateWiringTest {
             Variant::class.java,
             BugseePluginExtension::class.java,
             String::class.java,
+            BugseeSdkVersion::class.java,
             Boolean::class.javaPrimitiveType,
         ).apply { isAccessible = true }
 
         @Suppress("UNCHECKED_CAST")
         val provider = method.invoke(
-            plugin, project, fakeVariant("debug"), extension, "Debug", instrumentationGloballyEnabled,
+            plugin, project, fakeVariant("debug"), extension, "Debug",
+            declaredSdkVersion, instrumentationGloballyEnabled,
         ) as TaskProvider<BugseeManifestTask>
 
         return provider.get().optimizeExtensionsLoading.get()
+    }
+
+    @Test
+    fun `strip is disarmed when the declared SDK predates the initializeExtensions hook`() {
+        assertFalse(
+            "the call site must pass the declared SDK version through to the gate",
+            resolveStripFlag(
+                instrumentationGloballyEnabled = true,
+                declaredSdkVersion = BugseeSdkVersion.parse("7.0.0-beta10"),
+            )
+        )
     }
 
     /**

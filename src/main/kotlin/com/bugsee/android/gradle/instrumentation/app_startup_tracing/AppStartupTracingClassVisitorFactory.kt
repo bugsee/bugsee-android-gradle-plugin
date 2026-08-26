@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
+import com.bugsee.android.gradle.instrumentation.util.MinifiedClassSkip
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.bugsee.android.gradle.StartupTier
 import com.android.build.api.instrumentation.ClassContext
@@ -66,6 +67,14 @@ abstract class AppStartupTracingClassVisitorFactory :
         classContext: ClassContext,
         nextClassVisitor: ClassVisitor
     ): ClassVisitor {
+        // R8-optimised classes are left completely untouched: rewriting them is the
+        // largest single source of VerifyError / dexing failures in comparable plugins,
+        // and InstrumentationScope.ALL puts third-party AARs in our path. Fails open —
+        // see MinifiedClassSkip.
+        if (MinifiedClassSkip.shouldSkip(nextClassVisitor)) {
+            return nextClassVisitor
+        }
+
         val params = parameters.get()
         val dispatcherClassFqn = params.targetClass.get()
 

@@ -9,6 +9,8 @@ import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
+import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
+import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.manifest.ExtensionStripGate
 import com.bugsee.android.gradle.manifest.BugseeAssetInjectionTask
 import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
@@ -271,6 +273,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
             val instrumentationGloballyEnabled = configResolver.isGloballyEnabled()
 
+            // Resolved here for the same reason as the flag above: the manifest task's
+            // provider-stripping must key on every precondition the compensating
+            // ExtensionsInit injection has, and that injection rewrites a method
+            // (`initializeExtensions`) which only exists from a certain SDK release.
+            val declaredSdkVersion = BugseeSdkVersion.parse(
+                DependencyDetector.getBugseeDependencyVersion(project, "bugsee-android")
+            )
+
 
 
             // --- Manifest UUID injection + extension provider stripping ---
@@ -279,6 +289,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             val manifestTaskProvider = registerManifestTask(
                 project, variant, extension, capitalizedVariant,
                 instrumentationGloballyEnabled = instrumentationGloballyEnabled,
+                declaredSdkVersion = declaredSdkVersion,
             )
 
             // --- BUILD_UUID resolve + asset injection (post-R8) ---
@@ -346,6 +357,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         extension: BugseePluginExtension,
         capitalizedVariant: String,
         /**
+         * The consumer's declared `com.bugsee:bugsee-android` version, or null when it
+         * cannot be parsed. Also an [ExtensionStripGate] precondition: the compensating
+         * injection rewrites a method that only exists from a certain SDK release, so
+         * stripping against an older SDK would leave extensions with neither a provider
+         * nor a registration call.
+         */
+        declaredSdkVersion: BugseeSdkVersion?,
+        /**
          * Whether bytecode instrumentation is globally enabled. Combined with
          * the `optimizeExtensionsLoading` DSL flag and the user's excludes via
          * [ExtensionStripGate]: stripping extension `<provider>`s is only
@@ -365,6 +384,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                         optimizeExtensionsLoading = dslOptimize,
                         instrumentationGloballyEnabled = instrumentationGloballyEnabled,
                         excludes = extension.instrumentation.excludes.getOrElse(emptySet()),
+                        sdkVersion = declaredSdkVersion,
                     )
                 }
             )

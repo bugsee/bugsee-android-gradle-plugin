@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.compose_input
 
+import com.bugsee.android.gradle.instrumentation.util.MinifiedClassSkip
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
@@ -31,6 +32,14 @@ abstract class ComposeInputClassVisitorFactory :
         classContext: ClassContext,
         nextClassVisitor: ClassVisitor
     ): ClassVisitor {
+        // R8-optimised classes are left completely untouched: rewriting them is the
+        // largest single source of VerifyError / dexing failures in comparable plugins,
+        // and InstrumentationScope.ALL puts third-party AARs in our path. Fails open —
+        // see MinifiedClassSkip.
+        if (MinifiedClassSkip.shouldSkip(nextClassVisitor)) {
+            return nextClassVisitor
+        }
+
         // Do NOT re-probe per-class via [ClassContext.loadClassData] for the
         // adapter class here. AGP processes project classes and external-JAR
         // classes through DIFFERENT artifact-transform isolation boundaries,
