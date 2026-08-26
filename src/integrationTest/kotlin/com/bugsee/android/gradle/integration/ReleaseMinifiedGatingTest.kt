@@ -3,7 +3,6 @@ package com.bugsee.android.gradle.integration
 import com.bugsee.android.gradle.integration.harness.FixtureProject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -51,9 +50,9 @@ import java.io.File
  * A log line at the top of the launcher activity's `onCreate` never printed:
  * no application code runs at all. Unconditional, first-launch, every user.
  *
- * Both tests below assert the CORRECT post-fix behaviour and are `@Ignore`d
- * because C12 is not fixed yet. Removing the annotations is how the fix gets
- * validated; neither test should need editing.
+ * Both tests below assert the CORRECT post-fix behaviour. They were written
+ * against the unfixed plugin and failed exactly as described above; they now
+ * pass unchanged, with variant-scoped dependency detection in place.
  */
 class ReleaseMinifiedGatingTest {
 
@@ -61,7 +60,6 @@ class ReleaseMinifiedGatingTest {
     val temp = TemporaryFolder()
 
     @Test
-    @Ignore("C12 unfixed: R8 currently fails with 'Missing class BugseeAppStartupDispatcher'.")
     fun `a minified release without the SDK builds cleanly`() {
         val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("bt"))
         val (ok, out) = fixture.runTasksAllowingFailure(
@@ -76,7 +74,6 @@ class ReleaseMinifiedGatingTest {
     }
 
     @Test
-    @Ignore("C12 unfixed: the shipped APK currently carries 53 dispatcher call sites.")
     fun `a minified release APK carries no Bugsee references at all`() {
         val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("bt"))
         val (ok, out) = fixture.runTasksAllowingFailure(

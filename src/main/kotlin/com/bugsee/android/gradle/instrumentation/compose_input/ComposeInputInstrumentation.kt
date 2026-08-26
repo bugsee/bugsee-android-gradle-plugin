@@ -37,11 +37,11 @@ internal class ComposeInputInstrumentation : Instrumentation {
      */
     private var hostProject: Project? = null
 
-    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean, scope: Set<String>?): Boolean {
         hostProject = project
         // Needs the core SDK (adapter class) AND a Compose UI dependency.
         // The Compose requirement still stands even when the core is auto-loaded.
-        return (coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")) &&
+        return (coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android", null, scope)) &&
                 hasComposeDependency(project)
     }
 

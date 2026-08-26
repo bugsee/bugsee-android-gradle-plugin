@@ -38,8 +38,14 @@ internal interface Instrumentation {
      *   gated solely on the core SDK must therefore treat it as present when
      *   this is `true`; extension-gated instrumentations (OkHttp, Compose, …)
      *   ignore it and keep requiring their own dependency.
+     * @param scope the configuration names feeding the RUNTIME classpath of
+     *   the variant being instrumented. Implementations MUST forward it to
+     *   [DependencyDetector.hasBugseeDependency]: without it a build-type- or
+     *   flavor-scoped SDK dependency is seen by every variant, and a variant
+     *   whose runtime classpath lacks the SDK gets instrumented against absent
+     *   classes — a launch-time `NoClassDefFoundError`.
      */
-    fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean
+    fun shouldApply(project: Project, coreSdkAutoLoad: Boolean, scope: Set<String>?): Boolean
 
     /**
      * Registers the ASM class visitor factory with the given variant.

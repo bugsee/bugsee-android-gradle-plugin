@@ -37,17 +37,26 @@ internal object DependencyDetector {
      * @param project        the project whose dependency graph to scan
      * @param artifactPrefix prefix for the maven artifact name (e.g. `"bugsee-android"`)
      * @param projectName    if non-null, only match Bugsee project dependencies with this module name
+     * @param scope          if non-null, only inspect configurations whose name is
+     *   in this set — the configurations that feed one variant's RUNTIME
+     *   classpath. Callers instrumenting a specific variant MUST pass it:
+     *   without it a `debugImplementation` SDK dependency answers `true` for
+     *   release, and release bytecode gets instrumented against a class that is
+     *   not on its runtime classpath (a launch-time `NoClassDefFoundError`).
+     *   `null` preserves the legacy all-configurations scan.
      */
     fun hasBugseeDependency(
         project: Project,
         artifactPrefix: String,
-        projectName: String? = null
-    ): Boolean = hasBugseeDependency(project, artifactPrefix, projectName, HashSet())
+        projectName: String? = null,
+        scope: Set<String>? = null,
+    ): Boolean = scan(project, artifactPrefix, projectName, scope, HashSet())
 
-    private fun hasBugseeDependency(
+    private fun scan(
         project: Project,
         artifactPrefix: String,
         projectName: String?,
+        scope: Set<String>?,
         visited: MutableSet<String>
     ): Boolean {
         // Cycle guard: project graphs can contain cycles in test/edge setups.
@@ -55,6 +64,9 @@ internal object DependencyDetector {
             return false
         }
         return project.configurations.any { config ->
+            // A null scope means "every configuration" — the legacy behaviour
+            // every non-variant caller still relies on.
+            if (scope != null && config.name !in scope) return@any false
             config.dependencies.any { dep ->
                 when {
                     isMatchingExternal(dep, artifactPrefix) -> true
@@ -65,8 +77,15 @@ internal object DependencyDetector {
                     // -> com.bugsee:bugsee-android).
                     dep is ProjectDependency ->
                         ProjectDependencyCompat.targetProject(project, dep)?.let { target ->
-                            hasBugseeDependency(
-                                evaluated(project, target), artifactPrefix, projectName, visited
+                            // Deliberately UNSCOPED past a module boundary: a
+                            // variant of this project does not map onto any
+                            // particular variant of a module it depends on.
+                            // Over-detection here preserves the wrapper/KMP case
+                            // that transitive detection exists for; the edge
+                            // into the module was already scope-checked above.
+                            scan(
+                                evaluated(project, target),
+                                artifactPrefix, projectName, null, visited
                             )
                         } ?: false
                     else -> false

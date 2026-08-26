@@ -3,7 +3,6 @@ package com.bugsee.android.gradle.integration
 import com.bugsee.android.gradle.integration.harness.FixtureProject
 import com.bugsee.android.gradle.integration.harness.InstrumentedBytecodeIndex
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -37,12 +36,6 @@ class BuildTypeGatingTest {
     val temp = TemporaryFolder()
 
     @Test
-    @Ignore(
-        "C12 — PINNED REPRO OF A CONFIRMED, UNFIXED DEFECT. This test FAILS today " +
-            "on purpose: release is instrumented with 36 dispatcher calls despite " +
-            "not declaring the SDK. Ignored only so an open defect does not red CI. " +
-            "Remove @Ignore as part of the C12 fix — it should then pass unchanged.",
-    )
     fun `a debug-only SDK dependency does not leak instrumentation into release`() {
         val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("bt"))
 
@@ -67,7 +60,11 @@ class BuildTypeGatingTest {
             releaseResult.output.contains("BUILD SUCCESSFUL"),
         )
 
-        val releaseIndex = InstrumentedBytecodeIndex.walk(fixture.projectDir, variant = "release")
+        // walkOrEmpty, not walk: when the gate is correct, release registers no
+        // instrumentation at all and AGP never creates the post-transform
+        // classes directory. That absence IS the pass condition, not an error.
+        val releaseIndex = InstrumentedBytecodeIndex
+            .walkOrEmpty(fixture.projectDir, variant = "release")
             .totalDispatcherCalls()
         assertTrue(
             "RELEASE was instrumented despite not declaring the SDK: found " +

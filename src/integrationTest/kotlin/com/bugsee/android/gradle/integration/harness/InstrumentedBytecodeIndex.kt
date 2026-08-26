@@ -112,6 +112,23 @@ internal object InstrumentedBytecodeIndex {
      * `intermediates/classes/<variant>/` and picks up every `.class`
      * file and `.jar` containing `.class` entries.
      */
+    /**
+     * Like [walk], but returns an EMPTY index when the post-transform classes
+     * directory does not exist, instead of throwing.
+     *
+     * Absence is a legitimate, expected outcome for a variant that registers no
+     * instrumentation at all: AGP only creates
+     * `intermediates/classes/<variant>` when some transform actually runs. Use
+     * this only where "nothing was instrumented" is the assertion being made —
+     * [walk] deliberately keeps throwing, so a test that EXPECTS instrumentation
+     * still fails loudly if the transform silently never ran.
+     */
+    fun walkOrEmpty(projectDir: File, module: String = "app", variant: String = "debug"): Index {
+        val classesRoot = File(File(projectDir, "$module/build/intermediates"), "classes/$variant")
+        if (!classesRoot.isDirectory) return Index(emptyMap(), emptySet())
+        return walk(projectDir, module, variant)
+    }
+
     fun walk(projectDir: File, module: String = "app", variant: String = "debug"): Index {
         val intermediates = File(projectDir, "$module/build/intermediates")
         require(intermediates.isDirectory) {

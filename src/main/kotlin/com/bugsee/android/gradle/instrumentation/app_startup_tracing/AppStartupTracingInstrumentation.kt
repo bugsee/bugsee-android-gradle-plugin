@@ -62,12 +62,12 @@ internal class AppStartupTracingInstrumentation(
      */
     private var hostProject: Project? = null
 
-    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean, scope: Set<String>?): Boolean {
         hostProject = project
         if (configResolver.resolveStartupTier() == StartupTier.OFF) {
             return false
         }
-        if (!DependencyDetector.hasBugseeDependency(project, "bugsee-android")) {
+        if (!DependencyDetector.hasBugseeDependency(project, "bugsee-android", null, scope)) {
             // No declared core SDK. Apply only when the plugin will auto-add it.
             // The auto-add floor (MIN_SDK_VERSION) is always >= the version that
             // first ships BugseeAppStartupDispatcher, so the version gate below

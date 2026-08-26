@@ -14,7 +14,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * BUG-2 regression coverage for `Instrumentation.shouldApply(project, coreSdkAutoLoad)`.
+ * BUG-2 regression coverage for `Instrumentation.shouldApply(project, coreSdkAutoLoad, null)`.
  *
  * A plugin-only app declares NO `com.bugsee:*` dependency — the plugin auto-adds
  * the core SDK in a later `withDependencies` pass. At instrumentation-gating time
@@ -50,32 +50,32 @@ class InstrumentationCoreSdkAutoLoadTest {
 
     @Test fun `core instrumentations skipped when no dep and no auto-load`() {
         coreInstrumentations.forEach {
-            assertFalse(it.name, it.shouldApply(project, false))
+            assertFalse(it.name, it.shouldApply(project, false, null))
         }
     }
 
     @Test fun `core instrumentations apply when core SDK will be auto-loaded`() {
         // No declared bugsee dependency, but the plugin will auto-add the core.
         coreInstrumentations.forEach {
-            assertTrue(it.name, it.shouldApply(project, true))
+            assertTrue(it.name, it.shouldApply(project, true, null))
         }
     }
 
     @Test fun `core instrumentations apply when core SDK declared explicitly`() {
         declare("com.bugsee:bugsee-android:7.0.0-beta14")
         coreInstrumentations.forEach {
-            assertTrue(it.name, it.shouldApply(project, false))
+            assertTrue(it.name, it.shouldApply(project, false, null))
         }
     }
 
     @Test fun `okhttp instrumentation ignores core auto-load`() {
         // Extension-gated: core auto-load alone must NOT enable OkHttp — it
         // needs the okhttp extension AAR (whose interceptor it injects).
-        assertFalse(OkHttpInstrumentation().shouldApply(project, true))
+        assertFalse(OkHttpInstrumentation().shouldApply(project, true, null))
     }
 
     @Test fun `okhttp instrumentation applies when okhttp extension declared`() {
         declare("com.bugsee:bugsee-android-okhttp:7.0.0-beta14")
-        assertTrue(OkHttpInstrumentation().shouldApply(project, false))
+        assertTrue(OkHttpInstrumentation().shouldApply(project, false, null))
     }
 }

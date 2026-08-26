@@ -28,9 +28,9 @@ internal class OperationDispatchInstrumentation : Instrumentation {
      */
     private var hostProject: Project? = null
 
-    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean, scope: Set<String>?): Boolean {
         hostProject = project
-        return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android")
+        return coreSdkAutoLoad || DependencyDetector.hasBugseeDependency(project, "bugsee-android", null, scope)
     }
 
     override fun apply(variant: Variant, excludes: Set<String>) {

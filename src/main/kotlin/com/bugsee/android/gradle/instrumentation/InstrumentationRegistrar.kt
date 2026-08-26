@@ -49,7 +49,52 @@ internal class InstrumentationRegistrar(
         AppStartupTracingInstrumentation(configResolver)
     ) + extras
 
+    /**
+     * Configuration names that feed [variant]'s compile and runtime
+     * classpaths, taken from their `extendsFrom` hierarchies — which AGP builds from
+     * the variant's own source sets, so this covers base, build-type, flavor
+     * and full-variant configurations without hardcoding AGP's naming.
+     *
+     * Reading `hierarchy` walks `extendsFrom` only; it does NOT resolve the
+     * configuration, so this stays safe at configuration time and keeps the
+     * detector's "declared dependencies only" contract intact.
+     *
+     * Deliberately the UNION of the compile and runtime hierarchies rather than
+     * runtime alone. Runtime alone would be the stricter reading — an injected
+     * reference has to resolve at runtime, so a `compileOnly` SDK cannot satisfy
+     * it — but that also silently disables instrumentation for a library module
+     * that compiles against Bugsee and relies on the consuming app to supply it
+     * at runtime, which works today. That is a separate behaviour change with
+     * its own regression surface; this fix addresses only the VARIANT
+     * dimension, so `debugCompileOnly` still enables debug and now correctly
+     * leaves release alone.
+     *
+     * Returns `null` if AGP does not hand us a usable configuration, which
+     * falls back to the legacy all-configurations scan rather than silently
+     * disabling every instrumentation.
+     */
+    private fun variantScopeOf(variant: Variant): Set<String>? = try {
+        val names = HashSet<String>()
+        variant.compileConfiguration.hierarchy.mapTo(names) { it.name }
+        variant.runtimeConfiguration.hierarchy.mapTo(names) { it.name }
+        // An empty scope would match NOTHING and silently disable every
+        // instrumentation for this variant. If AGP ever hands back an empty
+        // hierarchy we do not know the variant's configurations, which is the
+        // same state as the catch below — degrade to the legacy unscoped scan
+        // and say so, rather than failing silent.
+        if (names.isEmpty()) {
+            logger.warn("Bugsee: variant ${variant.name} reported no configurations; falling back to an unscoped dependency scan")
+            null
+        } else {
+            names
+        }
+    } catch (t: Throwable) {
+        logger.warn("Bugsee: could not resolve variant configuration scope for ${variant.name}; falling back to an unscoped dependency scan", t)
+        null
+    }
+
     fun applyAll(variant: Variant) {
+        val scope = variantScopeOf(variant)
         for (instrumentation in instrumentations) {
             // Tier-driven instrumentations (e.g. AppStartupTracing) own
             // their disable logic via shouldApply; routing them through
@@ -65,7 +110,7 @@ internal class InstrumentationRegistrar(
             // Each instrumentation decides whether the core SDK counts as
             // present given the pending auto-add (see [coreSdkAutoLoad]).
             // Extension-gated entries (OkHttp, Compose, …) ignore the flag.
-            val applies = instrumentation.shouldApply(project, coreSdkAutoLoad)
+            val applies = instrumentation.shouldApply(project, coreSdkAutoLoad, scope)
             if (applies) {
                 if (debug) logger.warn("Bugsee: Applying ${instrumentation.name} instrumentation to variant ${variant.name}")
                 instrumentation.apply(variant, excludes)

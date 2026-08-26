@@ -44,11 +44,11 @@ internal class OkHttpInstrumentation : Instrumentation {
      */
     private var hostProject: Project? = null
 
-    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean): Boolean {
+    override fun shouldApply(project: Project, coreSdkAutoLoad: Boolean, scope: Set<String>?): Boolean {
         hostProject = project
         // Extension-gated: requires the okhttp extension AAR specifically, so
         // core-SDK auto-load alone does not enable it.
-        return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp")
+        return DependencyDetector.hasBugseeDependency(project, "bugsee-android-okhttp", "okhttp", scope)
     }
 
     /**

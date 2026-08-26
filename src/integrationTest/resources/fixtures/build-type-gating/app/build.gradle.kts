@@ -86,11 +86,12 @@ dependencies {
     // This is the shape a consumer uses when Bugsee ships in debug builds but not in
     // release — including the customer whose report started this investigation.
     //
-    // DependencyDetector.hasBugseeDependency scans project.configurations.any { },
-    // i.e. EVERY configuration rather than the variant's, so the gate answers true for
-    // release too. If nothing downstream re-checks per variant, release bytecode gets
-    // Bugsee calls injected against a class that is not on its runtime classpath.
-    debugCompileOnly("com.bugsee:bugsee-android:99.0.0")
+    // `debugImplementation`, not `debugCompileOnly`: the SDK is genuinely on
+    // debug's RUNTIME classpath and genuinely absent from release's, which is
+    // the consumer shape this gate has to get right. (A `compileOnly` SDK is
+    // absent at runtime for EVERY variant, so post-fix it correctly enables
+    // nothing — which would make this fixture prove nothing about scoping.)
+    debugImplementation("com.bugsee:bugsee-android:99.0.0")
     implementation("androidx.startup:startup-runtime:1.1.1")
 }
 
