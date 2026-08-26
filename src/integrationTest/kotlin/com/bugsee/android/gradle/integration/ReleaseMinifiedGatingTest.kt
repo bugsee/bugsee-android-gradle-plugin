@@ -29,9 +29,27 @@ import java.io.File
  *  - WITH the `-dontwarn` that AGP's own `missing_rules.txt` instructs the
  *    consumer to add: the build SUCCEEDS and ships an APK containing 53
  *    `invoke-static` call sites to `BugseeAppStartupDispatcher` and ZERO
- *    Bugsee class definitions — a guaranteed `NoClassDefFoundError` during
- *    provider creation / `Application.attachBaseContext`, i.e. on launch,
- *    for every user, before any app code runs.
+ *    Bugsee class definitions.
+ *
+ * That last APK was signed, installed on an API 35 emulator and launched
+ * (2026-08-26). It dies before `Application.onCreate`, inside the framework's
+ * own `Application.attach`:
+ *
+ * ```
+ * FATAL EXCEPTION: main
+ * java.lang.NoClassDefFoundError: Failed resolution of:
+ *     Lcom/bugsee/library/adapters/BugseeAppStartupDispatcher;
+ *   at com.example.fixture.SampleApp.attachBaseContext(SourceFile:5)
+ *   at android.app.Application.attach(Application.java:346)
+ *   at android.app.Instrumentation.newApplication(Instrumentation.java:1244)
+ *   at android.app.LoadedApk.makeApplicationInner(LoadedApk.java:1458)
+ *   at android.app.ActivityThread.handleBindApplication(ActivityThread.java:6772)
+ * Caused by: java.lang.ClassNotFoundException:
+ *     com.bugsee.library.adapters.BugseeAppStartupDispatcher
+ * ```
+ *
+ * A log line at the top of the launcher activity's `onCreate` never printed:
+ * no application code runs at all. Unconditional, first-launch, every user.
  *
  * Both tests below assert the CORRECT post-fix behaviour and are `@Ignore`d
  * because C12 is not fixed yet. Removing the annotations is how the fix gets
