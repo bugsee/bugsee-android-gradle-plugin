@@ -71,13 +71,22 @@ internal object AsmTestHarness {
      * Throws nothing; tests should call [VerifyResult.assertOk] to fail
      * with a readable message including the offending class/method.
      */
-    fun verify(bytes: ByteArray): VerifyResult {
+    /**
+     * @param syntheticTypes internal-name -> super-internal-name for classes that are not
+     *   on the test classpath (`android.*`, mostly). Verification resolves reference types
+     *   through a ClassLoader, so without these the analyzer stops at
+     *   `ClassNotFoundException` before it can check anything — and a stub extending
+     *   `Object` is not enough, because assignability (`AndroidComposeView` -> `View`)
+     *   is exactly what the dataflow check tests. Anything missing and not listed is
+     *   generated extending `Object`.
+     */
+    fun verify(bytes: ByteArray, syntheticTypes: Map<String, String> = emptyMap()): VerifyResult {
         val reader = ClassReader(bytes)
 
         // 1. JVM-level structural / verifier check.
         val checkOutput = StringWriter()
         try {
-            CheckClassAdapter.verify(reader, false, PrintWriter(checkOutput))
+            CheckClassAdapter.verify(reader, generatingLoader(syntheticTypes), false, PrintWriter(checkOutput))
         } catch (t: Throwable) {
             return VerifyResult(
                 checkAdapterOutput = checkOutput.toString(),
@@ -97,8 +106,7 @@ internal object AsmTestHarness {
         val cn = ClassNode()
         reader.accept(cn, ClassReader.EXPAND_FRAMES)
         val analyzerErrors = mutableListOf<AnalyzerMethodError>()
-        val verifierClassLoader: ClassLoader =
-            Thread.currentThread().contextClassLoader
+        val verifierClassLoader: ClassLoader = generatingLoader(syntheticTypes)
                 ?: AsmTestHarness::class.java.classLoader
 
         val currentClass = Type.getObjectType(cn.name)
@@ -195,4 +203,33 @@ internal object AsmTestHarness {
         val descriptor: String,
         val cause: AnalyzerException,
     )
+
+    /**
+     * A ClassLoader that fabricates any class it cannot find, so bytecode referencing
+     * `android.*` can be verified without the Android SDK on the test classpath.
+     *
+     * Generated classes are empty and non-final; [syntheticTypes] supplies the supertype
+     * where the hierarchy matters. This mirrors the "generating missing classes" loader
+     * comparable plugins use for the same reason.
+     */
+    private fun generatingLoader(syntheticTypes: Map<String, String>): ClassLoader =
+        object : ClassLoader(Thread.currentThread().contextClassLoader) {
+            private val generated = mutableMapOf<String, Class<*>>()
+
+            override fun findClass(name: String): Class<*> {
+                generated[name]?.let { return it }
+                val internal = name.replace('.', '/')
+                val superInternal = syntheticTypes[internal] ?: "java/lang/Object"
+                // Ensure the supertype exists first, so a chain resolves.
+                if (superInternal != "java/lang/Object") {
+                    loadClass(superInternal.replace('/', '.'))
+                }
+                val cw = ClassWriter(0)
+                cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, internal, null, superInternal, null)
+                cw.visitEnd()
+                val bytes = cw.toByteArray()
+                return defineClass(name, bytes, 0, bytes.size).also { generated[name] = it }
+            }
+        }
+
 }
