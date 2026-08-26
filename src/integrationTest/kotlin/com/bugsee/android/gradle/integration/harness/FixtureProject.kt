@@ -194,6 +194,38 @@ internal class FixtureProject private constructor(
         return runner.buildAndFail()
     }
 
+    /**
+     * Runs [tasks] and returns `(succeeded, combinedOutput)` WITHOUT
+     * asserting either way. Needed when the outcome is the thing under
+     * investigation — e.g. "does R8 fail, strip, or retain a call to a
+     * class that is missing from this variant's classpath?" — where
+     * both [build] (asserts success) and [buildAndFail] (asserts
+     * failure) would bake in the answer being sought.
+     */
+    fun runTasksAllowingFailure(
+        tasks: List<String>,
+        vararg extraArgs: String,
+    ): Pair<Boolean, String> {
+        require(tasks.isNotEmpty()) { "must run at least one task" }
+        val args = mutableListOf<String>().apply {
+            addAll(tasks)
+            add("-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}")
+            add("-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}")
+            add("--stacktrace")
+            addAll(extraArgs)
+        }
+        val runner = GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withArguments(args)
+            .withEnvironment(testKitEnvironment())
+            .forwardOutput()
+        return try {
+            true to runner.build().output
+        } catch (e: org.gradle.testkit.runner.UnexpectedBuildFailure) {
+            false to e.buildResult.output
+        }
+    }
+
     /** Walks AGP's post-transform intermediates and indexes dispatcher calls. */
     fun indexBytecode(): InstrumentedBytecodeIndex.Index {
         return InstrumentedBytecodeIndex.walk(projectDir)

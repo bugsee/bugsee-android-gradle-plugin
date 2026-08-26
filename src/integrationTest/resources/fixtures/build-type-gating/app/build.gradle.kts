@@ -34,7 +34,20 @@ android {
         // what is under test here — the question is whether the transform runs at all
         // for a variant whose classpath lacks the SDK.
         getByName("release") {
-            isMinifyEnabled = false
+            // Opt-in R8 so the "does R8 strip / fail / retain the injected
+            // calls?" question can be answered empirically. Deliberately NO
+            // -dontwarn for com.bugsee.**: the SDK's consumer ProGuard rules
+            // are not on the release classpath either (the SDK is a debug-only
+            // dependency), so a release build in this shape genuinely has no
+            // suppression for the injected references.
+            isMinifyEnabled =
+                project.findProperty("bugseeFixtureMinifyRelease")?.toString() == "true"
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            // Opt-in: simulates a consumer applying AGP's own
+            // missing_rules.txt suggestion.
+            if (project.findProperty("bugseeFixtureDontwarn")?.toString() == "true") {
+                proguardFiles("dontwarn-bugsee.pro")
+            }
         }
     }
 

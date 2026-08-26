@@ -1,0 +1,101 @@
+package com.bugsee.android.gradle.integration
+
+import com.bugsee.android.gradle.integration.harness.FixtureProject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Ignore
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+
+/**
+ * C12, minified half: what R8 does with instrumentation leaked into a release
+ * variant that does not declare the SDK.
+ *
+ * A reasonable hope is that R8 simply strips the injected calls as dead code.
+ * Measured (2026-08-26, AGP 8.6.0, `debugCompileOnly` SDK dependency), it does
+ * that only for calls in code that is already unreachable — the injected
+ * `BugseeOperationDispatcher` calls in an uncalled helper were shrunk away and
+ * never surfaced. That is no help in practice, because instrumentation targets
+ * `Application` / `ContentProvider` / init classes, which are exactly the
+ * always-reachable ones. For those, two outcomes were observed:
+ *
+ *  - WITHOUT a suppression rule: the build FAILS at `:app:minifyReleaseWithR8`
+ *    with `ERROR: R8: Missing class com.bugsee.library.adapters
+ *    .BugseeAppStartupDispatcher (referenced from: void
+ *    SampleApp.attachBaseContext(Context) and 4 other contexts)`.
+ *
+ *  - WITH the `-dontwarn` that AGP's own `missing_rules.txt` instructs the
+ *    consumer to add: the build SUCCEEDS and ships an APK containing 53
+ *    `invoke-static` call sites to `BugseeAppStartupDispatcher` and ZERO
+ *    Bugsee class definitions — a guaranteed `NoClassDefFoundError` during
+ *    provider creation / `Application.attachBaseContext`, i.e. on launch,
+ *    for every user, before any app code runs.
+ *
+ * Both tests below assert the CORRECT post-fix behaviour and are `@Ignore`d
+ * because C12 is not fixed yet. Removing the annotations is how the fix gets
+ * validated; neither test should need editing.
+ */
+class ReleaseMinifiedGatingTest {
+
+    @get:Rule
+    val temp = TemporaryFolder()
+
+    @Test
+    @Ignore("C12 unfixed: R8 currently fails with 'Missing class BugseeAppStartupDispatcher'.")
+    fun `a minified release without the SDK builds cleanly`() {
+        val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("bt"))
+        val (ok, out) = fixture.runTasksAllowingFailure(
+            listOf(":app:assembleRelease"),
+            "-PbugseeFixtureMinifyRelease=true",
+        )
+        assertTrue(
+            "R8 must not be handed references to a class this variant never declared.\n" +
+                out.lineSequence().filter { "Missing class" in it }.joinToString("\n"),
+            ok,
+        )
+    }
+
+    @Test
+    @Ignore("C12 unfixed: the shipped APK currently carries 53 dispatcher call sites.")
+    fun `a minified release APK carries no Bugsee references at all`() {
+        val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("bt"))
+        val (ok, out) = fixture.runTasksAllowingFailure(
+            listOf(":app:assembleRelease"),
+            "-PbugseeFixtureMinifyRelease=true",
+            // Simulates a consumer following AGP's missing_rules.txt advice —
+            // the path that turns a build error into a launch crash.
+            "-PbugseeFixtureDontwarn=true",
+        )
+        assertTrue("release build must succeed\n${out.takeLast(2000)}", ok)
+
+        val apk = File(fixture.projectDir, "app/build/outputs/apk/release")
+            .walkTopDown().firstOrNull { it.name.endsWith(".apk") }
+        assertTrue("no release APK produced", apk != null)
+
+        val sites = disassemble(apk!!)
+            .lineSequence()
+            .filter { "Lcom/bugsee/" in it && "invoke-" in it }
+            .toList()
+        assertEquals(
+            "the shipped APK references Bugsee classes that are not in it:\n" +
+                sites.take(5).joinToString("\n"),
+            0,
+            sites.size,
+        )
+    }
+
+    /** Returns dexdump disassembly, or skips the assertion if build-tools are absent. */
+    private fun disassemble(apk: File): String {
+        val dexdump = File(System.getProperty("user.home"), "Library/Android/sdk/build-tools")
+            .listFiles()?.sortedBy { it.name }?.lastOrNull()?.resolve("dexdump")
+        org.junit.Assume.assumeTrue(
+            "dexdump not available; this assertion needs Android build-tools",
+            dexdump != null && dexdump.canExecute(),
+        )
+        val p = ProcessBuilder(dexdump!!.absolutePath, "-d", apk.absolutePath)
+            .redirectErrorStream(true).start()
+        return p.inputStream.bufferedReader().readText()
+    }
+}
