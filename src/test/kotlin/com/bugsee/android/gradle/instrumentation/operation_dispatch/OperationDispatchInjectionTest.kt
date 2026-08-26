@@ -72,7 +72,16 @@ class OperationDispatchInjectionTest {
         val cn = ClassNode()
         ClassReader(bytes).accept(cn, 0)
         val m = cn.methods.first { it.name == methodName } as MethodNode
-        return m.instructions.toList()
+        // Drop pseudo-instructions. Labels, line numbers and frames carry no runtime
+        // behaviour, and the assertions below index relative to the guarded call
+        // (callIdx - 1, -2, -3), so leaving them in would make every shape test
+        // brittle to unrelated bookkeeping — e.g. the labels that bracket a guarded
+        // call for its exception handler.
+        return m.instructions.toList().filter {
+            it !is org.objectweb.asm.tree.LabelNode &&
+                it !is org.objectweb.asm.tree.LineNumberNode &&
+                it !is org.objectweb.asm.tree.FrameNode
+        }
     }
 
     /**

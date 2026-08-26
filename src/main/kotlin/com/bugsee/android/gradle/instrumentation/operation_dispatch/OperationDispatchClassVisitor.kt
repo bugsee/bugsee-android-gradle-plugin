@@ -2,8 +2,15 @@ package com.bugsee.android.gradle.instrumentation.operation_dispatch
 
 import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
 import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.tree.InsnNode
+import org.objectweb.asm.tree.LabelNode
+import org.objectweb.asm.tree.LdcInsnNode
+import org.objectweb.asm.tree.MethodInsnNode
+import org.objectweb.asm.tree.MethodNode
+import org.objectweb.asm.tree.TryCatchBlockNode
 
 /**
  * ClassVisitor that performs two types of bytecode transformation:
@@ -34,7 +41,7 @@ internal class OperationDispatchClassVisitor(
         // into corrupt bytecode. See CatchingMethodVisitor.
         return CatchingMethodVisitor(
             Opcodes.ASM9,
-            OperationDispatchMethodVisitor(mv),
+            OperationDispatchMethodVisitor(access, name, descriptor, signature, exceptions, mv),
             className,
             name,
             descriptor,
@@ -59,8 +66,26 @@ private data class DispatchInfo(
  * - Injects dispatcher start/end calls around database, network, and prefs operations
  */
 private class OperationDispatchMethodVisitor(
-    methodVisitor: MethodVisitor
-) : MethodVisitor(Opcodes.ASM9, methodVisitor) {
+    access: Int,
+    name: String?,
+    descriptor: String?,
+    signature: String?,
+    exceptions: Array<out String>?,
+    private val delegate: MethodVisitor,
+) : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions?.toList()?.toTypedArray()) {
+
+    /**
+     * One guarded call site: the region to protect, and what to report for it.
+     * Collected while streaming, applied in [visitEnd].
+     */
+    private class GuardedCall(
+        val start: LabelNode,
+        val end: LabelNode,
+        val handler: LabelNode,
+        val info: DispatchInfo,
+    )
+
+    private val guardedCalls = mutableListOf<GuardedCall>()
 
     /**
      * Stack of remap targets pushed by `NEW` instructions and popped
@@ -134,31 +159,118 @@ private class OperationDispatchMethodVisitor(
 
         // --- Dispatch injection for database, network, prefs ---
         val info = resolveDispatchInfo(owner, name, descriptor)
-        if (info != null) {
-            mv.visitLdcInsn(info.operation)
-            mv.visitInsn(Opcodes.ACONST_NULL)
-            mv.visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                DISPATCHER_CLASS,
-                "on${info.category}OperationStart",
-                DISPATCH_DESCRIPTOR,
-                false
-            )
+        if (info == null) {
+            super.visitMethodInsn(opcode, owner, name, descriptor, isInterface)
+            return
         }
 
+        visitLdcInsn(info.operation)
+        visitInsn(Opcodes.ACONST_NULL)
+        super.visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            DISPATCHER_CLASS,
+            "on${info.category}OperationStart",
+            DISPATCH_DESCRIPTOR,
+            false
+        )
+
+        // Layout, mirroring how javac compiles try/finally:
+        //
+        //   L0:  <guarded call>
+        //   L1:  End                (normal path)
+        //        GOTO Lafter
+        //   Lh:  End ; ATHROW       (exception path)
+        //   Lafter:
+        //
+        // The handler block is emitted INLINE here rather than appended at the end of
+        // the method, and that placement is load-bearing. Our handler rethrows, and the
+        // rethrow must still be caught by whatever user try/catch encloses this call. An
+        // exception table range is a contiguous region, so a handler parked at the end
+        // of the method sits OUTSIDE the user's range: their catch would stop catching,
+        // and we would silently break their error handling while fixing our own leak.
+        // Emitted here, the handler falls inside any user range that already covered
+        // the call.
+        val tryStart = Label()
+        val tryEnd = Label()
+        val handlerLabel = Label()
+        val afterLabel = Label()
+
+        visitLabel(tryStart)
         super.visitMethodInsn(opcode, owner, name, descriptor, isInterface)
+        visitLabel(tryEnd)
 
-        if (info != null) {
-            mv.visitLdcInsn(info.operation)
-            mv.visitInsn(Opcodes.ACONST_NULL)
-            mv.visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                DISPATCHER_CLASS,
-                "on${info.category}OperationEnd",
-                DISPATCH_DESCRIPTOR,
-                false
-            )
+        visitLdcInsn(info.operation)
+        visitInsn(Opcodes.ACONST_NULL)
+        super.visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            DISPATCHER_CLASS,
+            "on${info.category}OperationEnd",
+            DISPATCH_DESCRIPTOR,
+            false
+        )
+        visitJumpInsn(Opcodes.GOTO, afterLabel)
+
+        // Stack on entry: [throwable]. Report, then rethrow untouched — the exception's
+        // identity and propagation are unchanged. No local slot is used.
+        visitLabel(handlerLabel)
+        visitLdcInsn(info.operation)
+        visitInsn(Opcodes.ACONST_NULL)
+        super.visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            DISPATCHER_CLASS,
+            "on${info.category}OperationEnd",
+            DISPATCH_DESCRIPTOR,
+            false
+        )
+        visitInsn(Opcodes.ATHROW)
+        visitLabel(afterLabel)
+
+        guardedCalls += GuardedCall(
+            getLabelNode(tryStart),
+            getLabelNode(tryEnd),
+            getLabelNode(handlerLabel),
+            info,
+        )
+    }
+
+    /**
+     * Attaches the exception path.
+     *
+     * Previously Start and End were emitted in a straight line, so a guarded call that
+     * THREW left the method over the top of its End. The SDK's providers push a span on
+     * Start and pop it on End, so every such throw stranded an unfinished span on a
+     * ThreadLocal deque that was never released.
+     *
+     * Two details carry the correctness here:
+     *
+     * 1. **Handler ordering.** Our catch-any is inserted at index 0 of the exception
+     *    table. The JVM scans that table IN ORDER and takes the first entry whose range
+     *    and type match, so an enclosing user `catch` that appears earlier would run
+     *    INSTEAD of ours and the End would still be lost. Controlling that order is the
+     *    reason this visitor buffers into a MethodNode at all — a streaming visitor can
+     *    only append, and the reader has already emitted the user's entries by then.
+     *
+     * 2. **Range width.** Each handler covers only its own call instruction, so a throw
+     *    from surrounding user code is never intercepted, and nested guarded calls each
+     *    get their own handler rather than one swallowing another.
+     *
+     * The handler reports End and rethrows, leaving the exception's own propagation and
+     * any user handler untouched. It reads the throwable off the stack without storing
+     * it, so no local slot is added.
+     */
+    override fun visitEnd() {
+        for (call in guardedCalls) {
+            // Index 0: the JVM scans the exception table IN ORDER and runs the first
+            // entry whose range and type match. An enclosing user catch registered
+            // earlier would otherwise run INSTEAD of ours and the End would still be
+            // lost — with nothing escaping to indicate it. Controlling that order is the
+            // only reason this visitor buffers into a MethodNode: a streaming visitor
+            // can only append, and the reader has already emitted the user's entries.
+            tryCatchBlocks.add(0, TryCatchBlockNode(call.start, call.end, call.handler, null))
         }
+
+        super.visitEnd()
+        accept(delegate)
     }
 
     companion object {

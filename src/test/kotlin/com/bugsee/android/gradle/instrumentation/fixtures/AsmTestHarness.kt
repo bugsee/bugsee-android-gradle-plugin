@@ -152,6 +152,16 @@ internal object AsmTestHarness {
      * use the JDK boxed equivalents for primitives (`Int::class.javaPrimitiveType`)
      * @param args matching the [parameterTypes] count
      */
+    /**
+     * The loader used by the most recent [loadAndInvokeStatic]. Exposed so a test can
+     * read static state back out of a generated class it supplied (e.g. a recording
+     * stand-in), which must be resolved through the SAME loader the code ran in —
+     * a second loader would define a distinct class with its own statics.
+     */
+    @Volatile
+    var lastLoader: ClassLoader? = null
+        private set
+
     fun loadAndInvokeStatic(
         classBytes: Map<String, ByteArray>,
         ownerFqn: String,
@@ -160,6 +170,7 @@ internal object AsmTestHarness {
         args: Array<Any?> = emptyArray(),
     ): Any? {
         val loader = InMemoryClassLoader(classBytes)
+        lastLoader = loader
         val klass = loader.loadClass(ownerFqn)
         val method = klass.getDeclaredMethod(methodName, *parameterTypes)
         method.isAccessible = true
