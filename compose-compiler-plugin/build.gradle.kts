@@ -138,6 +138,63 @@ val variantJars = composeVariants.associate { variant ->
 }
 
 // ---------------------------------------------------------------------------
+// Default-lowering simulator — one build per modern Kotlin line
+// ---------------------------------------------------------------------------
+// A test-only compiler plugin (sources in src/simulatorModernIr + src/simulatorRegistrar*) that
+// injects the byte-exact expression Compose's default-argument lowering leaves in an OMITTED
+// `Modifier` slot, so the guard in BugseeComposeIrExtension can be exercised against the REAL
+// shape rather than a source-level `null` proxy.
+//
+// It has to be built per Kotlin line for the same reason the plugin does: it speaks the compiler's
+// IR API, and the 2.2 `parameters`/`arguments` spelling does not exist in 2.1 (the src/test twin
+// covers the k21 line from the module's own test compilation). Without these jars the
+// DEFAULT_VALUE-composite repro is only ever EXECUTED against legacyIr, and a regression in the
+// modernIr guard — the code every Kotlin 2.2-2.4 consumer runs — ships silently. That is exactly
+// how the 4.0.5 host-app crash survived its first fix attempt.
+val simulatorJars = composeVariants.associate { variant ->
+    val capitalized = variant.id.replaceFirstChar { it.uppercase() }
+    val compilerFiles = objects.fileCollection()
+        .from(configurations["kotlinCompiler$capitalized"])
+    val outputDir = layout.buildDirectory.dir("loweringSimulator/${variant.id}/classes")
+    val sourceDirs = listOf(
+        "src/simulatorModernIr/kotlin",
+        "src/simulator${variant.registrarSourceSet.replaceFirstChar { it.uppercase() }}/kotlin",
+    ).map { file(it) }
+
+    val compileTask = tasks.register<JavaExec>("compileLoweringSimulator$capitalized") {
+        group = "verification"
+        description =
+            "Compiles the Compose default-lowering simulator against Kotlin ${variant.kotlinVersion}."
+        classpath = compilerFiles
+        mainClass.set("org.jetbrains.kotlin.cli.jvm.K2JVMCompiler")
+        inputs.files(sourceDirs).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.property("kotlinVersion", variant.kotlinVersion)
+        outputs.dir(outputDir)
+        argumentProviders.add(CommandLineArgumentProvider {
+            listOf(
+                "-no-stdlib",
+                "-jvm-target", "11",
+                "-classpath", compilerFiles.asPath,
+                "-d", outputDir.get().asFile.absolutePath,
+            ) + sourceDirs.map { it.absolutePath }
+        })
+        doFirst { outputDir.get().asFile.deleteRecursively() }
+    }
+
+    val jarTask = tasks.register<Jar>("jarLoweringSimulator$capitalized") {
+        group = "verification"
+        description = "Packages the Compose default-lowering simulator for ${variant.id}."
+        archiveBaseName.set("compose-lowering-simulator")
+        archiveAppendix.set(variant.id)
+        from(compileTask.map { outputDir })
+        // The CompilerPluginRegistrar service file is what makes the jar loadable via -Xplugin.
+        from("src/simulatorModernIr/resources")
+    }
+
+    variant.id to jarTask
+}
+
+// ---------------------------------------------------------------------------
 // Cross-version verification
 // ---------------------------------------------------------------------------
 // Runs every variant through the real compiler of every Kotlin line we make a claim about. Kept in
@@ -194,6 +251,15 @@ val composeVariantMatrix by tasks.registering(Test::class) {
         inputs.file(jar).withPropertyName("variantJar.$id").withPathSensitivity(PathSensitivity.NONE)
     }
 
+    // Same contents-are-inputs reasoning as above: the simulator jars decide whether the
+    // default-lowering repro runs against the real DEFAULT_VALUE composite at all, so a change to
+    // them must re-run this suite rather than leave it UP-TO-DATE on an unchanged path string.
+    val simulatorJarFiles: Map<String, Provider<RegularFile>> =
+        simulatorJars.mapValues { (_, jarTask) -> jarTask.flatMap { it.archiveFile } }
+    simulatorJarFiles.forEach { (id, jar) ->
+        inputs.file(jar).withPropertyName("simulatorJar.$id").withPathSensitivity(PathSensitivity.NONE)
+    }
+
     // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
     // is no need to hash ~400 MB of compiler distributions on every up-to-date check.
     inputs.property("matrixKotlinVersions", matrixKotlinVersions)
@@ -204,6 +270,7 @@ val composeVariantMatrix by tasks.registering(Test::class) {
     // compiler distributions to download merely to CONFIGURE the task (e.g. on `gradle tasks`).
     jvmArgumentProviders.add(CommandLineArgumentProvider {
         variantJarFiles.map { (id, jar) -> "-Dbugsee.variantJar.$id=${jar.get().asFile.absolutePath}" } +
+            simulatorJarFiles.map { (id, jar) -> "-Dbugsee.simulatorJar.$id=${jar.get().asFile.absolutePath}" } +
             matrixClasspathFiles.map { (v, files) -> "-Dbugsee.kotlinClasspath.$v=${files.asPath}" }
     })
 

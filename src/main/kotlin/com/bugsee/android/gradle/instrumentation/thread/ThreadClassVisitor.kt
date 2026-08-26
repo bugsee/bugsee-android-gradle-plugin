@@ -9,8 +9,12 @@ import org.objectweb.asm.Opcodes
  * ClassVisitor that targets the `run()V` method and injects
  * `BugseeThreadAdapter.registerThread()` as its first instruction.
  *
- * For `HandlerThread` subclasses that don't override `run()`, a synthetic
+ * For DIRECT `HandlerThread` subclasses that don't override `run()`, a synthetic
  * `run()` method is generated that calls `registerThread()` then `super.run()`.
+ * Indirect subclasses inherit the synthetic run() generated into (or the entry
+ * injection applied to) their instrumented parent — generating another one here
+ * would risk overriding a `final run()` declared by an intermediate class,
+ * which is a load-time VerifyError (see [visitEnd]).
  *
  * Only applied to classes that implement `Runnable` or extend `Thread`
  * (filtering is done in [ThreadClassVisitorFactory.isInstrumentable]).
@@ -57,7 +61,27 @@ internal class ThreadClassVisitor(
     }
 
     override fun visitEnd() {
-        if (extendsHandlerThread && !hasRunMethod) {
+        // Only generate the synthetic run() when the IMMEDIATE superclass is
+        // android.os.HandlerThread itself. Two reasons:
+        //
+        //  1. **Correctness (VerifyError).** For `class B extends A` where
+        //     `A extends HandlerThread` declares `final void run()`, emitting
+        //     `public void run()` into B overrides a final method — the JVM/ART
+        //     rejects B at class-definition time with a VerifyError, crashing
+        //     the host app even if B is never started. The factory's ClassData
+        //     only exposes superclass NAMES, so finality of an intermediate
+        //     run() cannot be checked here; restricting generation to direct
+        //     HandlerThread subclasses sidesteps the hazard entirely
+        //     (HandlerThread.run() is known to be non-final).
+        //
+        //  2. **No coverage loss in the ordinary case.** An intermediate user
+        //     (or third-party-JAR) HandlerThread subclass is itself in scope of
+        //     this instrumentation, so IT receives the synthetic run() (or an
+        //     entry injection into its real run()); subclasses inherit it and
+        //     registerThread() still fires. Only an intermediate class the
+        //     transform never sees (android.*, or user-excluded) loses the
+        //     registration — a benign degradation, versus a load-time crash.
+        if (extendsHandlerThread && !hasRunMethod && superName == HANDLER_THREAD_INTERNAL_NAME) {
             generateSyntheticRun()
         }
         super.visitEnd()
@@ -129,3 +153,6 @@ private class ThreadRunMethodVisitor(
 
 private const val BUGSEE_THREAD_ADAPTER_CLASS =
     "com/bugsee/library/adapters/BugseeThreadAdapter"
+
+/** Internal name of the only superclass a synthetic run() is generated under. */
+private const val HANDLER_THREAD_INTERNAL_NAME = "android/os/HandlerThread"

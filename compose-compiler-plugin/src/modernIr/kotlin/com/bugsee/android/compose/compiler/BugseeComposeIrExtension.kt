@@ -13,7 +13,10 @@ import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.expressions.IrCall
+import org.jetbrains.kotlin.ir.expressions.IrComposite
+import org.jetbrains.kotlin.ir.expressions.IrConst
 import org.jetbrains.kotlin.ir.expressions.IrExpression
+import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.classFqName
@@ -262,6 +265,25 @@ private class BugseeComposeTransformer(
         configureCall: (DeclarationIrBuilder, IrCall) -> Unit
     ) {
         val currentModifierArg = call.arguments.getOrNull(modifierParamIndex)
+        // A null-at-runtime argument here is NOT a user-supplied Modifier. It is what
+        // Compose's default-argument lowering leaves behind for an omitted `modifier`
+        // — an IrComposite(origin = DEFAULT_VALUE) wrapping a null constant (see
+        // isDefaultedOrNullArgument for the verified shape per compiler version) —
+        // paired with a $default bit telling the callee to substitute the default. If
+        // that lowering ran before this transform, chaining onto it emitted
+        // `null.bugseeTag(...)`, and the non-null receiver's intrinsic check crashed the
+        // host app at runtime with
+        //   "Parameter specified as non-null is null: ... parameter <this>"
+        // — reported against 4.0.5 after 154 sites were injected into one app.
+        //
+        // Skip the site rather than substituting the companion: the callee's $default
+        // fixup overwrites whatever we pass, so an injected chain there is dead code
+        // that cannot tag anything. Sites where the argument is genuinely ABSENT (this
+        // transform running first) are unaffected and still get the companion below.
+        if (currentModifierArg != null && currentModifierArg.isDefaultedOrNullArgument()) {
+            return
+        }
+
         val builder = DeclarationIrBuilder(
             pluginContext, call.symbol, call.startOffset, call.endOffset
         )
@@ -416,4 +438,37 @@ private class BugseeComposeTransformer(
             "androidx.compose.foundation.text2.BasicTextField"
         )
     }
+}
+
+/**
+ * True when [this] argument slot carries no real user-supplied Modifier at
+ * runtime. Two shapes qualify:
+ *
+ *  1. A literal `null` constant ([IrConst] with value `null`) — a source-level
+ *     `null` for a nullable parameter, or a lowering that strips the wrapper.
+ *  2. The shape Compose's default-argument lowering
+ *     (`ComposerParamTransformer.defaultArgumentFor`) synthesizes for an
+ *     OMITTED parameter: an [IrComposite] with origin
+ *     [IrStatementOrigin.DEFAULT_VALUE] wrapping the type's default value —
+ *     which for a reference type like `Modifier` is a `null` constant.
+ *     Verified against kotlin-compose-compiler-plugin-embeddable 2.1.0,
+ *     2.2.10, 2.3.0 and 2.4.0: all four build exactly
+ *     `IrCompositeImpl(offsets, type, DEFAULT_VALUE, listOf(defaultValue))`.
+ *     A bare `IrConst`-only check does NOT match this shape — that gap is
+ *     what kept the 4.0.5 `null.bugseeTag(...)` crash alive after the first
+ *     fix attempt.
+ *
+ * The origin-less composite-of-null branch is defensive against future origin
+ * changes: for a `Modifier` slot anything null at runtime is a defaulted slot,
+ * and wrongly skipping costs a missed tag while wrongly chaining costs an NPE
+ * in the host app.
+ */
+private fun IrExpression.isDefaultedOrNullArgument(): Boolean {
+    if (this is IrConst && this.value == null) return true
+    if (this is IrComposite) {
+        if (this.origin == IrStatementOrigin.DEFAULT_VALUE) return true
+        val single = this.statements.singleOrNull()
+        if (single is IrConst && single.value == null) return true
+    }
+    return false
 }

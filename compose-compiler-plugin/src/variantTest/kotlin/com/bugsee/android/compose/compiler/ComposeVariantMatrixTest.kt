@@ -231,6 +231,18 @@ class ComposeVariantMatrixTest {
                     println("Child(enabled=" + enabled + ")")
                 }
 
+                // A Modifier argument that is an explicit null CONSTANT at the call site.
+                // NOTE: this is a PROXY shape (a bare IrConst). Compose's real default-argument
+                // lowering wraps the null in an IrComposite(origin = DEFAULT_VALUE) — this
+                // harness compiles against a stub Compose with no Compose compiler plugin, so
+                // that lowering never runs here and the composite shape cannot be produced.
+                // The composite shape is reproduced end-to-end (on the k21 line) by
+                // DefaultValueLoweringInteropTest in src/test, via a simulator plugin that
+                // emits the byte-exact lowered form ahead of the Bugsee extension.
+                @Composable fun NullableChild(modifier: Modifier? = null, enabled: Boolean = true) {
+                    println("NullableChild(enabled=" + enabled + ")")
+                }
+
                 class Holder {
                     @Composable fun Member(modifier: Modifier = Modifier, enabled: Boolean = true) {
                         println("Member(enabled=" + enabled + ")")
@@ -243,6 +255,7 @@ class ComposeVariantMatrixTest {
                     Child(enabled = false)
                     Holder().Member(Modifier, false)
                     TextField("secret", Modifier, true, PasswordVisualTransformation())
+                    NullableChild(null, true)
                 }
 
                 fun main() { Screen() }
@@ -261,6 +274,12 @@ class ComposeVariantMatrixTest {
             "TAG:Screen", "Child(enabled=false)",
             "TAG:Screen", "Member(enabled=false)",
             "SECURE", "TextField(value=secret, enabled=true)",
+            // No "TAG:Screen" here on purpose. The argument is a literal null, so the
+            // transform must skip the site: chaining would emit `null.bugseeTag(...)`
+            // and the non-null receiver's intrinsic check would throw
+            // "Parameter specified as non-null is null: ... parameter <this>" at runtime.
+            // Before the fix this row did not print at all — the fixture crashed here.
+            "NullableChild(enabled=true)",
         )
     }
 }

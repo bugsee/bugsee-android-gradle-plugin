@@ -78,6 +78,14 @@ dependencies {
     // ClassContext, so it needs these types on the TEST compile classpath.
     testImplementation("com.android.tools.build:gradle-api:8.6.0")
 
+    // BugseePlugin implements KotlinCompilerPluginSupportPlugin, so merely
+    // LOADING the plugin class needs the Kotlin Gradle plugin API. It is
+    // compileOnly for main (the consumer's Kotlin plugin provides it), but
+    // ManifestTaskStripGateWiringTest applies the real plugin to a
+    // ProjectBuilder project to pin the ExtensionStripGate call site, which
+    // requires the type at test runtime.
+    testImplementation("org.jetbrains.kotlin:kotlin-gradle-plugin-api:2.1.0")
+
     // ASM toolchain used by the app-startup-tracing test harness
     // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
     // for CFG-correctness assertions, tree + core for transform code).

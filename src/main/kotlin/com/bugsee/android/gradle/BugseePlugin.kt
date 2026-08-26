@@ -9,6 +9,7 @@ import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
+import com.bugsee.android.gradle.manifest.ExtensionStripGate
 import com.bugsee.android.gradle.manifest.BugseeAssetInjectionTask
 import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
@@ -255,10 +256,30 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 return@onVariants
             }
 
+            // Resolved EARLY (before the manifest task) because the manifest task's
+            // extension-provider stripping must key on the SAME global instrumentation
+            // gate as the compensating ExtensionsInit bytecode injection registered
+            // further down. Stripping while instrumentation is globally disabled
+            // (e.g. `-Pbugsee.instrumentation.enabled=false`) would leave every
+            // Bugsee extension with NEITHER a manifest `<provider>` NOR an inlined
+            // `register<Name>Extension()` call — silently dead at runtime.
+            val sourceManifest = project.file("src/main/AndroidManifest.xml")
+            val configResolver = InstrumentationConfigResolver(
+                extension.instrumentation,
+                project,
+                sourceManifest.takeIf { it.exists() }
+            )
+            val instrumentationGloballyEnabled = configResolver.isGloballyEnabled()
+
+
+
             // --- Manifest UUID injection + extension provider stripping ---
             // Pre-R8 manifest transform writes a deterministic *fallback*
             // BUILD_UUID into the manifest meta-data.
-            val manifestTaskProvider = registerManifestTask(project, variant, extension, capitalizedVariant)
+            val manifestTaskProvider = registerManifestTask(
+                project, variant, extension, capitalizedVariant,
+                instrumentationGloballyEnabled = instrumentationGloballyEnabled,
+            )
 
             // --- BUILD_UUID resolve + asset injection (post-R8) ---
             // Post-R8 task hashes mapping.txt content for the real
@@ -294,13 +315,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
 
             // --- Bytecode instrumentation (application modules only) ---
-            val sourceManifest = project.file("src/main/AndroidManifest.xml")
-            val configResolver = InstrumentationConfigResolver(
-                extension.instrumentation,
-                project,
-                sourceManifest.takeIf { it.exists() }
-            )
-            if (configResolver.isGloballyEnabled()) {
+            // (configResolver / instrumentationGloballyEnabled resolved above,
+            // before the manifest task, so provider-stripping and the
+            // ExtensionsInit injection share one gate.)
+            if (instrumentationGloballyEnabled) {
                 val extras = listOf(
                     ExtensionsInitInstrumentation(extension, manifestTaskProvider),
                 )
@@ -326,14 +344,30 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project: Project,
         variant: com.android.build.api.variant.Variant,
         extension: BugseePluginExtension,
-        capitalizedVariant: String
+        capitalizedVariant: String,
+        /**
+         * Whether bytecode instrumentation is globally enabled. Combined with
+         * the `optimizeExtensionsLoading` DSL flag and the user's excludes via
+         * [ExtensionStripGate]: stripping extension `<provider>`s is only
+         * sound when the compensating ExtensionsInit bytecode injection will
+         * actually run. See [ExtensionStripGate] for the failure modes.
+         */
+        instrumentationGloballyEnabled: Boolean,
     ): org.gradle.api.tasks.TaskProvider<BugseeManifestTask> {
         val taskProvider = project.tasks.register(
             "createBugsee${capitalizedVariant}ManifestConfig",
             BugseeManifestTask::class.java
         ) { task ->
             task.debug.set(extension.debug)
-            task.optimizeExtensionsLoading.set(extension.optimizeExtensionsLoading)
+            task.optimizeExtensionsLoading.set(
+                extension.optimizeExtensionsLoading.map { dslOptimize ->
+                    ExtensionStripGate.shouldStrip(
+                        optimizeExtensionsLoading = dslOptimize,
+                        instrumentationGloballyEnabled = instrumentationGloballyEnabled,
+                        excludes = extension.instrumentation.excludes.getOrElse(emptySet()),
+                    )
+                }
+            )
             // Variant + plugin version feed the deterministic BUILD_UUID
             // derivation in the task action (see BugseeManifestTask
             // KDoc). Pre-resolved here at registration time so the
