@@ -409,4 +409,84 @@ class OkHttpClassVisitorTest {
             "HTTP capture must be unaffected by the WebSocket gate",
         )
     }
+    // ---- Frames-mode coverage (triage D5) ----
+
+    /**
+     * The okhttp lane DECLARES `FramesComputationMode.COPY_FRAMES`, on the argument that
+     * its rewrites have identical stack effect and so leave the original frames valid.
+     * Every other test here transforms with the harness default (`computeFrames = true`,
+     * i.e. COMPUTE_FRAMES), so the mode this lane actually asks for was never exercised.
+     *
+     * The distinction is real, not theoretical. `setAsmFramesComputationMode` is a
+     * variant-global MAX across every instrumentation AGP sees, and five other Bugsee
+     * lanes request COMPUTE_FRAMES — so in a typical build this lane runs escalated, and
+     * COPY_FRAMES applies only when okhttp instrumentation is the sole active lane. That
+     * consumer exists (feature flags are per-lane), and their bytecode is the one shaped
+     * by the declared mode.
+     *
+     * Under COPY_FRAMES the original StackMapTable is carried through verbatim, so a
+     * rewrite that altered frame shapes would emit a class whose frames disagree with its
+     * code — a VerifyError at class load, not a build failure.
+     */
+    @Test fun `WebSocket rewrite verifies under the COPY_FRAMES mode this lane declares`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL)  // OkHttpClient (WebSocket.Factory)
+            mv.visitInsn(Opcodes.ACONST_NULL)  // Request
+            mv.visitInsn(Opcodes.ACONST_NULL)  // WebSocketListener
+            mv.visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "okhttp3/OkHttpClient",
+                "newWebSocket",
+                "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
+                false,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+
+        val transformed = AsmTestHarness.transform(bytes, computeFrames = false) { writer ->
+            OkHttpClassVisitor(writer, className = "fixtures.Test", webSocketCapture = true)
+        }
+
+        AsmTestHarness.verify(
+            transformed,
+            syntheticTypes = mapOf(
+                "okhttp3/OkHttpClient" to "java/lang/Object",
+                "okhttp3/Request" to "java/lang/Object",
+                "okhttp3/WebSocketListener" to "java/lang/Object",
+                "okhttp3/WebSocket" to "java/lang/Object",
+                "com/bugsee/library/okhttp/BugseeOkHttpWebSockets" to "java/lang/Object",
+            ),
+        ).assertOk()
+    }
+
+    /** The same rewrite under the escalated mode it sees in a typical multi-lane build. */
+    @Test fun `WebSocket rewrite also verifies under escalated COMPUTE_FRAMES`() {
+        val bytes = probeBytes { mv ->
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitInsn(Opcodes.ACONST_NULL)
+            mv.visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "okhttp3/OkHttpClient",
+                "newWebSocket",
+                "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
+                false,
+            )
+            mv.visitInsn(Opcodes.POP)
+        }
+
+        val transformed = transformOkHttp(bytes)
+
+        AsmTestHarness.verify(
+            transformed,
+            syntheticTypes = mapOf(
+                "okhttp3/OkHttpClient" to "java/lang/Object",
+                "okhttp3/Request" to "java/lang/Object",
+                "okhttp3/WebSocketListener" to "java/lang/Object",
+                "okhttp3/WebSocket" to "java/lang/Object",
+                "com/bugsee/library/okhttp/BugseeOkHttpWebSockets" to "java/lang/Object",
+            ),
+        ).assertOk()
+    }
+
 }

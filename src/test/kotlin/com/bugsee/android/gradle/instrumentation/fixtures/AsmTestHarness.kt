@@ -53,7 +53,13 @@ internal object AsmTestHarness {
         transformer: (ClassWriter) -> ClassVisitor,
     ): ByteArray {
         val reader = ClassReader(bytes)
-        val writerFlags = if (computeFrames) ClassWriter.COMPUTE_FRAMES else 0
+        // COMPUTE_MAXS in BOTH modes. AGP's COPY_FRAMES still recomputes max stack and
+        // locals — it only carries the original StackMapTable through rather than
+        // rebuilding it. Passing 0 here modelled "compute nothing", which no real build
+        // does, and made every COPY_FRAMES fixture fail with "Insufficient maximum stack
+        // size" regardless of whether the transform under test was correct.
+        val writerFlags =
+            if (computeFrames) ClassWriter.COMPUTE_FRAMES else ClassWriter.COMPUTE_MAXS
         val writer = ClassWriter(reader, writerFlags)
         val visitor = transformer(writer)
         // EXPAND_FRAMES so visitors that read frames receive uncompressed
