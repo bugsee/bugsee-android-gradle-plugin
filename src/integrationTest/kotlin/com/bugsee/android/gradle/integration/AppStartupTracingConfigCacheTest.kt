@@ -102,5 +102,27 @@ class AppStartupTracingConfigCacheTest {
                 "Second-build output (head):\n${secondResult.output.lines().take(40).joinToString("\n")}",
             secondResult.output.contains("Reusing configuration cache."),
         )
+
+        // ---- The assertion that actually protects against a silent no-op ----
+        //
+        // Everything above is satisfied by a build that instruments NOTHING: the tasks
+        // report SUCCESS, Gradle reports "Reusing configuration cache.", and the output
+        // contains no injected calls at all. That is not hypothetical — it is the exact
+        // shape of Sentry's #523, where a build service discarded between configuration
+        // and execution left their transform doing nothing, with no error and a green
+        // build.
+        //
+        // Our exposure is the same shape: every lane resolves dependency and symbol
+        // availability at CONFIGURATION time (DependencyDetector / SdkSymbolAvailability),
+        // and on a cache-reused build that configuration does not run again.
+        //
+        // So assert on the OUTPUT BYTECODE, never on build success.
+        val index = fixture.indexBytecode()
+        assertTrue(
+            "configuration cache was reused but the transform injected NOTHING — " +
+                "a silent no-op, which every other assertion in this test would miss. " +
+                "Found ${index.totalDispatcherCalls()} dispatcher calls.",
+            index.totalDispatcherCalls() > 0,
+        )
     }
 }
