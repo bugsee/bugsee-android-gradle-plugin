@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:name=".SampleApp"
+        android:label="fixture"
+        android:allowBackup="false">
+
+        <provider
+            android:name=".SampleProvider"
+            android:authorities="${applicationId}.sampleprovider"
+            android:exported="false" />
+
+        <!-- AndroidX startup library provider — pulls in our Initializer
+             via metadata. The plugin should NOT instrument the provider
+             itself (it's androidx.startup.InitializationProvider), but
+             SHOULD instrument our SampleInitializer.create. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="com.example.fixture.SampleInitializer"
+                android:value="androidx.startup" />
+        </provider>
+
+        <!-- Bugsee extension init providers — declared here so the
+             integration tests can exercise the manifest-stripping
+             path. These FQNs match the regex
+             `^.*\.Bugsee[A-Za-z0-9_]+InitProvider$` in
+             ManifestModifier.removeExtensionInitProviders. The
+             referenced classes are NOT on the runtime classpath; the
+             fixture only assembles and inspects intermediates, never
+             runs, so AGP packaging proceeds even though the provider
+             classes are missing. When `optimizeExtensionsLoading=true`
+             (the default), BOTH should be stripped from the merged
+             manifest. When `optimizeExtensionsLoading=false`, both
+             should remain. -->
+        <provider
+            android:name="com.bugsee.library.BugseeFeedbackInitProvider"
+            android:authorities="${applicationId}.bugseefeedbackinitprovider"
+            android:exported="false" />
+        <provider
+            android:name="com.bugsee.library.BugseeRemotingInitProvider"
+            android:authorities="${applicationId}.bugseeremotinginitprovider"
+            android:exported="false" />
+    </application>
+
+</manifest>
