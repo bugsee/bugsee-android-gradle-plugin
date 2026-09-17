@@ -32,15 +32,11 @@ jobs:
     environment: production
     timeout-minutes: 60
 
+    # Secrets are scoped to the steps that read them (Preflight, Deploy), not the
+    # job: third-party setup actions and the test build never see the signing
+    # key or the Central credentials.
     env:
       RELEASE: "true"
-      ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-      ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-      # ASCII-armored PGP private key + its passphrase, consumed by the
-      # in-memory signing path in both build.gradle.kts files.
-      SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-      SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-      CONFIRM: ${{ inputs.confirm }}
 
     steps:
       - uses: actions/checkout@v7
@@ -48,6 +44,8 @@ jobs:
       # Cheap guard against dispatching the wrong branch or a stale checkout:
       # the typed version must match what is actually about to be published.
       - name: Verify confirmation matches version.txt
+        env:
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -euo pipefail
           actual="$(head -n 1 version.txt | tr -d '[:space:]')"
@@ -62,6 +60,11 @@ jobs:
       # empty SIGNING_KEY would therefore publish UNSIGNED artifacts and only
       # fail later, at Central's validation — so refuse here instead.
       - name: Preflight
+        env:
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           set -euo pipefail
           for name in ORG_GRADLE_PROJECT_NEXUS_USERNAME ORG_GRADLE_PROJECT_NEXUS_PASSWORD SIGNING_KEY SIGNING_PASSWORD; do
@@ -96,4 +99,12 @@ jobs:
         run: bash -xe ./scripts/build.sh --full
 
       - name: Deploy
+        env:
+          # Gradle maps ORG_GRADLE_PROJECT_* onto the NEXUS_* project properties.
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          # ASCII-armored PGP private key + its passphrase, consumed by the
+          # in-memory signing path in both build.gradle.kts files.
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: bash -xe ./scripts/deploy.sh

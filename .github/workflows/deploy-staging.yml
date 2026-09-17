@@ -25,18 +25,19 @@ jobs:
     environment: staging
     timeout-minutes: 60
 
+    # Secrets are scoped to the steps that read them (Preflight, Deploy), not the
+    # job, so third-party setup actions never see the Central credentials.
     env:
       # deploy.sh defaults RELEASE to true, so staging must pin it explicitly.
       RELEASE: "false"
-      # Gradle maps ORG_GRADLE_PROJECT_* onto project properties, which is how
-      # build.gradle.kts already reads NEXUS_USERNAME / NEXUS_PASSWORD.
-      ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-      ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Preflight
+        env:
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           if [ -z "$ORG_GRADLE_PROJECT_NEXUS_USERNAME" ] || [ -z "$ORG_GRADLE_PROJECT_NEXUS_PASSWORD" ]; then
             echo "::error::NEXUS_USERNAME / NEXUS_PASSWORD are not set on the 'staging' GitHub Environment."
@@ -61,4 +62,9 @@ jobs:
         run: bash -xe ./scripts/build.sh
 
       - name: Deploy
+        env:
+          # Gradle maps ORG_GRADLE_PROJECT_* onto project properties, which is how
+          # build.gradle.kts already reads NEXUS_USERNAME / NEXUS_PASSWORD.
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: bash -xe ./scripts/deploy.sh
