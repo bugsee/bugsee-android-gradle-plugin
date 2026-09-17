@@ -83,6 +83,13 @@ jobs:
         with:
           cache-provider: basic
 
+      # AGP creates ~/.android/cache during the first fixture build. On a fresh
+      # VM that directory does not exist yet, so Gradle sees a changed input and
+      # refuses to reuse the configuration cache on the second build, failing
+      # AppStartupTracingConfigCacheTest. Developer machines already have it.
+      - name: Pre-create the Android user cache
+        run: mkdir -p ~/.android/cache
+
       # The full lane: a release is the last chance to catch a regression in
       # the integration tests before consumers pull it from Central.
       - name: Build
