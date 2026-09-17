@@ -66,11 +66,15 @@ Per-environment **secrets**:
 
 Staging has no signing secrets because SNAPSHOT builds are never signed.
 
-Repository **secret**:
+**Organization** secret:
 
 | Name | Purpose |
 |---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | Used by the two Claude workflows. The org-level secret of the same name does not reach private repositories on the free plan, so it must be set here. Create one with `claude setup-token`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Used by the two Claude workflows. Inherited from the `bugsee` org secret (visibility: all repositories). Do not add a repository-level copy: it would shadow the org value and go stale when the org token is rotated. |
+
+`claude-code-action` skips any PR that adds or changes its own workflow file:
+the file must match the default branch before the review runs. A green but
+silent review on such a PR is expected.
 
 ### What goes in `SIGNING_KEY`
 
