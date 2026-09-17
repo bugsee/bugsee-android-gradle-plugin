@@ -1,0 +1,75 @@
+name: PR
+
+# Runs the full build on every pull request: unit tests, the TestKit
+# integration tests (real AGP builds of fixture apps) and the Compose
+# compiler-plugin variant matrix. `build.sh --full` is the lane the script
+# itself names for CI.
+on:
+  pull_request:
+    branches: [main, release]
+
+# Superseded runs for the same PR are cancelled: only the latest push matters,
+# and hosted minutes are billed.
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build.sh --full
+    # GitHub-hosted. The image ships the Android SDK (ANDROID_SDK_ROOT is set)
+    # with its licenses accepted, which the integration tests' fixture apps need.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      RELEASE: "false"
+
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v7
+
+      # Both JDKs are required and neither is auto-provisioned (no toolchain
+      # resolver is configured): 11 for `jvmToolchain(11)`, 17 for the TestKit
+      # launcher. The last one listed becomes JAVA_HOME; setup-java exports
+      # JAVA_HOME_11_X64 for the other, which Gradle's toolchain detection reads.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      # `basic` is the open-source provider over the GitHub Actions cache. The
+      # default (`enhanced`) is a commercial service, only in free preview for
+      # private repositories. The action also validates the wrapper jar against
+      # Gradle's published checksums, and fails the run if it does not match.
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      # AGP creates ~/.android/cache during the first fixture build. On a fresh
+      # VM that directory does not exist yet, so Gradle sees a changed input and
+      # refuses to reuse the configuration cache on the second build, failing
+      # AppStartupTracingConfigCacheTest. Developer machines already have it.
+      - name: Pre-create the Android user cache
+        run: mkdir -p ~/.android/cache
+
+      - name: Build and test
+        run: bash -xe ./scripts/build.sh --full
+
+      # Only on failure, and kept briefly: the org's Actions artifact storage is
+      # shared across every repo and capped, and a green run needs no reports.
+      - name: Upload test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-pr${{ github.event.pull_request.number }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 3

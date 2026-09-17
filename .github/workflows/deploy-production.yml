@@ -1,0 +1,110 @@
+name: Deploy (production)
+
+# Manual only. RELEASE=true, so deploy.sh signs every artifact and uploads the
+# Gradle plugin, its marker and all three Compose compiler-plugin artifacts into
+# one Central staging deployment, then closes it. Releasing that deployment is
+# still done by hand at https://central.sonatype.com (Deployments tab).
+#
+# Required-reviewer approval is unavailable on this plan, so the gate is:
+#   1. workflow_dispatch    -> only users with write access can start it
+#   2. environment: production, restricted by deployment branch policy to
+#      `release` -> a run started from any other branch is refused by GitHub
+# Keep that branch policy in place; it is the real guard here.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type the version being released (from version.txt) to confirm'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: build + deploy (RELEASE)
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+
+    # Secrets are scoped to the steps that read them (Preflight, Deploy), not the
+    # job: third-party setup actions and the test build never see the signing
+    # key or the Central credentials.
+    env:
+      RELEASE: "true"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Cheap guard against dispatching the wrong branch or a stale checkout:
+      # the typed version must match what is actually about to be published.
+      - name: Verify confirmation matches version.txt
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          actual="$(head -n 1 version.txt | tr -d '[:space:]')"
+          typed="$(printf '%s' "$CONFIRM" | tr -d '[:space:]')"
+          echo "version.txt = $actual"
+          if [ "$actual" != "$typed" ]; then
+            echo "::error::Confirmation '$typed' does not match version.txt '$actual' — refusing to publish."
+            exit 1
+          fi
+
+      # Signing is `isRequired = false` so local builds work without a key. An
+      # empty SIGNING_KEY would therefore publish UNSIGNED artifacts and only
+      # fail later, at Central's validation — so refuse here instead.
+      - name: Preflight
+        env:
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in ORG_GRADLE_PROJECT_NEXUS_USERNAME ORG_GRADLE_PROJECT_NEXUS_PASSWORD SIGNING_KEY SIGNING_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name#ORG_GRADLE_PROJECT_} is not set on the 'production' GitHub Environment."
+              exit 1
+            fi
+          done
+
+      # See pr.yml.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      # AGP creates ~/.android/cache during the first fixture build. On a fresh
+      # VM that directory does not exist yet, so Gradle sees a changed input and
+      # refuses to reuse the configuration cache on the second build, failing
+      # AppStartupTracingConfigCacheTest. Developer machines already have it.
+      - name: Pre-create the Android user cache
+        run: mkdir -p ~/.android/cache
+
+      # The full lane: a release is the last chance to catch a regression in
+      # the integration tests before consumers pull it from Central.
+      - name: Build
+        run: bash -xe ./scripts/build.sh --full
+
+      - name: Deploy
+        env:
+          # Gradle maps ORG_GRADLE_PROJECT_* onto the NEXUS_* project properties.
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          # ASCII-armored PGP private key + its passphrase, consumed by the
+          # in-memory signing path in both build.gradle.kts files.
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: bash -xe ./scripts/deploy.sh

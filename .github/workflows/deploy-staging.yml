@@ -1,0 +1,70 @@
+name: Deploy (staging)
+
+# Every merge to main publishes a SNAPSHOT to the Central snapshot repository,
+# the same way bugsee-android does. RELEASE=false, so the version is
+# `<version.txt>-SNAPSHOT`, nothing is signed, and nothing reaches Maven
+# Central proper.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Deploys are never cancelled mid-flight: a half-finished Sonatype upload is
+# worse than a queued run.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: build + deploy (SNAPSHOT)
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 60
+
+    # Secrets are scoped to the steps that read them (Preflight, Deploy), not the
+    # job, so third-party setup actions never see the Central credentials.
+    env:
+      # deploy.sh defaults RELEASE to true, so staging must pin it explicitly.
+      RELEASE: "false"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Preflight
+        env:
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          if [ -z "$ORG_GRADLE_PROJECT_NEXUS_USERNAME" ] || [ -z "$ORG_GRADLE_PROJECT_NEXUS_PASSWORD" ]; then
+            echo "::error::NEXUS_USERNAME / NEXUS_PASSWORD are not set on the 'staging' GitHub Environment."
+            exit 1
+          fi
+
+      # See pr.yml.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      # The fast lane (unit tests + Compose variant matrix): the full lane
+      # already ran on the PR that produced this commit.
+      - name: Build
+        run: bash -xe ./scripts/build.sh
+
+      - name: Deploy
+        env:
+          # Gradle maps ORG_GRADLE_PROJECT_* onto project properties, which is how
+          # build.gradle.kts already reads NEXUS_USERNAME / NEXUS_PASSWORD.
+          ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: bash -xe ./scripts/deploy.sh
