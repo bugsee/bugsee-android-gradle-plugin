@@ -1,0 +1,91 @@
+name: Deploy (production)
+
+# Manual only. RELEASE=true, so deploy.sh signs every artifact and uploads the
+# Gradle plugin, its marker and all three Compose compiler-plugin artifacts into
+# one Central staging deployment, then closes it. Releasing that deployment is
+# still done by hand at https://central.sonatype.com (Deployments tab).
+#
+# Required-reviewer approval is unavailable on this plan, so the gate is:
+#   1. workflow_dispatch    -> only users with write access can start it
+#   2. environment: production, restricted by deployment branch policy to
+#      `release` -> a run started from any other branch is refused by GitHub
+# Keep that branch policy in place; it is the real guard here.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type the version being released (from version.txt) to confirm'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: build + deploy (RELEASE)
+    runs-on: [self-hosted, macOS, ARM64]
+    environment: production
+    timeout-minutes: 90
+
+    env:
+      RELEASE: "true"
+      ANDROID_SDK_ROOT: ${{ vars.ANDROID_SDK_ROOT || '/Users/build/Library/Android/sdk' }}
+      ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      # ASCII-armored PGP private key + its passphrase, consumed by the
+      # in-memory signing path in both build.gradle.kts files.
+      SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+      SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+      CONFIRM: ${{ inputs.confirm }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cheap guard against dispatching the wrong branch or a stale checkout:
+      # the typed version must match what is actually about to be published.
+      - name: Verify confirmation matches version.txt
+        run: |
+          set -euo pipefail
+          actual="$(head -n 1 version.txt | tr -d '[:space:]')"
+          typed="$(printf '%s' "$CONFIRM" | tr -d '[:space:]')"
+          echo "version.txt = $actual"
+          if [ "$actual" != "$typed" ]; then
+            echo "::error::Confirmation '$typed' does not match version.txt '$actual' — refusing to publish."
+            exit 1
+          fi
+
+      # Signing is `isRequired = false` so local builds work without a key. An
+      # empty SIGNING_KEY would therefore publish UNSIGNED artifacts and only
+      # fail later, at Central's validation — so refuse here instead.
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_SDK_ROOT" ]; then
+            echo "::error::ANDROID_SDK_ROOT '$ANDROID_SDK_ROOT' does not exist on runner '$RUNNER_NAME'. Install the Android SDK there, or set an ANDROID_SDK_ROOT repository variable pointing at it."
+            exit 1
+          fi
+          for name in ORG_GRADLE_PROJECT_NEXUS_USERNAME ORG_GRADLE_PROJECT_NEXUS_PASSWORD SIGNING_KEY SIGNING_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name#ORG_GRADLE_PROJECT_} is not set on the 'production' GitHub Environment."
+              exit 1
+            fi
+          done
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT on $RUNNER_NAME"
+          java -version 2>&1 | head -2
+
+      # See pr.yml.
+      - name: Disable Gradle file-system watching
+        run: echo "GRADLE_OPTS=${GRADLE_OPTS:-} -Dorg.gradle.vfs.watch=false" >> "$GITHUB_ENV"
+
+      # The full lane: a release is the last chance to catch a regression in
+      # the integration tests before consumers pull it from Central.
+      - name: Build
+        run: bash -xe ./scripts/build.sh --full
+
+      - name: Deploy
+        run: bash -xe ./scripts/deploy.sh

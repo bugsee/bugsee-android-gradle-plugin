@@ -176,11 +176,12 @@ All properties use `Property<T>` for lazy evaluation and Gradle configuration av
 
 ## Publishing
 
-Maven publishing is configured inline in `build.gradle.kts`:
-- Release repo: Sonatype OSS staging (`RELEASE_REPOSITORY_URL` or default)
-- Snapshot repo: Sonatype OSS snapshots (`SNAPSHOT_REPOSITORY_URL` or default)
+Maven publishing is configured inline in `build.gradle.kts` via `io.github.gradle-nexus.publish-plugin`:
+- Release: Central Portal staging (`ossrh-staging-api.central.sonatype.com`), closed by `scripts/deploy.sh`, released by hand at central.sonatype.com
+- Snapshot: `central.sonatype.com/repository/maven-snapshots/`
 - Credentials: `NEXUS_USERNAME` / `NEXUS_PASSWORD` properties
-- Signing: conditional — only required for release builds with `publish` task
+- Signing: release builds only; `SIGNING_KEY` / `SIGNING_PASSWORD` env (CI, in-memory key) or `signing.*` properties (local keyring)
+- CI/CD: GitHub Actions on the shared self-hosted runner — PR checks, SNAPSHOT deploy on merge to `main`, manual production deploy from `release`. See `.github/CI.md`.
 
 ## Code Review
 

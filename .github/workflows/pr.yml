@@ -1,0 +1,71 @@
+name: PR
+
+# Runs the full build on every pull request: unit tests, the TestKit
+# integration tests (real AGP builds of fixture apps) and the Compose
+# compiler-plugin variant matrix. `build.sh --full` is the lane the script
+# itself names for CI.
+on:
+  pull_request:
+    branches: [main, release]
+
+# The self-hosted runner is shared with other Bugsee repos, so superseded runs
+# for the same PR are cancelled rather than queued behind it.
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build.sh --full
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+
+    env:
+      RELEASE: "false"
+      # Overridable per-runner without editing this file: set an
+      # ANDROID_SDK_ROOT repository variable to point at a different SDK.
+      ANDROID_SDK_ROOT: ${{ vars.ANDROID_SDK_ROOT || '/Users/build/Library/Android/sdk' }}
+
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v4
+
+      # The integration tests build real Android fixture apps, so they need the
+      # Android SDK. The runner is org-level and shared, so fail with a readable
+      # message rather than deep inside a TestKit build.
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_SDK_ROOT" ]; then
+            echo "::error::ANDROID_SDK_ROOT '$ANDROID_SDK_ROOT' does not exist on runner '$RUNNER_NAME'. Install the Android SDK there, or set an ANDROID_SDK_ROOT repository variable pointing at it."
+            exit 1
+          fi
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT on $RUNNER_NAME"
+          java -version 2>&1 | head -2
+
+      # The runner keeps many Gradle daemons alive across repos. A daemon holding
+      # a watched file-system view from before another invocation's `clean` can
+      # report tasks UP-TO-DATE whose outputs are gone. With watching off that
+      # view is dropped at the end of every build. Appended rather than set as
+      # job-level `env:`, which would clobber GRADLE_OPTS the runner exports.
+      - name: Disable Gradle file-system watching
+        run: echo "GRADLE_OPTS=${GRADLE_OPTS:-} -Dorg.gradle.vfs.watch=false" >> "$GITHUB_ENV"
+
+      - name: Build and test
+        run: bash -xe ./scripts/build.sh --full
+
+      - name: Archive test reports on the runner
+        # Not `always()`: that is also true after a cancel, and tarring a
+        # half-written report set from a killed Gradle run wastes a slot.
+        if: ${{ !cancelled() }}
+        # A diagnostic side effect: a green build stays green on a full disk.
+        continue-on-error: true
+        env:
+          ARCHIVE_ROOT: ${{ vars.TEST_RESULT_ARCHIVE_ROOT }}
+          LABEL: pr${{ github.event.pull_request.number }}
+          SOURCE_URL: ${{ github.event.pull_request.html_url }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/archive-test-reports.sh

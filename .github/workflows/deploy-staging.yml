@@ -1,0 +1,74 @@
+name: Deploy (staging)
+
+# Every merge to main publishes a SNAPSHOT to the Central snapshot repository,
+# the same way bugsee-android does. RELEASE=false, so the version is
+# `<version.txt>-SNAPSHOT`, nothing is signed, and nothing reaches Maven
+# Central proper.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Deploys are never cancelled mid-flight: a half-finished Sonatype upload is
+# worse than a queued run.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: build + deploy (SNAPSHOT)
+    runs-on: [self-hosted, macOS, ARM64]
+    environment: staging
+    timeout-minutes: 90
+
+    env:
+      # deploy.sh defaults RELEASE to true, so staging must pin it explicitly.
+      RELEASE: "false"
+      ANDROID_SDK_ROOT: ${{ vars.ANDROID_SDK_ROOT || '/Users/build/Library/Android/sdk' }}
+      # Gradle maps ORG_GRADLE_PROJECT_* onto project properties, which is how
+      # build.gradle.kts already reads NEXUS_USERNAME / NEXUS_PASSWORD.
+      ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_SDK_ROOT" ]; then
+            echo "::error::ANDROID_SDK_ROOT '$ANDROID_SDK_ROOT' does not exist on runner '$RUNNER_NAME'. Install the Android SDK there, or set an ANDROID_SDK_ROOT repository variable pointing at it."
+            exit 1
+          fi
+          if [ -z "$ORG_GRADLE_PROJECT_NEXUS_USERNAME" ] || [ -z "$ORG_GRADLE_PROJECT_NEXUS_PASSWORD" ]; then
+            echo "::error::NEXUS_USERNAME / NEXUS_PASSWORD are not set on the 'staging' GitHub Environment."
+            exit 1
+          fi
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT on $RUNNER_NAME"
+          java -version 2>&1 | head -2
+
+      # See pr.yml.
+      - name: Disable Gradle file-system watching
+        run: echo "GRADLE_OPTS=${GRADLE_OPTS:-} -Dorg.gradle.vfs.watch=false" >> "$GITHUB_ENV"
+
+      # The fast lane (unit tests + Compose variant matrix): the full lane
+      # already ran on the PR that produced this commit.
+      - name: Build
+        run: bash -xe ./scripts/build.sh
+
+      - name: Deploy
+        run: bash -xe ./scripts/deploy.sh
+
+      - name: Archive test reports on the runner
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          ARCHIVE_ROOT: ${{ vars.TEST_RESULT_ARCHIVE_ROOT }}
+          LABEL: staging
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: bash .github/scripts/archive-test-reports.sh
