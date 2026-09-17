@@ -60,8 +60,8 @@ internal class MockBuildsServer(
     private val symbolMetadataBodies = ConcurrentLinkedQueue<ByteArray>()
     // Body captured by the presigned-symbol PUT (the symbol zip).
     @Volatile private var symbolPutBody: ByteArray? = null
-    // When true, the symbol metadata POST replies `{code: 16004}`
-    // (SymbolAlreadyExists) instead of signing a presigned URL — so a test can
+    // When true, the symbol metadata POST replies with the appserver's nested
+    // DuplicateSymbolsFoundError envelope (code 16004) instead of signing a presigned URL — so a test can
     // exercise the already-exists short-circuit (no PUT performed).
     @Volatile private var symbolAlreadyExists: Boolean = false
     // Last registration body captured by the single-PUT `/builds` POST handler.
@@ -130,8 +130,8 @@ internal class MockBuildsServer(
     fun storedSymbolPut(): ByteArray? = symbolPutBody
 
     /**
-     * Make the next symbol metadata POST reply `{code: 16004}`
-     * (SymbolAlreadyExists), so the client skips the presigned PUT. Off by
+     * Make the next symbol metadata POST reply with the appserver's nested
+     * DuplicateSymbolsFoundError envelope (code 16004), so the client skips the presigned PUT. Off by
      * default — the standard flow signs a presigned URL and accepts the PUT.
      */
     fun setSymbolAlreadyExists(value: Boolean) {
@@ -300,14 +300,25 @@ internal class MockBuildsServer(
      *    `{"code": 0, "endpoint": "<baseUrl>/symbol-put/blob"}` (NOT wrapped in
      *    the `{result: ...}` envelope — the symbol protocol reads top-level
      *    fields), so the client's follow-up PUT lands in [handleSymbolPut].
-     *  - When [symbolAlreadyExists] is set, replies `{"code": 16004}` instead,
-     *    so the client short-circuits and performs no PUT.
+     *  - When [symbolAlreadyExists] is set, replies with the appserver's real
+     *    duplicate envelope — `{"ok": false, "error": {"type":
+     *    "DuplicateSymbolsFoundError", "code": 16004}}` — so the client
+     *    short-circuits and performs no PUT.
      */
     private fun handleSymbolMetadata(exchange: HttpExchange, body: ByteArray) {
         symbolMetadataBodies.add(body)
         val response = JSONObject().apply {
             if (symbolAlreadyExists) {
-                put("code", 16004)
+                // The appserver's real duplicate reply: the code NESTED in its error envelope.
+                put("ok", false)
+                put(
+                    "error",
+                    JSONObject().apply {
+                        put("type", "DuplicateSymbolsFoundError")
+                        put("message", "A symbol file with the same identifier already exists")
+                        put("code", 16004)
+                    },
+                )
             } else {
                 put("code", 0)
                 put("endpoint", "$baseUrl/symbol-put/blob")

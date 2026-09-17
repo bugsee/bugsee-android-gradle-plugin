@@ -131,8 +131,8 @@ internal object SymbolUploader {
                 return@use false
             }
 
-            // Check for SymbolAlreadyExistsError
-            if (responseBody.optInt("code") == 16004) {
+            // The symbol is already on the server: a success, not a failure.
+            if (isAlreadyExists(responseBody)) {
                 if (debug) logger.warn("Bugsee: Got SymbolAlreadyExistsError from server")
                 return@use true
             }
@@ -178,4 +178,25 @@ internal object SymbolUploader {
             true
         }
     }
+
+    /**
+     * Whether the metadata POST's reply says the server already has this symbol
+     * (`DuplicateSymbolsFoundError`, code 16000 + 4).
+     *
+     * The appserver sends HTTP 200 with the code NESTED in its error envelope —
+     * `{"ok": false, "error": {"type": "DuplicateSymbolsFoundError", "code": 16004}}`
+     * — never at the top level. Matching only a top-level `code` (what this used to
+     * do) turned every upload of an already-uploaded symbol into a failure, so the
+     * task never cached it and uploaded it again on every build. The top-level form
+     * is still accepted: it is what this client first matched on, and the check is
+     * free. bugsee-cli had the identical bug (fixed in 0.7.8, bugsee/bugsee-cli#35).
+     */
+    internal fun isAlreadyExists(responseBody: JSONObject): Boolean {
+        if (responseBody.optInt("code") == CODE_ALREADY_EXISTS) return true
+        val error = responseBody.optJSONObject("error") ?: return false
+        return error.optInt("code") == CODE_ALREADY_EXISTS ||
+            error.optString("type", "") == "DuplicateSymbolsFoundError"
+    }
+
+    private const val CODE_ALREADY_EXISTS = 16004
 }

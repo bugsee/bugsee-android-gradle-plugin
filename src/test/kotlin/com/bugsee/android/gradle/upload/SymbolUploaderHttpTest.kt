@@ -372,12 +372,55 @@ class SymbolUploaderHttpTest {
         assertFalse(ok, "201 with non-JSON body must fail gracefully")
     }
 
-    @Test fun `SymbolAlreadyExistsError on POST returns success (server-side dedup)`() {
-        // The `code=16004` server response indicates the symbol
-        // already exists for this build — we treat it as success
-        // (the symbol IS on the server, no need to re-upload).
-        // Pin that this short-circuit still works in the new code
-        // path.
+    // The appserver's REAL duplicate reply: HTTP 200 with the code NESTED in its
+    // error envelope (`code: err.offset + err.code` = 16000 + 4), never at the top
+    // level. Matching only a top-level `code` made every upload of a symbol the
+    // server already has a failure that was retried on every build. bugsee-cli had
+    // the same bug (fixed in 0.7.8, bugsee/bugsee-cli#35).
+    private fun assertDuplicateIsSuccess(body: String) {
+        server.setPostStatus(200)
+        server.setPostBody(body)
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+        )
+        assertTrue(ok, "a symbol the server already has must be treated as success: $body")
+        assertEquals(0, server.putCallCount(), "PUT must not be attempted on dedup")
+    }
+
+    @Test fun `the appserver's nested DuplicateSymbolsFoundError envelope returns success`() =
+        assertDuplicateIsSuccess(
+            """{"ok":false,"error":{"type":"DuplicateSymbolsFoundError","message":"A symbol file with the same identifier already exists","code":16004}}""",
+        )
+
+    @Test fun `a nested duplicate recognised by its code alone returns success`() =
+        assertDuplicateIsSuccess("""{"ok":false,"error":{"code":16004}}""")
+
+    @Test fun `a nested duplicate recognised by its type alone returns success`() =
+        assertDuplicateIsSuccess("""{"ok":false,"error":{"type":"DuplicateSymbolsFoundError"}}""")
+
+    @Test fun `a sibling symbol error is still a failure`() {
+        server.setPostStatus(200)
+        server.setPostBody("""{"ok":false,"error":{"type":"SymbolNotFoundError","code":16001}}""")
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+        )
+        assertFalse(ok, "only the duplicate error is a success")
+        assertEquals(0, server.putCallCount())
+    }
+
+    @Test fun `a legacy top-level code 16004 still returns success`() {
+        // The shape this client first matched on. No current appserver route
+        // sends it; still accepted, pinned under its own name.
         server.setPostStatus(200)
         server.setPostBody("""{"code":16004}""")
         val ok = SymbolUploader.uploadData(
