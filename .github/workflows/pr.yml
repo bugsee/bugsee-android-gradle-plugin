@@ -30,20 +30,26 @@ jobs:
 
     steps:
       - name: Checkout PR merge commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Both JDKs are required and neither is auto-provisioned (no toolchain
       # resolver is configured): 11 for `jvmToolchain(11)`, 17 for the TestKit
       # launcher. The last one listed becomes JAVA_HOME; setup-java exports
       # JAVA_HOME_11_X64 for the other, which Gradle's toolchain detection reads.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: |
             11
             17
 
-      - uses: gradle/actions/setup-gradle@v4
+      # `basic` is the open-source provider over the GitHub Actions cache. The
+      # default (`enhanced`) is a commercial service, only in free preview for
+      # private repositories. The action also validates the wrapper jar against
+      # Gradle's published checksums, and fails the run if it does not match.
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Build and test
         run: bash -xe ./scripts/build.sh --full
@@ -53,7 +59,7 @@ jobs:
       - name: Upload test reports
         if: failure()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-pr${{ github.event.pull_request.number }}
           path: |

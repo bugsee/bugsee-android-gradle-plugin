@@ -43,7 +43,7 @@ jobs:
       CONFIRM: ${{ inputs.confirm }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Cheap guard against dispatching the wrong branch or a stale checkout:
       # the typed version must match what is actually about to be published.
@@ -72,14 +72,16 @@ jobs:
           done
 
       # See pr.yml.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: |
             11
             17
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       # The full lane: a release is the last chance to catch a regression in
       # the integration tests before consumers pull it from Central.

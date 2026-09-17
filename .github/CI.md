@@ -34,8 +34,12 @@ carries over between runs.
 - **JDKs**: `actions/setup-java` installs Temurin 11 (`jvmToolchain(11)`) and 17
   (the TestKit launcher, and `JAVA_HOME`). The build has no toolchain resolver,
   so both must be installed up front.
-- **Gradle** caching is `gradle/actions/setup-gradle`: dependency and wrapper
-  caches are written by `main` runs and restored everywhere else.
+- **Gradle** is set up by `gradle/actions/setup-gradle` with
+  `cache-provider: basic` (open source, on the GitHub Actions cache; the default
+  provider is a commercial service). Caches are written by `main` runs and
+  restored everywhere else. The action also validates
+  `gradle/wrapper/gradle-wrapper.jar` against Gradle's published checksums; a
+  wrapper upgrade must commit the official jar or every run fails.
 - **Test reports** are uploaded only when a PR run fails, kept 3 days. The org's
   Actions artifact storage is shared across every repo and capped.
 - **Minutes**: this repository is private, so jobs spend the org's included
