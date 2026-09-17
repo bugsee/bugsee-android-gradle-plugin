@@ -103,7 +103,12 @@ class ReleaseMinifiedGatingTest {
 
     /** Returns dexdump disassembly, or skips the assertion if build-tools are absent. */
     private fun disassemble(apk: File): String {
-        val dexdump = File(System.getProperty("user.home"), "Library/Android/sdk/build-tools")
+        // Same SDK lookup as FixtureProject: the environment first (CI runners,
+        // Linux), then the Android Studio default on macOS.
+        val androidHome = System.getenv("ANDROID_HOME")
+            ?: System.getenv("ANDROID_SDK_ROOT")
+            ?: System.getProperty("user.home") + "/Library/Android/sdk"
+        val dexdump = File(androidHome, "build-tools")
             .listFiles()?.sortedBy { it.name }?.lastOrNull()?.resolve("dexdump")
         org.junit.Assume.assumeTrue(
             "dexdump not available; this assertion needs Android build-tools",
