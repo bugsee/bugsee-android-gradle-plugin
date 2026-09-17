@@ -1,7 +1,8 @@
 # CI/CD
 
-All build workflows run on the shared org-level self-hosted runner, and follow
-the same conventions as `bugsee/bugsee-android`.
+All workflows run on GitHub-hosted `ubuntu-latest` runners. Environments,
+secrets and the release gate follow the same conventions as
+`bugsee/bugsee-android`.
 
 | Workflow | Trigger | Environment | `RELEASE` | What it does |
 |---|---|---|---|---|
@@ -23,20 +24,22 @@ the same conventions as `bugsee/bugsee-android`.
 compiler-plugin artifacts together, in one deployment. They must ship together:
 see the header of `scripts/deploy.sh`.
 
-## Runner
+## Runners
 
-`runs-on: [self-hosted, macOS, ARM64]` — the org-level runner (`MacMiniKz`). Its
-runner group is limited to selected repositories, and this repository is one of
-them. It is shared, with `bugsee-android` among others, so a job here queues
-behind any job already running there.
+`runs-on: ubuntu-latest` — GitHub-hosted, a clean VM per job, so no state
+carries over between runs.
 
-`ANDROID_SDK_ROOT` defaults to `/Users/build/Library/Android/sdk`, which is
-needed by the TestKit integration tests. If the SDK lives elsewhere on the
-runner, set an `ANDROID_SDK_ROOT` **repository variable** instead of editing the
-workflows. `TEST_RESULT_ARCHIVE_ROOT` optionally relocates the on-runner test
-report archive (default `~/ci-test-results/bugsee-android-gradle-plugin`).
-Reports are kept on the runner, not uploaded: the org's Actions artifact storage
-is shared and capped.
+- **Android SDK** comes with the image (`ANDROID_SDK_ROOT` is preset, licenses
+  accepted). The TestKit integration tests build fixture apps against it.
+- **JDKs**: `actions/setup-java` installs Temurin 11 (`jvmToolchain(11)`) and 17
+  (the TestKit launcher, and `JAVA_HOME`). The build has no toolchain resolver,
+  so both must be installed up front.
+- **Gradle** caching is `gradle/actions/setup-gradle`: dependency and wrapper
+  caches are written by `main` runs and restored everywhere else.
+- **Test reports** are uploaded only when a PR run fails, kept 3 days. The org's
+  Actions artifact storage is shared across every repo and capped.
+- **Minutes**: this repository is private, so jobs spend the org's included
+  Actions minutes. A full PR run is the expensive one.
 
 ## Environments
 

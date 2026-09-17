@@ -181,7 +181,7 @@ Maven publishing is configured inline in `build.gradle.kts` via `io.github.gradl
 - Snapshot: `central.sonatype.com/repository/maven-snapshots/`
 - Credentials: `NEXUS_USERNAME` / `NEXUS_PASSWORD` properties
 - Signing: release builds only; `SIGNING_KEY` / `SIGNING_PASSWORD` env (CI, in-memory key) or `signing.*` properties (local keyring)
-- CI/CD: GitHub Actions on the shared self-hosted runner — PR checks, SNAPSHOT deploy on merge to `main`, manual production deploy from `release`. See `.github/CI.md`.
+- CI/CD: GitHub Actions on GitHub-hosted `ubuntu-latest` runners — PR checks, SNAPSHOT deploy on merge to `main`, manual production deploy from `release`. See `.github/CI.md`.
 
 ## Code Review
 

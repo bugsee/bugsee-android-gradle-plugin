@@ -21,14 +21,13 @@ permissions:
 jobs:
   deploy:
     name: build + deploy (SNAPSHOT)
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     environment: staging
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     env:
       # deploy.sh defaults RELEASE to true, so staging must pin it explicitly.
       RELEASE: "false"
-      ANDROID_SDK_ROOT: ${{ vars.ANDROID_SDK_ROOT || '/Users/build/Library/Android/sdk' }}
       # Gradle maps ORG_GRADLE_PROJECT_* onto project properties, which is how
       # build.gradle.kts already reads NEXUS_USERNAME / NEXUS_PASSWORD.
       ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -39,21 +38,20 @@ jobs:
 
       - name: Preflight
         run: |
-          set -euo pipefail
-          if [ ! -d "$ANDROID_SDK_ROOT" ]; then
-            echo "::error::ANDROID_SDK_ROOT '$ANDROID_SDK_ROOT' does not exist on runner '$RUNNER_NAME'. Install the Android SDK there, or set an ANDROID_SDK_ROOT repository variable pointing at it."
-            exit 1
-          fi
           if [ -z "$ORG_GRADLE_PROJECT_NEXUS_USERNAME" ] || [ -z "$ORG_GRADLE_PROJECT_NEXUS_PASSWORD" ]; then
             echo "::error::NEXUS_USERNAME / NEXUS_PASSWORD are not set on the 'staging' GitHub Environment."
             exit 1
           fi
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT on $RUNNER_NAME"
-          java -version 2>&1 | head -2
 
       # See pr.yml.
-      - name: Disable Gradle file-system watching
-        run: echo "GRADLE_OPTS=${GRADLE_OPTS:-} -Dorg.gradle.vfs.watch=false" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v4
 
       # The fast lane (unit tests + Compose variant matrix): the full lane
       # already ran on the PR that produced this commit.
@@ -62,13 +60,3 @@ jobs:
 
       - name: Deploy
         run: bash -xe ./scripts/deploy.sh
-
-      - name: Archive test reports on the runner
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        env:
-          ARCHIVE_ROOT: ${{ vars.TEST_RESULT_ARCHIVE_ROOT }}
-          LABEL: staging
-          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT_SHA: ${{ github.sha }}
-        run: bash .github/scripts/archive-test-reports.sh

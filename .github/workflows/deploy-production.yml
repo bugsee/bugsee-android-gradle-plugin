@@ -28,13 +28,12 @@ permissions:
 jobs:
   deploy:
     name: build + deploy (RELEASE)
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     env:
       RELEASE: "true"
-      ANDROID_SDK_ROOT: ${{ vars.ANDROID_SDK_ROOT || '/Users/build/Library/Android/sdk' }}
       ORG_GRADLE_PROJECT_NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
       ORG_GRADLE_PROJECT_NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       # ASCII-armored PGP private key + its passphrase, consumed by the
@@ -65,22 +64,22 @@ jobs:
       - name: Preflight
         run: |
           set -euo pipefail
-          if [ ! -d "$ANDROID_SDK_ROOT" ]; then
-            echo "::error::ANDROID_SDK_ROOT '$ANDROID_SDK_ROOT' does not exist on runner '$RUNNER_NAME'. Install the Android SDK there, or set an ANDROID_SDK_ROOT repository variable pointing at it."
-            exit 1
-          fi
           for name in ORG_GRADLE_PROJECT_NEXUS_USERNAME ORG_GRADLE_PROJECT_NEXUS_PASSWORD SIGNING_KEY SIGNING_PASSWORD; do
             if [ -z "${!name}" ]; then
               echo "::error::${name#ORG_GRADLE_PROJECT_} is not set on the 'production' GitHub Environment."
               exit 1
             fi
           done
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT on $RUNNER_NAME"
-          java -version 2>&1 | head -2
 
       # See pr.yml.
-      - name: Disable Gradle file-system watching
-        run: echo "GRADLE_OPTS=${GRADLE_OPTS:-} -Dorg.gradle.vfs.watch=false" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v4
 
       # The full lane: a release is the last chance to catch a regression in
       # the integration tests before consumers pull it from Central.
