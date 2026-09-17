@@ -27,6 +27,8 @@
 # Required gradle properties (typically in ~/.gradle/gradle.properties):
 #   NEXUS_USERNAME, NEXUS_PASSWORD
 #   signing.keyId, signing.password, signing.secretKeyRingFile
+# or, in CI (see .github/CI.md), ORG_GRADLE_PROJECT_NEXUS_USERNAME /
+# ORG_GRADLE_PROJECT_NEXUS_PASSWORD plus SIGNING_KEY / SIGNING_PASSWORD env vars.
 
 set -euo pipefail
 
