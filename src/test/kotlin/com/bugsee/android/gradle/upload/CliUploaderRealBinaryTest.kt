@@ -32,7 +32,7 @@ import kotlin.test.assertTrue
  *  - `upload build` performs the full two-stage converged upload (registration
  *    POST → presigned artefact PUT) against an in-process [MockBuildsServer].
  *
- * This is the test a Gerrit CI lane runs with `BUGSEE_CLI_BIN` pointed at a
+ * This is the test a CI lane runs with `BUGSEE_CLI_BIN` pointed at a
  * freshly-built `bugsee-cli` (see `scripts/integration-test.sh`). It STAYS
  * GREEN offline: when no real binary is provided every test `Assume`-skips, so
  * the default `test` task is never red just because the CLI wasn't built.

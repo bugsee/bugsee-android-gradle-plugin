@@ -2,12 +2,13 @@
 
 # Bugsee Android Gradle Plugin — REAL-BINARY integration test runner.
 #
-# This repo has NO in-repo CI (Gerrit only), so there is no CI YAML to host a
-# real-binary lane. This script IS the CI entrypoint: a Gerrit verifier (or a
-# developer) runs it to exercise `CliUploaderRealBinaryTest` against a real,
-# locally-built `bugsee-cli` binary. That test `Assume`-skips when no binary is
-# provided, so the normal `./scripts/test.sh unit` run stays green offline; this
-# script is what makes the real-binary path actually execute.
+# The GitHub Actions workflows (.github/workflows) do not run this lane: it needs
+# a Rust toolchain and a bugsee-cli checkout, which they do not provision. A
+# developer, or a CI job that has both, runs this script to exercise
+# `CliUploaderRealBinaryTest` against a real, locally-built `bugsee-cli` binary.
+# That test `Assume`-skips when no binary is provided, so the normal
+# `./scripts/test.sh unit` run stays green offline; this script is what makes the
+# real-binary path actually execute.
 #
 # What it does:
 #   1. Resolves a `bugsee-cli` binary:

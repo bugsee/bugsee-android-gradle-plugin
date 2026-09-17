@@ -371,8 +371,21 @@ nexusPublishing {
     }
 }
 
+// CI supplies the PGP key through the environment, because the default
+// `signing.secretKeyRingFile` is a filesystem path and a path cannot be carried
+// in a GitHub secret. SIGNING_KEY is the ASCII-armored private key block and
+// SIGNING_PASSWORD its passphrase. When SIGNING_KEY is absent this falls through
+// to Gradle's usual signing.keyId / signing.password / signing.secretKeyRingFile
+// lookup, so local signing is unaffected. Read through `providers`, not
+// System.getenv, so a configuration-cache reuse cannot skip the branch.
+val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+val hasSigningCredentials = !signingKey.isNullOrBlank() || project.hasProperty("signing.keyId")
+
 signing {
     isRequired = false
+    if (!signingKey.isNullOrBlank()) {
+        useInMemoryPgpKeys(signingKey, providers.environmentVariable("SIGNING_PASSWORD").orNull.orEmpty())
+    }
     sign(publishing.publications)
 }
 
@@ -383,7 +396,7 @@ signing {
 // `onlyIf` alone we'd still reach that throwing spec on every local
 // publish.
 tasks.withType<Sign>().configureEach {
-    enabled = !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
+    enabled = !version.toString().contains("SNAPSHOT") && hasSigningCredentials
 }
 
 // Fix task dependency: marker publication must depend on the signing task

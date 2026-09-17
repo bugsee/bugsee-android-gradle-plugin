@@ -381,8 +381,17 @@ publishing {
     }
 }
 
+// Same in-memory key path as the root build (see there). This project configures
+// its own signing, so without its own copy the Compose artifacts would keep
+// requiring the on-disk keyring that CI does not have.
+val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+val hasSigningCredentials = !signingKey.isNullOrBlank() || project.hasProperty("signing.keyId")
+
 signing {
     isRequired = false
+    if (!signingKey.isNullOrBlank()) {
+        useInMemoryPgpKeys(signingKey, providers.environmentVariable("SIGNING_PASSWORD").orNull.orEmpty())
+    }
     sign(publishing.publications)
 }
 
@@ -392,7 +401,7 @@ signing {
 // alone, and that spec's lazy `getSignatory()` call throws on some
 // no-credentials Gradle 8.7+ shapes rather than returning null.
 tasks.withType<Sign>().configureEach {
-    enabled = !version.toString().contains("SNAPSHOT") && project.hasProperty("signing.keyId")
+    enabled = !version.toString().contains("SNAPSHOT") && hasSigningCredentials
 }
 
 // Same defense as the root project: custom artifacts + signing can leave
