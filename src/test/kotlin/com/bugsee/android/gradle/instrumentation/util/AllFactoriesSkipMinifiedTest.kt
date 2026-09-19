@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.util
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -32,7 +33,9 @@ class AllFactoriesSkipMinifiedTest {
 
         assertTrue("expected to find factories under $root", factories.isNotEmpty())
 
-        val missing = factories.filterNot { it.readText().contains("MinifiedClassSkip.shouldSkip") }
+        val missing = factories
+            .filterNot { it.name in EXEMPT }
+            .filterNot { it.readText().contains("MinifiedClassSkip.shouldSkip") }
 
         if (missing.isNotEmpty()) {
             fail(
@@ -43,5 +46,29 @@ class AllFactoriesSkipMinifiedTest {
                     "    if (MinifiedClassSkip.shouldSkip(nextClassVisitor)) return nextClassVisitor"
             )
         }
+    }
+
+    /**
+     * Regression (plugin 4.0.6): the ExtensionsInit lane consulted the skip, and the
+     * published SDK's `BugseeInitProvider` always carries the R8 marker, so the lane
+     * never ran while the manifest task still stripped every extension provider.
+     */
+    @Test
+    fun `lanes that target the SDK's own classes never consult the skip`() {
+        val root = File("src/main/kotlin/com/bugsee/android/gradle/instrumentation")
+        for (name in EXEMPT) {
+            val file = root.walkTopDown().singleOrNull { it.name == name }
+                ?: return fail("exempt factory $name no longer exists; drop it from EXEMPT")
+            assertFalse(
+                "$name targets a class in the R8-processed Bugsee SDK, so the minified skip " +
+                    "would match it on every real build",
+                file.readText().contains("MinifiedClassSkip.shouldSkip"),
+            )
+        }
+    }
+
+    private companion object {
+        /** Factories whose only target is a Bugsee SDK class, which is always R8-processed when published. */
+        val EXEMPT = setOf("ExtensionsInitClassVisitorFactory.kt")
     }
 }

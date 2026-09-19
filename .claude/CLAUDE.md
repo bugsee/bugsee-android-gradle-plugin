@@ -145,7 +145,9 @@ Two-stage upload via `SymbolUploader`:
 2. **PUT** file to presigned URL
 
 Error handling:
-- Code `16004` → `SymbolAlreadyExistsError` (mapping already uploaded, skip)
+- `DuplicateSymbolsFoundError` (code `16004`) → already uploaded, treated as success (skip). The appserver
+  sends it with HTTP 200 NESTED in its envelope — `{"ok":false,"error":{"type":"DuplicateSymbolsFoundError","code":16004}}` —
+  so `SymbolUploader.isAlreadyExists` reads `error.code`/`error.type`; a top-level `code` is legacy only
 - `ApplicationNotFoundError` → invalid app token
 - Uses `StandardHttpRequestRetryHandler` for transient failures
 
