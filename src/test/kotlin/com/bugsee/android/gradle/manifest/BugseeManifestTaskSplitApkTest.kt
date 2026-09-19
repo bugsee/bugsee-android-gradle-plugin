@@ -62,6 +62,7 @@ class BugseeManifestTaskSplitApkTest {
         baseManifestContent: String,
         nestedManifests: Map<String, String>,
         optimizeExtensions: Boolean = false,
+        extensionsInitRegistered: Boolean = optimizeExtensions,
     ): RunResult {
         val tag = "${++runId}"
         val project = ProjectBuilder.builder().withProjectDir(tempFolder.newFolder()).build()
@@ -89,6 +90,7 @@ class BugseeManifestTaskSplitApkTest {
         val task = project.tasks.register("manifest-$tag", BugseeManifestTask::class.java) { t ->
             t.debug.set(false)
             t.optimizeExtensionsLoading.set(optimizeExtensions)
+            t.extensionsInitRegistered.set(extensionsInitRegistered)
             t.variantName.set("debug")
             t.pluginVersion.set("7.0.0")
             t.mergedManifest.set(baseManifestFile)
@@ -206,6 +208,30 @@ class BugseeManifestTaskSplitApkTest {
             detected,
             "allDetected must dedupe across splits — got $detected",
         )
+    }
+
+    @Test
+    fun `nothing is stripped when the injection lane was not registered`() {
+        // Regression: the strip used to key only on its own preconditions, so a variant
+        // whose ExtensionsInit lane was never registered still lost every provider and
+        // got no register call in exchange.
+        val result = runWithSplits(
+            baseManifestContent = manifestWithExtensionProvider,
+            nestedManifests = mapOf("arm64-v8a" to manifestWithExtensionProvider),
+            optimizeExtensions = true,
+            extensionsInitRegistered = false,
+        )
+
+        for (manifest in listOf(
+            File(result.outputParent, "AndroidManifest.xml"),
+            nestedManifestFile(result.outputParent, "arm64-v8a"),
+        )) {
+            assertTrue(
+                manifest.readText().contains("BugseeFeedbackInitProvider"),
+                "${manifest.path} must keep the provider when no injection will replace it",
+            )
+        }
+        assertEquals(emptyList<String>(), result.detectedFile.readLines().filter { it.isNotBlank() })
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.manifest
 
+import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionSpec
 import java.io.File
 import java.io.StringWriter
 import javax.xml.parsers.DocumentBuilderFactory
@@ -78,23 +79,6 @@ internal object ManifestModifier {
     }
 
     /**
-     * Fully-qualified name of the core SDK init provider. We never strip
-     * this one — it's the consolidation target, not a consolidation
-     * source.
-     */
-    private const val CORE_INIT_PROVIDER_FQN = "com.bugsee.library.BugseeInitProvider"
-
-    /**
-     * Matches Bugsee extension init providers. The class name pattern is
-     * `Bugsee<Name>InitProvider` regardless of subpackage (the compose
-     * extension lives in `com.bugsee.library.compose`, the others under
-     * `com.bugsee.library`). Anchored with `Bugsee` prefix + `InitProvider`
-     * suffix so unrelated classes that happen to live in the same package
-     * (e.g. `BugseeContextProvider`) do not match.
-     */
-    private val EXTENSION_INIT_PROVIDER_REGEX = Regex("""^.*\.Bugsee[A-Za-z0-9_]+InitProvider$""")
-
-    /**
      * Modifies the given AndroidManifest.xml file:
      * - Removes any existing BUILD_UUID meta-data tags
      * - Injects a new BUILD_UUID meta-data tag under the <application> element
@@ -139,9 +123,9 @@ internal object ManifestModifier {
     }
 
     /**
-     * Removes every `<provider>` element whose `android:name` matches a
-     * Bugsee extension init provider (i.e. `*.Bugsee<Name>InitProvider`
-     * other than the core SDK's own `BugseeInitProvider`).
+     * Removes every `<provider>` element whose `android:name` is a known
+     * Bugsee extension init provider ([ExtensionSpec.KNOWN]). Any other
+     * provider, however it is named, is left alone.
      *
      * Returns the list of fully-qualified class names that were removed,
      * in document order. The caller uses this list to inline the
@@ -172,8 +156,8 @@ internal object ManifestModifier {
         for (i in 0 until providerNodes.length) {
             val provider = providerNodes.item(i) as Element
             val name = provider.getAttributeNS(ANDROID_NS, "name")
-            if (name.isEmpty() || name == CORE_INIT_PROVIDER_FQN) continue
-            if (EXTENSION_INIT_PROVIDER_REGEX.matches(name)) {
+            // Only known SDK extensions: see ExtensionSpec.KNOWN for why not a name pattern.
+            if (ExtensionSpec.fromInitProviderFqn(name) != null) {
                 removed.add(name)
                 toRemove.add(provider)
             }

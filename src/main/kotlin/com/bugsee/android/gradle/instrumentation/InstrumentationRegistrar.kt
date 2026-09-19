@@ -93,8 +93,10 @@ internal class InstrumentationRegistrar(
         null
     }
 
-    fun applyAll(variant: Variant) {
+    /** @return the [Instrumentation.key]s actually applied to [variant]. */
+    fun applyAll(variant: Variant): Set<String> {
         val scope = variantScopeOf(variant)
+        val applied = HashSet<String>()
         for (instrumentation in instrumentations) {
             // Tier-driven instrumentations (e.g. AppStartupTracing) own
             // their disable logic via shouldApply; routing them through
@@ -114,9 +116,11 @@ internal class InstrumentationRegistrar(
             if (applies) {
                 if (debug) logger.warn("Bugsee: Applying ${instrumentation.name} instrumentation to variant ${variant.name}")
                 instrumentation.apply(variant, excludes)
+                applied.add(instrumentation.key)
             } else {
                 if (debug) logger.warn("Bugsee: Skipping ${instrumentation.name} instrumentation (dependency not found)")
             }
         }
+        return applied
     }
 }
