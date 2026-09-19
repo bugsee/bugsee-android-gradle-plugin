@@ -32,6 +32,14 @@ android {
         }
     }
 
+    // `-PbugseeFixtureInitProvider=hook|nohook` compiles in a stand-in
+    // com.bugsee.library.BugseeInitProvider with or without initializeExtensions(),
+    // so the ExtensionsInit lane has a real class to rewrite. Absent by default.
+    when (project.findProperty("bugseeFixtureInitProvider")?.toString()) {
+        "hook" -> sourceSets.getByName("main").java.srcDir("src/extensionsHook/java")
+        "nohook" -> sourceSets.getByName("main").java.srcDir("src/extensionsNoHook/java")
+    }
+
     // Optional product-flavor wiring. When the
     // `bugseeFixtureMultiFlavor` property is `true` the fixture
     // exposes two flavors (`free`, `paid`) so multi-variant
@@ -62,12 +70,24 @@ android {
 //       return true, triggering AppStartupTracing registration.
 // compileOnly because the fixture is only assembled — never executed —
 // and we don't want the stub bytecode in the dex output.
+// `-PbugseeFixtureNoCoreSdk=true` hides the core SDK from dependency detection (same
+// stub classes, but as a bare file rather than com.bugsee:bugsee-android) and turns
+// off auto-add, so the ExtensionsInit lane cannot apply while every manifest-strip
+// precondition still holds. Used by BugseeManifestOptimizeExtensionsTest.
+val noCoreSdk = project.findProperty("bugseeFixtureNoCoreSdk")?.toString() == "true"
+
 dependencies {
-    compileOnly("com.bugsee:bugsee-android:99.0.0")
+    if (noCoreSdk) {
+        val stubRepo = project.findProperty("bugseeStubSdkRepo").toString()
+        compileOnly(files("$stubRepo/com/bugsee/bugsee-android/99.0.0/bugsee-android-99.0.0.jar"))
+    } else {
+        compileOnly("com.bugsee:bugsee-android:99.0.0")
+    }
     implementation("androidx.startup:startup-runtime:1.1.1")
 }
 
 bugsee {
+    if (noCoreSdk) sdkAutoLoad.set(false)
     // Upload tasks (build-info + size analysis) are OFF by default in
     // this fixture — they need a Bugsee app token and are otherwise
     // unrelated to app-startup tracing. BundleUploadConfigCacheTest

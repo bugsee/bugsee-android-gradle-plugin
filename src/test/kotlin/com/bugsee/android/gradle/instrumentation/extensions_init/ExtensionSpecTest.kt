@@ -5,57 +5,14 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Convention tests for [ExtensionSpec.fromInitProviderFqn]. The same
- * convention is what guarantees that the manifest-stripping side (which
- * only knows init-provider FQNs) lines up with the bytecode-injection
- * side (which needs facade FQNs + register method names).
- *
- * The fact that compose's init provider lives in a different subpackage
- * (`com.bugsee.library.compose`) than its facade (`com.bugsee.library`)
- * is the case that makes this convention non-trivial — the derivation
- * keys on the *simple* class name and pins the facade to the
- * `com.bugsee.library` package regardless of where the init provider
- * sits.
+ * Tests for [ExtensionSpec.fromInitProviderFqn] and the [ExtensionSpec.KNOWN]
+ * table, the one definition both the manifest strip and the bytecode injection
+ * read, so the two cannot disagree about which providers are replaced.
  */
 class ExtensionSpecTest {
 
     @Test
-    fun `derives feedback spec from canonical FQN`() {
-        val spec = ExtensionSpec.fromInitProviderFqn(
-            "com.bugsee.library.BugseeFeedbackInitProvider"
-        )!!
-        assertEquals("com/bugsee/library/BugseeFeedback", spec.facadeInternalName)
-        assertEquals("registerFeedbackExtension", spec.registerMethodName)
-        assertEquals("com.bugsee.library.BugseeFeedbackInitProvider", spec.initProviderFqn)
-    }
-
-    @Test
-    fun `derives compose spec even though init provider sits in compose subpackage`() {
-        // Critical case — compose's init provider FQN is
-        // `com.bugsee.library.compose.BugseeComposeInitProvider`, but the
-        // facade is `com.bugsee.library.BugseeCompose`. The convention
-        // throws away everything except the simple class name.
-        val spec = ExtensionSpec.fromInitProviderFqn(
-            "com.bugsee.library.compose.BugseeComposeInitProvider"
-        )!!
-        assertEquals("com/bugsee/library/BugseeCompose", spec.facadeInternalName)
-        assertEquals("registerComposeExtension", spec.registerMethodName)
-    }
-
-    @Test
-    fun `derives ktor2 spec preserves digits in name`() {
-        val spec = ExtensionSpec.fromInitProviderFqn(
-            "com.bugsee.library.BugseeKtor2InitProvider"
-        )!!
-        assertEquals("com/bugsee/library/BugseeKtor2", spec.facadeInternalName)
-        assertEquals("registerKtor2Extension", spec.registerMethodName)
-    }
-
-    @Test
     fun `rejects FQN without Bugsee prefix`() {
-        // A `<provider>` that slipped past the manifest regex would land
-        // here as a malformed entry — the spec derivation must reject it
-        // rather than synthesize an invalid call.
         assertNull(ExtensionSpec.fromInitProviderFqn("com.example.MyInitProvider"))
     }
 
@@ -65,11 +22,49 @@ class ExtensionSpecTest {
     }
 
     @Test
-    fun `rejects FQN with empty name part`() {
-        // "BugseeInitProvider" itself: simple name strips prefix+suffix to
-        // empty, which would synthesize a call to a no-op facade. The core
-        // SDK provider should never reach the spec derivation (the manifest
-        // step excludes it), but defensively reject here too.
+    fun `rejects the core SDK provider`() {
+        // The core provider is the consolidation target, never a source.
         assertNull(ExtensionSpec.fromInitProviderFqn("com.bugsee.library.BugseeInitProvider"))
+    }
+
+    /**
+     * Pins the table against the SDK's shipped extensions (android/sdk, each module's
+     * `src/main/AndroidManifest.xml` and `Bugsee<Name>.register<Name>Extension()`).
+     * A row that drifts from the SDK strips a provider and injects a call to a
+     * missing facade.
+     */
+    @Test
+    fun `known table matches the SDK's shipped extensions`() {
+        assertEquals(
+            listOf(
+                Triple("com.bugsee.library.BugseeFeedbackInitProvider", "com/bugsee/library/BugseeFeedback", "registerFeedbackExtension"),
+                Triple("com.bugsee.library.BugseeRemotingInitProvider", "com/bugsee/library/BugseeRemoting", "registerRemotingExtension"),
+                Triple("com.bugsee.library.compose.BugseeComposeInitProvider", "com/bugsee/library/BugseeCompose", "registerComposeExtension"),
+                Triple("com.bugsee.library.BugseeNdkInitProvider", "com/bugsee/library/BugseeNdk", "registerNdkExtension"),
+                Triple("com.bugsee.library.BugseeOkHttpInitProvider", "com/bugsee/library/BugseeOkHttp", "registerOkHttpExtension"),
+                Triple("com.bugsee.library.BugseeKtor2InitProvider", "com/bugsee/library/BugseeKtor2", "registerKtor2Extension"),
+                Triple("com.bugsee.library.BugseeKtor3InitProvider", "com/bugsee/library/BugseeKtor3", "registerKtor3Extension"),
+                Triple("com.bugsee.library.BugseeCronetInitProvider", "com/bugsee/library/BugseeCronet", "registerCronetExtension"),
+                Triple("com.bugsee.library.BugseeLeakInitProvider", "com/bugsee/library/BugseeLeak", "registerLeakExtension"),
+            ),
+            ExtensionSpec.KNOWN.map { Triple(it.initProviderFqn, it.facadeInternalName, it.registerMethodName) },
+        )
+    }
+
+    /**
+     * Regression: plugin <= 4.0.6 derived a facade from any `*.Bugsee<Word>InitProvider`,
+     * so these were stripped and replaced by a call into a class that does not exist.
+     */
+    @Test
+    fun `rejects Bugsee-shaped providers that are not known extensions`() {
+        for (fqn in listOf(
+            "com.acme.probe.BugseeFooInitProvider",
+            "com.bugsee.reactnative.BugseeWrapperInitProvider",
+            "com.bugsee.library.BugseeFooInitProvider",
+            // A known simple name in a foreign package is still not ours.
+            "com.acme.BugseeNdkInitProvider",
+        )) {
+            assertNull(fqn, ExtensionSpec.fromInitProviderFqn(fqn))
+        }
     }
 }

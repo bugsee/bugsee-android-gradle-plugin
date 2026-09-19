@@ -32,6 +32,8 @@ internal class ExtensionsInitClassVisitor(
     private val className: String,
 ) : ClassVisitor(apiVersion, nextClassVisitor) {
 
+    private var injected = false
+
     override fun visitMethod(
         access: Int,
         name: String?,
@@ -42,6 +44,7 @@ internal class ExtensionsInitClassVisitor(
         val mv = super.visitMethod(access, name, descriptor, signature, exceptions) ?: return null
         if (extensionSpecs.isEmpty()) return mv
         if (name == INITIALIZE_EXTENSIONS_METHOD && descriptor == "()V") {
+            injected = true
             // Wrap so a failure in our transform (or AGP's frame
             // recomputation) is attributed to this class+method and
             // re-thrown, never swallowed into corrupt bytecode. See
@@ -56,6 +59,23 @@ internal class ExtensionsInitClassVisitor(
             )
         }
         return mv
+    }
+
+    /**
+     * The providers in [extensionSpecs] are already gone from the merged manifest, so
+     * a class without the hook would ship every one of them unregistered. Fail the
+     * build naming them rather than let that pass green.
+     */
+    override fun visitEnd() {
+        if (extensionSpecs.isNotEmpty() && !injected) {
+            throw IllegalStateException(
+                "Bugsee: $className has no $INITIALIZE_EXTENSIONS_METHOD()V, so the extension " +
+                    "providers stripped from the merged manifest would never register: " +
+                    extensionSpecs.joinToString { it.initProviderFqn } +
+                    ". Use a matching Bugsee SDK, or turn off optimizeExtensionsLoading in the bugsee {} block."
+            )
+        }
+        super.visitEnd()
     }
 
     companion object {

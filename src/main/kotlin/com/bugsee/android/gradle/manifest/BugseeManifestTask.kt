@@ -28,13 +28,27 @@ abstract class BugseeManifestTask : DefaultTask() {
     abstract val debug: Property<Boolean>
 
     /**
-     * When `true` (default), every `<provider>` matching
-     * `*.Bugsee<Name>InitProvider` is stripped from the merged manifest
-     * and its FQN recorded in [detectedExtensions]. When `false`, no
+     * When `true` (default, and with [extensionsInitRegistered]), every known
+     * extension `<provider>` (see `ExtensionSpec.KNOWN`) is stripped from the
+     * merged manifest and its FQN recorded in [detectedExtensions]. When `false`, no
      * stripping occurs and the detection file is written empty.
      */
     @get:Input
     abstract val optimizeExtensionsLoading: Property<Boolean>
+
+    /**
+     * Whether the ExtensionsInit injection lane was registered for this variant.
+     * Stripping without it leaves every extension with neither a `<provider>` nor
+     * a register call, so the strip requires both this and
+     * [optimizeExtensionsLoading]. Defaults to `false`: nothing is stripped unless
+     * the plugin confirmed the lane.
+     */
+    @get:Input
+    abstract val extensionsInitRegistered: Property<Boolean>
+
+    init {
+        extensionsInitRegistered.convention(false)
+    }
 
     /**
      * AGP variant name (`debug`, `freeRelease`, etc.) for this task's
@@ -166,7 +180,7 @@ abstract class BugseeManifestTask : DefaultTask() {
         }
 
         val allDetected = mutableListOf<String>()
-        val optimize = optimizeExtensionsLoading.getOrElse(true)
+        val optimize = optimizeExtensionsLoading.getOrElse(true) && extensionsInitRegistered.get()
         if (optimize) {
             val detected = ManifestModifier.removeExtensionInitProviders(outputFile)
             if (isDebug && detected.isNotEmpty()) {
