@@ -8,6 +8,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.Opcodes
+import org.objectweb.asm.tree.ClassNode
+import org.objectweb.asm.tree.MethodInsnNode
 
 /**
  * End-to-end coverage for the `optimizeExtensionsLoading` DSL
@@ -15,14 +19,14 @@ import org.junit.rules.TemporaryFolder
  * behavior. The fixture's `AndroidManifest.xml` declares TWO Bugsee
  * extension providers (`BugseeFeedbackInitProvider` and
  * `BugseeRemotingInitProvider`) so this test class exercises BOTH:
- *  - the regex's ability to detect more than one extension in the
+ *  - detection of more than one extension in the
  *    merged manifest;
  *  - the de-duplicated `detectedExtensions` output;
  *  - the symmetric `optimizeExtensionsLoading=false` path that
  *    leaves the providers intact.
  *
  * Unit-level coverage in [com.bugsee.android.gradle.manifest.ManifestModifierExtensionsTest]
- * pins the regex + the DOM editing in isolation, but the wiring
+ * pins the known-extension match + the DOM editing in isolation, but the wiring
  * through AGP's MERGED_MANIFEST transform + the DSL property
  * resolution only ever runs in TestKit. A regression that severed
  * either link (e.g., the task ran but ignored the DSL value, or the
@@ -72,17 +76,6 @@ class BugseeManifestOptimizeExtensionsTest {
             "merged manifest must NOT contain '$remotingProviderFqn' when optimization is on; got:\n$text",
             !text.contains(remotingProviderFqn),
         )
-
-        // Core SDK's own `BugseeInitProvider` is NOT an extension and
-        // must NOT be stripped. The fixture doesn't actually declare
-        // it, but pin the negative-space contract by asserting the
-        // regex didn't over-match: anything `Bugsee*InitProvider`
-        // other than `BugseeInitProvider` is stripped, but a literal
-        // `BugseeInitProvider` (no `<name>` infix) would be left
-        // alone.
-        // (Empty assert — we just want to be sure the test stays
-        // alert to the negative case if a future fixture adds the
-        // core init provider.)
     }
 
     /**
@@ -170,9 +163,7 @@ class BugseeManifestOptimizeExtensionsTest {
         val fqns = detectedFile!!.readLines().filter { it.isNotBlank() }
 
         // Pin the multi-extension behavior: both FQNs are recorded
-        // exactly once, and the regex matched both even though they
-        // share a prefix. Order: the regex preserves document order
-        // from the source manifest. The fixture declares Feedback
+        // exactly once, in document order from the source manifest. The fixture declares Feedback
         // before Remoting.
         assertEquals(
             "expected detected-extensions output to list both stripped FQNs in document order " +
@@ -180,5 +171,87 @@ class BugseeManifestOptimizeExtensionsTest {
             listOf(feedbackProviderFqn, remotingProviderFqn),
             fqns,
         )
+    }
+
+    /**
+     * Regression: the strip used to key only on its own preconditions, so a variant
+     * where the ExtensionsInit lane did not apply (here: no core SDK detected) still
+     * lost every provider and got no register call in exchange.
+     */
+    @Test
+    fun providers_are_kept_when_the_injection_lane_does_not_apply() {
+        val dir = temp.newFolder("no-lane")
+        val fixture = FixtureProject.materialize("app-startup-tracing", dir)
+        val result = fixture.buildTasks(
+            tasks = listOf(":app:assembleDebug"),
+            tier = "STANDARD",
+            "-PbugseeFixtureNoCoreSdk=true",
+        )
+        assertEquals(TaskOutcome.SUCCESS, result.task(":app:assembleDebug")?.outcome)
+
+        val text = fixture.readMergedManifest("debug")
+        assertNotNull("merged manifest must exist on disk", text)
+        assertTrue(
+            "no injection will replace '$feedbackProviderFqn', so it must stay; got:\n$text",
+            text!!.contains(feedbackProviderFqn),
+        )
+        assertTrue(
+            "no injection will replace '$remotingProviderFqn', so it must stay; got:\n$text",
+            text.contains(remotingProviderFqn),
+        )
+    }
+
+    /**
+     * Regression (plugin 4.0.6): the strip ran while the injection silently did not,
+     * and no test could see it because the fixture had no BugseeInitProvider to
+     * rewrite. Asserts both halves on one real AGP build.
+     */
+    @Test
+    fun stripped_providers_are_registered_by_the_rewritten_init_provider() {
+        val dir = temp.newFolder("strip-and-inject")
+        val fixture = FixtureProject.materialize("app-startup-tracing", dir)
+        val result = fixture.buildTasks(
+            tasks = listOf(":app:assembleDebug"),
+            tier = "STANDARD",
+            "-PbugseeFixtureInitProvider=hook",
+        )
+        assertEquals(TaskOutcome.SUCCESS, result.task(":app:assembleDebug")?.outcome)
+
+        val text = fixture.readMergedManifest("debug")!!
+        assertTrue("feedback provider must be stripped", !text.contains(feedbackProviderFqn))
+        assertTrue("remoting provider must be stripped", !text.contains(remotingProviderFqn))
+
+        val initProvider = dir.walkTopDown().singleOrNull {
+            it.path.contains("transformDebugClassesWithAsm") &&
+                it.path.endsWith("com/bugsee/library/BugseeInitProvider.class")
+        }
+        assertNotNull("transformed BugseeInitProvider not found under $dir", initProvider)
+        assertEquals(
+            listOf(
+                "com/bugsee/library/BugseeFeedback.registerFeedbackExtension",
+                "com/bugsee/library/BugseeRemoting.registerRemotingExtension",
+            ),
+            staticCalls(initProvider!!.readBytes(), "initializeExtensions"),
+        )
+    }
+
+    /** Stripped providers with no hook to register them must fail the build by name. */
+    @Test
+    fun build_fails_naming_the_providers_when_the_hook_is_missing() {
+        val dir = temp.newFolder("no-hook")
+        val fixture = FixtureProject.materialize("app-startup-tracing", dir)
+        val result = fixture.buildAndFail("STANDARD", "-PbugseeFixtureInitProvider=nohook")
+
+        assertTrue(result.output, result.output.contains("has no initializeExtensions()V"))
+        assertTrue(result.output, result.output.contains(feedbackProviderFqn))
+        assertTrue(result.output, result.output.contains(remotingProviderFqn))
+    }
+
+    private fun staticCalls(bytes: ByteArray, method: String): List<String> {
+        val node = ClassNode().also { ClassReader(bytes).accept(it, 0) }
+        return node.methods.single { it.name == method }.instructions.toArray()
+            .filterIsInstance<MethodInsnNode>()
+            .filter { it.opcode == Opcodes.INVOKESTATIC }
+            .map { "${it.owner}.${it.name}" }
     }
 }

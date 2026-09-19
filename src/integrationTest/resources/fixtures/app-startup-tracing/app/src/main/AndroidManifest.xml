@@ -28,9 +28,8 @@
 
         <!-- Bugsee extension init providers — declared here so the
              integration tests can exercise the manifest-stripping
-             path. These FQNs match the regex
-             `^.*\.Bugsee[A-Za-z0-9_]+InitProvider$` in
-             ManifestModifier.removeExtensionInitProviders. The
+             path. Both are in ExtensionSpec.KNOWN, the table
+             ManifestModifier.removeExtensionInitProviders strips by. The
              referenced classes are NOT on the runtime classpath; the
              fixture only assembles and inspects intermediates, never
              runs, so AGP packaging proceeds even though the provider

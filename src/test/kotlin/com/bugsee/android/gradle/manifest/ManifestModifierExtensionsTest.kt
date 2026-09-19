@@ -137,41 +137,38 @@ class ManifestModifierExtensionsTest {
     }
 
     @Test
-    fun `does not match classes named like BugseeContextProvider or BugseeFooProvider`() {
-        // Defensive: the regex must require BOTH "Bugsee" prefix and
-        // "InitProvider" suffix. Anything else stays.
-        val manifest = writeManifest("""
+    fun `leaves Bugsee-named providers that are not known SDK extensions in place`() {
+        // Regression: plugin <= 4.0.6 stripped anything shaped `*.Bugsee<Word>InitProvider`
+        // from any package and injected a call to a facade that did not exist, so a
+        // wrapper's or customer's provider vanished from the APK with a green build.
+        val foreign = listOf(
+            "com.example.BugseeStyleInitProvider",
+            "com.acme.probe.BugseeFooInitProvider",
+            "com.bugsee.reactnative.BugseeWrapperInitProvider",
+            // Right package and shape, but not a shipped extension.
+            "com.bugsee.library.BugseeFooInitProvider",
+            "com.bugsee.library.BugseeContextProvider",
+            "com.bugsee.library.BugseeInitProvider",
+        )
+        val manifest = writeManifest(
+            """
             <?xml version="1.0" encoding="utf-8"?>
             <manifest xmlns:android="http://schemas.android.com/apk/res/android">
                 <application>
-                    <provider
-                        android:name="com.bugsee.library.BugseeContextProvider"
-                        android:authorities="example.contextprovider"
-                        android:exported="false" />
-                    <provider
-                        android:name="com.bugsee.library.BugseeFooProvider"
-                        android:authorities="example.fooprovider"
-                        android:exported="false" />
-                    <provider
-                        android:name="com.example.BugseeStyleInitProvider"
-                        android:authorities="example.styleinitprovider"
-                        android:exported="false" />
-                </application>
-            </manifest>
-        """.trimIndent())
+            """.trimIndent() +
+                foreign.joinToString("") {
+                    "\n<provider android:name=\"$it\" android:authorities=\"a.${it.lowercase()}\" android:exported=\"false\" />"
+                } +
+                "\n</application>\n</manifest>"
+        )
 
         val removed = ManifestModifier.removeExtensionInitProviders(manifest)
 
-        // BugseeStyleInitProvider matches the convention even in a foreign
-        // package — the convention is shape-based, not package-based.
-        assertEquals(
-            listOf("com.example.BugseeStyleInitProvider"),
-            removed,
-        )
+        assertEquals(emptyList<String>(), removed)
         val updated = manifest.readText()
-        assertTrue("BugseeContextProvider must remain", "BugseeContextProvider" in updated)
-        assertTrue("BugseeFooProvider must remain", "BugseeFooProvider" in updated)
-        assertFalse("BugseeStyleInitProvider" in updated)
+        for (fqn in foreign) {
+            assertTrue("$fqn must remain in the manifest", "\"$fqn\"" in updated)
+        }
     }
 
     @Test
@@ -208,8 +205,8 @@ class ManifestModifierExtensionsTest {
                          a NOT_FOUND_ERR pre-fix. -->
                     <queries>
                         <provider
-                            android:name="com.bugsee.library.BugseeNestedInitProvider"
-                            android:authorities="example.bugseenestedinitprovider"
+                            android:name="com.bugsee.library.BugseeNdkInitProvider"
+                            android:authorities="example.bugseendkinitprovider"
                             android:exported="false" />
                     </queries>
                 </application>
@@ -224,7 +221,7 @@ class ManifestModifierExtensionsTest {
             "both extension providers must be detected (direct + nested)",
             listOf(
                 "com.bugsee.library.BugseeFeedbackInitProvider",
-                "com.bugsee.library.BugseeNestedInitProvider",
+                "com.bugsee.library.BugseeNdkInitProvider",
             ),
             removed,
         )
@@ -235,7 +232,7 @@ class ManifestModifierExtensionsTest {
         )
         assertFalse(
             "nested extension provider must ALSO be stripped (the load-bearing claim)",
-            updated.contains("BugseeNestedInitProvider"),
+            updated.contains("BugseeNdkInitProvider"),
         )
     }
 

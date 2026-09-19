@@ -8,6 +8,7 @@ import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
+import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
@@ -330,9 +331,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // before the manifest task, so provider-stripping and the
             // ExtensionsInit injection share one gate.)
             if (instrumentationGloballyEnabled) {
-                val extras = listOf(
-                    ExtensionsInitInstrumentation(extension, manifestTaskProvider),
-                )
+                val extensionsInit = ExtensionsInitInstrumentation(extension, manifestTaskProvider)
+                val extras = listOf<Instrumentation>(extensionsInit)
                 // Core-only instrumentations must also apply when the plugin
                 // is going to auto-add the core SDK: at this point that
                 // dependency is still a pending `withDependencies` addition and
@@ -344,7 +344,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     extras,
                     coreSdkAutoLoad,
                 )
-                registrar.applyAll(variant)
+                val applied = registrar.applyAll(variant)
+                // The strip must follow what was actually registered, not re-derive it:
+                // the lane's own gates (SDK detection per variant, feature keys) can say
+                // no while every strip precondition says yes.
+                val extensionsInitRegistered = extensionsInit.key in applied
+                manifestTaskProvider.configure { it.extensionsInitRegistered.set(extensionsInitRegistered) }
             } else {
                 if (isDebug) project.logger.warn("Bugsee: Bytecode instrumentation is globally disabled")
             }
