@@ -417,6 +417,8 @@ internal object CliUploader {
      * Constructs the argv vector for `bugsee-cli debug-files upload --type elf`.
      *
      * No `--icon` (only valid for proguard); the CLI rejects that combination.
+     * [symbolsZip] may also be a directory of libraries (CLI >= 0.8.0), which the
+     * CLI walks recursively and reads in place.
      * [force] adds `--force` so a richer file (FULL `.so.dbg`) replaces a poorer
      * one (SYMBOL_TABLE `.so.sym`) already stored for the same GNU build-id.
      * Visible for testing.

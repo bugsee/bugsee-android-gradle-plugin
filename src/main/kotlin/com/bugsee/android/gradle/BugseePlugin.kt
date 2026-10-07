@@ -595,6 +595,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
             task.forceUpload.set(extension.ndk.forceDebugSymbolsUpload)
+            task.useMergedNativeLibs.set(extension.ndk.useMergedNativeLibs)
+            // AGP exposes no public artifact for the unstripped merged libs, so the
+            // task reads the conventional folder; an absent/empty one falls back to
+            // the native_debug_metadata / native-debug-symbols.zip sources.
+            task.mergedNativeLibsDir.set(
+                project.layout.buildDirectory.dir("intermediates/merged_native_libs/${variant.name}")
+            )
             // Uploader strategy + bugsee-cli binary path/version — mirrors the
             // wiring on MappingUploadTask. Same auto-download story: when
             // `cliPath` is unset, the task downloads `cliVersion` from
@@ -631,6 +638,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 project.tasks.matching {
                     it.name == "extract${capitalizedVariant}NativeDebugMetadata"
                 }
+            )
+            // Order after (not depend on) the merge step so the unstripped libs are
+            // complete when read, without pulling the task into builds that skip it.
+            task.mustRunAfter(
+                project.tasks.matching { it.name == "merge${capitalizedVariant}NativeLibs" }
             )
         }
 

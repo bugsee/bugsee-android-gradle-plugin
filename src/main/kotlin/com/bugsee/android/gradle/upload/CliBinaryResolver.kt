@@ -54,6 +54,10 @@ internal object CliBinaryResolver {
      * check can't reach the download host, the pinned version is what runs, so
      * it must already be a CLI that uploads both `.so.sym` and `.so.dbg`.
      *
+     * `0.8.0` is the first CLI whose `--type elf` takes a DIRECTORY (walked
+     * recursively, read in place), which the native upload uses to ship the
+     * unstripped `merged_native_libs` without re-zipping ([ELF_DIRECTORY_MIN_VERSION]).
+     *
      * This is the version the plugin downloads. Keeping the CLI current is
      * the CLI's own job: once a binary is on disk, the plugin invokes
      * `bugsee-cli update --max-age 12h`, which discovers the newest
@@ -61,7 +65,21 @@ internal object CliBinaryResolver {
      * verifies, and self-replaces in place — all throttled and best-effort.
      * The plugin no longer re-implements any version discovery.
      */
-    const val DEFAULT_VERSION: String = "0.7.12"
+    const val DEFAULT_VERSION: String = "0.8.0"
+
+    /** Lowest CLI whose `debug-files upload --type elf` accepts a directory of libraries. */
+    const val ELF_DIRECTORY_MIN_VERSION: String = "0.8.0"
+
+    /**
+     * Whether the CLI the task will run can take a directory for `--type elf`.
+     * A user-supplied [cliPath] is trusted (its version is unknown here; an old
+     * binary rejects the directory and the caller falls back to the zip path);
+     * otherwise the pinned [cliVersion] (default [DEFAULT_VERSION]) must meet
+     * [ELF_DIRECTORY_MIN_VERSION].
+     */
+    internal fun supportsElfDirectory(cliVersion: String?, cliPath: String?): Boolean =
+        !cliPath.isNullOrBlank() ||
+            versionAtLeast(cliVersion?.takeIf { it.isNotBlank() } ?: DEFAULT_VERSION, ELF_DIRECTORY_MIN_VERSION)
 
     /**
      * Lowest CLI version that ships the `pack` subcommand (the normalized

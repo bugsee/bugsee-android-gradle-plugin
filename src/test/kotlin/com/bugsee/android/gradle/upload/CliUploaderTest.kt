@@ -123,6 +123,20 @@ class CliUploaderTest {
         )
     }
 
+    @Test fun `buildElfArgv passes a library directory as the input path`() {
+        val dir = File("/tmp/merged_native_libs/release")
+        val argv = CliUploader.buildElfArgv(
+            endpoint = "https://api.bugsee.com",
+            appToken = "token-xyz",
+            version = "1.0",
+            build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000",
+            symbolsZip = dir,
+        )
+        assertEquals(dir.absolutePath, argv.last())
+        assertFalse(argv.contains("--force"))
+    }
+
     @Test fun `buildElfArgv does NOT include --icon (CLI rejects icon for elf)`() {
         // The CLI returns ConfigInvalid (exit 20) if --icon is paired with
         // --type elf. The Kotlin side must never send the flag for ELF; pin

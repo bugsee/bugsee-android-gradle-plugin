@@ -224,15 +224,25 @@ class CliBinaryResolverTest {
 
     // ── floor bump ───────────────────────────────────────────────────
 
-    @Test fun `default floor version is 0_7_12`() {
-        // The pinned download floor — must be >= 0.7.12, the first CLI release
-        // that uploads AGP SYMBOL_TABLE `.so.sym` NDK symbols (0.7.0–0.7.11 skip
-        // them and exit 0; bugsee-cli#61). It also stays above 0.6.0, the first
+    @Test fun `default floor version is 0_8_0`() {
+        // The pinned download floor — must be >= 0.8.0, the first CLI whose
+        // `--type elf` takes a directory (merged_native_libs, bugsee-cli#69); it
+        // also covers 0.7.12, which uploads AGP SYMBOL_TABLE `.so.sym` NDK symbols
+        // (0.7.0–0.7.11 skip them and exit 0; bugsee-cli#61). It also stays above 0.6.0, the first
         // release with the `update` self-update command this resolver invokes. If this
         // is rolled back, the pack / upload-build gate tests above shift with
         // it — this pins the intended floor explicitly. Keeping the CLI current
         // beyond this floor is delegated to the CLI's own `update --max-age 12h`.
-        assertEquals("0.7.12", CliBinaryResolver.DEFAULT_VERSION)
+        assertEquals("0.8.0", CliBinaryResolver.DEFAULT_VERSION)
+    }
+
+    @Test fun `elf directory support follows the pinned version, trusting a custom cliPath`() {
+        assertTrue(CliBinaryResolver.supportsElfDirectory(null, null))
+        assertTrue(CliBinaryResolver.supportsElfDirectory("0.8.0", null))
+        assertTrue(CliBinaryResolver.supportsElfDirectory("0.9.1", null))
+        assertFalse(CliBinaryResolver.supportsElfDirectory("0.7.12", null))
+        assertFalse(CliBinaryResolver.supportsElfDirectory("0.6.0", ""))
+        assertTrue(CliBinaryResolver.supportsElfDirectory("0.7.12", "/usr/local/bin/bugsee-cli"))
     }
 
     // ── self-update delegation (resolve → `update --max-age 12h`) ─────
