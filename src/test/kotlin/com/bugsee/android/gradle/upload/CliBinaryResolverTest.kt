@@ -224,13 +224,15 @@ class CliBinaryResolverTest {
 
     // ── floor bump ───────────────────────────────────────────────────
 
-    @Test fun `default floor version is 0_6_0`() {
-        // The pinned download floor — must be >= 0.6.0, the first CLI release
-        // with the `update` self-update command this resolver invokes. If this
+    @Test fun `default floor version is 0_7_12`() {
+        // The pinned download floor — must be >= 0.7.12, the first CLI release
+        // that uploads AGP SYMBOL_TABLE `.so.sym` NDK symbols (0.7.0–0.7.11 skip
+        // them and exit 0; bugsee-cli#61). It also stays above 0.6.0, the first
+        // release with the `update` self-update command this resolver invokes. If this
         // is rolled back, the pack / upload-build gate tests above shift with
         // it — this pins the intended floor explicitly. Keeping the CLI current
         // beyond this floor is delegated to the CLI's own `update --max-age 12h`.
-        assertEquals("0.6.0", CliBinaryResolver.DEFAULT_VERSION)
+        assertEquals("0.7.12", CliBinaryResolver.DEFAULT_VERSION)
     }
 
     // ── self-update delegation (resolve → `update --max-age 12h`) ─────
