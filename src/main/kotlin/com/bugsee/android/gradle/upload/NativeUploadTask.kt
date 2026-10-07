@@ -396,9 +396,13 @@ abstract class NativeUploadTask : DefaultTask() {
  * as "uploaded" by an older CLI. 0.7.0–0.7.11 exited 0 having sent nothing for
  * `.so.sym` entries, and the cached hash would otherwise keep a fixed CLI from
  * ever re-trying the same zip.
+ *
+ * The `elf-force-v1` generation is independent of the CLI floor: FULL zips cached
+ * before `--force` was sent for `.so.dbg` entries never replaced SYMBOL_TABLE
+ * symbols on the server, so they must be re-sent once with `--force`.
  */
 internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
-    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}"
+    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-force-v1"
 
 /** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
 internal fun containsFullDebugSymbols(zip: File): Boolean = try {
