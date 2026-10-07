@@ -48,6 +48,12 @@ internal object CliBinaryResolver {
      * + build-info) and the `pack`/zstd-mapping path, so it satisfies both
      * [UPLOAD_BUILD_MIN_VERSION] and [PACK_MIN_VERSION].
      *
+     * `0.7.12` raises the floor past 0.7.0–0.7.11, which silently upload
+     * nothing (exit 0) for AGP `debugSymbolLevel = SYMBOL_TABLE` `.so.sym`
+     * entries (bugsee-cli#61). With `cliAutoUpdate=false`, or when the update
+     * check can't reach the download host, the pinned version is what runs, so
+     * it must already be a CLI that uploads both `.so.sym` and `.so.dbg`.
+     *
      * This is the version the plugin downloads. Keeping the CLI current is
      * the CLI's own job: once a binary is on disk, the plugin invokes
      * `bugsee-cli update --max-age 12h`, which discovers the newest
@@ -55,7 +61,7 @@ internal object CliBinaryResolver {
      * verifies, and self-replaces in place — all throttled and best-effort.
      * The plugin no longer re-implements any version discovery.
      */
-    const val DEFAULT_VERSION: String = "0.6.0"
+    const val DEFAULT_VERSION: String = "0.7.12"
 
     /**
      * Lowest CLI version that ships the `pack` subcommand (the normalized
