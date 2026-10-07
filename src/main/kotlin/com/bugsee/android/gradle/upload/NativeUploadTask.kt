@@ -19,6 +19,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import org.json.JSONObject
 import java.io.File
+import java.util.zip.ZipFile
 import javax.inject.Inject
 
 /**
@@ -297,6 +298,13 @@ abstract class NativeUploadTask : DefaultTask() {
         }
     }
 
+    /** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
+    private fun containsFullDebugSymbols(zip: File): Boolean = try {
+        ZipFile(zip).use { z -> z.entries().asSequence().any { it.name.endsWith(".so.dbg") } }
+    } catch (_: java.io.IOException) {
+        false
+    }
+
     /**
      * Hash → cache-check → strategy-pick → upload (CLI first if configured,
      * Kotlin otherwise) → cache-write on success. Extracted so both upload
@@ -348,6 +356,11 @@ abstract class NativeUploadTask : DefaultTask() {
                     uuid = buildUUID,
                     logger = logger,
                     debug = isDebug,
+                    // Same build-id is shared by a library's SYMBOL_TABLE and FULL
+                    // symbols, and the server dedups on it. FULL (DWARF) must
+                    // replace a poorer copy uploaded by an earlier release, so
+                    // force whenever the zip carries DWARF (or the user asked).
+                    force = skipCache || containsFullDebugSymbols(zip),
                 )
                 when {
                     cliResult.success -> {

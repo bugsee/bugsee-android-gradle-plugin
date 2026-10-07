@@ -95,6 +95,7 @@ internal object CliUploader {
         uuid: String,
         logger: Logger,
         debug: Boolean,
+        force: Boolean = false,
     ): CliUploadResult = verifyAndExec(
         execOps = execOps,
         cliBinary = cliBinary,
@@ -105,6 +106,7 @@ internal object CliUploader {
             build = build,
             uuid = uuid,
             symbolsZip = symbolsZip,
+            force = force,
         ),
         logger = logger,
         debug = debug,
@@ -415,6 +417,8 @@ internal object CliUploader {
      * Constructs the argv vector for `bugsee-cli debug-files upload --type elf`.
      *
      * No `--icon` (only valid for proguard); the CLI rejects that combination.
+     * [force] adds `--force` so a richer file (FULL `.so.dbg`) replaces a poorer
+     * one (SYMBOL_TABLE `.so.sym`) already stored for the same GNU build-id.
      * Visible for testing.
      */
     internal fun buildElfArgv(
@@ -424,11 +428,13 @@ internal object CliUploader {
         build: String,
         uuid: String,
         symbolsZip: File,
+        force: Boolean = false,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
         add("--app-token"); add(appToken)
         add("debug-files"); add("upload")
         add("--type"); add("elf")
+        if (force) add("--force")
         add("--version"); add(version)
         add("--build"); add(build)
         add("--uuid"); add(uuid)
