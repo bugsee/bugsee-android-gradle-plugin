@@ -298,13 +298,6 @@ abstract class NativeUploadTask : DefaultTask() {
         }
     }
 
-    /** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
-    private fun containsFullDebugSymbols(zip: File): Boolean = try {
-        ZipFile(zip).use { z -> z.entries().asSequence().any { it.name.endsWith(".so.dbg") } }
-    } catch (_: java.io.IOException) {
-        false
-    }
-
     /**
      * Hash → cache-check → strategy-pick → upload (CLI first if configured,
      * Kotlin otherwise) → cache-write on success. Extracted so both upload
@@ -406,3 +399,10 @@ abstract class NativeUploadTask : DefaultTask() {
  */
 internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
     "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}"
+
+/** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
+internal fun containsFullDebugSymbols(zip: File): Boolean = try {
+    ZipFile(zip).use { z -> z.entries().asSequence().any { it.name.endsWith(".so.dbg") } }
+} catch (_: java.io.IOException) {
+    false
+}
