@@ -147,24 +147,61 @@ class NativeMergedLibsE2ETest {
         }
     }
 
-    @Test
-    fun `falls back to AGP symbols when the CLI reports no libraries in the directory`() {
-        // A CLI shim that answers exit 10 (the real code for "no libraries found")
-        // for a directory input and delegates everything else to the real binary.
-        val shim = temp.newFile("bugsee-cli-shim").apply {
-            writeText("#!/bin/sh\nfor last; do :; done\nif [ -d \"\$last\" ]; then echo 'shim: no libs' >&2; exit 10; fi\nexec \"$cli\" \"\$@\"\n")
-            setExecutable(true)
-        }
+    private fun shim(exitCode: Int): File = temp.newFile("bugsee-cli-shim-$exitCode").apply {
+        // Answers `exitCode` for a directory input and delegates everything else to the real CLI.
+        writeText(
+            "#!/bin/sh\nfor last; do :; done\n" +
+                "if [ -d \"\$last\" ]; then echo 'shim: directory input refused' >&2; exit $exitCode; fi\n" +
+                "exec \"$cli\" \"\$@\"\n",
+        )
+        setExecutable(true)
+    }
+
+    private fun assertFallsBackToZip(exitCode: Int) {
         MockSymbolServer().use { server ->
             val fx = fixture()
             val result = assemble(
-                fx, server, cliPath = shim.absolutePath,
+                fx, server, cliPath = shim(exitCode).absolutePath,
                 extra = arrayOf("-PbugseeE2eSymbolLevel=FULL"),
             )
             assertTrue(result.output.contains("using AGP's native debug symbols instead"))
             val buildId = ElfInfo.buildId(mergedLibs(fx).single())!!
             assertTrue("the zip fallback uploaded the library", server.symbolPosts.single().text.contains(buildId))
             assertEquals(1, server.puts.size)
+        }
+    }
+
+    @Test
+    fun `falls back to AGP symbols when the CLI reports no libraries in the directory (exit 10)`() =
+        assertFallsBackToZip(10)
+
+    @Test
+    fun `falls back to AGP symbols when the CLI cannot take the directory (exit 11)`() =
+        assertFallsBackToZip(11)
+
+    @Test
+    fun `a substantive CLI failure on the directory does not retry through the zip`() {
+        MockSymbolServer().use { server ->
+            val result = assemble(
+                fixture(), server, cliPath = shim(21).absolutePath,
+                extra = arrayOf("-PbugseeE2eSymbolLevel=FULL"),
+            )
+            assertFalse(result.output.contains("using AGP's native debug symbols instead"))
+            assertTrue(server.symbolPosts.isEmpty())
+        }
+    }
+
+    @Test
+    fun `running the upload task alone builds the merged libraries first`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            val result = fx.buildTasks(
+                listOf(":app:uploadBugseeReleaseNative"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli", "-PbugseeE2eSymbolLevel=NONE",
+            )
+            assertTrue(result.output.contains(":app:mergeReleaseNativeLibs"))
+            val buildId = ElfInfo.buildId(mergedLibs(fx).single())!!
+            assertTrue(server.symbolPosts.single().text.contains(buildId))
         }
     }
 

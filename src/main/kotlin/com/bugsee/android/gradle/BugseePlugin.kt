@@ -639,9 +639,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     it.name == "extract${capitalizedVariant}NativeDebugMetadata"
                 }
             )
-            // Order after (not depend on) the merge step so the unstripped libs are
-            // complete when read, without pulling the task into builds that skip it.
-            task.mustRunAfter(
+            // The unstripped libs must be this build's finished output (the CLI reads
+            // them in place), also when the upload task is run on its own.
+            task.dependsOn(
                 project.tasks.matching { it.name == "merge${capitalizedVariant}NativeLibs" }
             )
         }

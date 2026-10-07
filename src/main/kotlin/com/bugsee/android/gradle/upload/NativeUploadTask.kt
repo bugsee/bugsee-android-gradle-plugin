@@ -268,10 +268,12 @@ abstract class NativeUploadTask : DefaultTask() {
                     debug = isDebug,
                     force = skipCache,
                 )
-                // Success, or a substantive failure already logged (the zip path
-                // would hit the same error). Only "nothing usable here" (exit 10) or
-                // a structural CLI failure continues to the AGP-produced sources.
-                if (result.success || !(result.shouldFallback || result.exitCode == NO_INPUT_EXIT_CODE)) return
+                // Success, or a substantive failure already logged (token / network /
+                // server: the zip path would hit the same error). Failures specific
+                // to the directory input continue to the AGP-produced sources:
+                // nothing usable (10), an unreadable directory or a CLI too old to
+                // take one (11), or a structural CLI failure.
+                if (result.success || !(result.shouldFallback || result.exitCode in DIRECTORY_INPUT_EXIT_CODES)) return
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
@@ -456,8 +458,12 @@ internal fun containsFullDebugSymbols(zip: File): Boolean = try {
     false
 }
 
-/** bugsee-cli exit code for "input not found / directory holds no libraries". */
-private const val NO_INPUT_EXIT_CODE = 10
+/**
+ * bugsee-cli exit codes that only the directory input can cause: 10 = input not
+ * found / no libraries in the directory, 11 = invalid input (a scan I/O error, or an
+ * older CLI trying to open the directory as a zip).
+ */
+private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
 
 /**
  * [dir] when it exists and holds at least one native library the CLI would
