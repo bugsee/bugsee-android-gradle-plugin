@@ -211,7 +211,7 @@ abstract class NativeUploadTask : DefaultTask() {
         val basePath = buildDirectory.get().asFile.absolutePath
         val skipCache = forceUpload.get()
         val cacheFile = File(rootProjectDirectory.get().asFile, ".gradle/bugsee/native-symbol-cache.json")
-        val cacheKey = "${HashUtils.sha1Hex(appToken)}:${variantName.get()}"
+        val cacheKey = nativeSymbolCacheKey(appToken, variantName.get())
 
         val uploaderChoice = uploader.get()
 
@@ -383,3 +383,13 @@ abstract class NativeUploadTask : DefaultTask() {
         }
     }
 }
+
+/**
+ * Key into [SymbolHashCache] for a native-symbol zip. Namespaced by
+ * [CliBinaryResolver.DEFAULT_VERSION] so a CLI floor bump discards hashes cached
+ * as "uploaded" by an older CLI. 0.7.0–0.7.11 exited 0 having sent nothing for
+ * `.so.sym` entries, and the cached hash would otherwise keep a fixed CLI from
+ * ever re-trying the same zip.
+ */
+internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
+    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}"
