@@ -316,8 +316,8 @@ internal object CliUploader {
         }
 
         if (debug) {
-            // The app token is not part of argv (it is passed via the environment, see below),
-            // so this line carries no credential.
+            // app-token is intentionally NOT scrubbed here — we log it the same
+            // way the Kotlin uploader logs the metadata JSON when `debug=true`.
             logger.warn("Bugsee: invoking bugsee-cli with args: ${argv.joinToString(" ")}")
         }
 
