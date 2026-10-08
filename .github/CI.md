@@ -19,6 +19,25 @@ secrets and the release gate follow the same conventions as
 3. The run uploads and **closes** the Central deployment but does not release
    it. Release it at <https://central.sonatype.com> → Deployments.
 
+## What is uploaded to Central
+
+Central requires only `.md5` and `.sha1` beside each file, plus the `.asc` signature. Gradle 8.7
+uploads four checksums for every file *and* for every `.asc`, which made a release 210 files.
+Two measures bring it to **84** (plus 15 module-level `maven-metadata.xml` files):
+
+- `systemProp.org.gradle.internal.publish.checksums.insecure=true` in `gradle.properties` drops
+  the optional `.sha256` / `.sha512`.
+- The sonatype publish tasks (`allprojects` hook in `build.gradle.kts`) stage into a local Maven
+  directory, delete the `.asc.*` checksums and upload the rest with `buildSrc`'s
+  `MavenSignatureChecksums`. Snapshot publishes first copy the remote `maven-metadata.xml` into
+  the staging directory (otherwise Gradle would reset the shared snapshot metadata) and replace
+  the metadata's `.sha256` / `.sha512`; release staging never uploads those.
+
+Both mirror the Bugsee Android SDK. The hook needs `NEXUS_USERNAME` and fails the task rather than
+fall back to Gradle's own upload, and it is incompatible with the configuration cache (so is the
+nexus plugin). Gradle 9.7 stops emitting the signature checksums, after which the staging can be
+removed. `MavenCentralChecksumPolicyTest` and `scripts/build.sh` (`-p buildSrc test`) guard it.
+
 `deploy.sh` publishes the Gradle plugin, its marker and all three Compose
 compiler-plugin artifacts together, in one deployment. They must ship together:
 see the header of `scripts/deploy.sh`.
