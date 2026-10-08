@@ -87,6 +87,8 @@ MODE="${1:-all}"
 run_unit() {
     print_status "Running unit tests (./gradlew test)..."
     ./gradlew test --console=plain
+    # buildSrc is a separate build; its tests cover the Maven Central signature-checksum filter.
+    ./gradlew -p buildSrc test --console=plain
     print_success "Unit tests passed."
 }
 

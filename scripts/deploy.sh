@@ -14,6 +14,9 @@
 #   com.bugsee:bugsee-compose-compiler-plugin-k22:<version>  (Kotlin 2.2 - 2.3)
 #   com.bugsee:bugsee-compose-compiler-plugin-k24:<version>  (Kotlin 2.4)
 #
+# Only .md5/.sha1 and the .asc signature are uploaded per file (84 files for the five artifacts,
+# not 210): see "What is uploaded to Central" in .github/CI.md.
+#
 # The Compose compiler plugin ships one artifact per Kotlin line because it binds the exact
 # descriptors of the compiler API it was built against; the Gradle plugin picks between them from
 # the consumer's Kotlin version.
