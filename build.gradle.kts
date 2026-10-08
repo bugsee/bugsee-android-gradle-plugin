@@ -243,6 +243,11 @@ tasks.register<Test>("integrationTest") {
         "bugsee.testkit.javaHome",
         launcher17Provider.get().metadata.installationPath.asFile.absolutePath
     )
+    // Real bugsee-cli (>= 0.8.0) for the native-upload e2e tests; they skip when unset.
+    System.getenv("BUGSEE_CLI_BIN")?.let {
+        environment("BUGSEE_CLI_BIN", it)
+        inputs.property("bugseeCliBin", it)
+    }
     // Large heap — TestKit + AGP daemons are memory-hungry.
     maxHeapSize = "2g"
 }
