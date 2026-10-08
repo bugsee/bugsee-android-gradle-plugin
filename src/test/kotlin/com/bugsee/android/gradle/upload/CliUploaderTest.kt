@@ -427,7 +427,7 @@ class CliUploaderTest {
         assertTrue(shown.contains("--version 1.2.3"), shown)
     }
 
-    @Test fun `redactForLog masks the token segment of a build-info upload URL`() {
+    @Test fun `redactForLog masks the token segment of a plugin-built v2 apps URL`() {
         val url = ApiEndpoint.buildsUrl("https://api.bugsee.com", secretToken, "/info")
         assertTrue(url.contains(secretToken), "precondition: the URL carries the token ($url)")
         val argv = CliUploader.buildBuildInfoArgv(url, depsJsonFile = null, timingsJsonFile = null)

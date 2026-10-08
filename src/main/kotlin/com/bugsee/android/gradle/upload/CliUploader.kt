@@ -481,9 +481,11 @@ internal object CliUploader {
     private val APP_TOKEN_IN_URL = Regex("(/v2/apps/)[^/\\s?#]+")
 
     /**
-     * The argv as it is safe to print. The app token reaches the CLI two ways, and both are masked
-     * with `***`: as the value of `--app-token` (also `--app-token=<value>`), and as the path
-     * segment of an upload URL (`…/v2/apps/<token>/builds…`, see [ApiEndpoint]).
+     * The argv as it is safe to print. Masked with `***`: the value of `--app-token` (also
+     * `--app-token=<value>`), and — defence in depth — the token segment of any
+     * `…/v2/apps/<token>/…` URL, the shape of the URLs this plugin builds itself (see
+     * [ApiEndpoint]). The build-info `--upload-url` is the server-signed URL from the registration
+     * response and is not expected to contain the token, so it is printed as is.
      *
      * Only for logging: the real argv is passed to the process unchanged.
      */
