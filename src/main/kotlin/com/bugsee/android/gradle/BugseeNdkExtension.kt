@@ -83,8 +83,9 @@ abstract class BugseeNdkExtension @Inject constructor(objects: ObjectFactory) {
      * `false` to use only AGP's `native_debug_metadata` / `native-debug-symbols.zip`
      * (which depend on `debugSymbolLevel`).
      *
-     * Existing apps whose earlier releases uploaded SYMBOL_TABLE symbols for a
-     * prebuilt library can set [forceDebugSymbolsUpload] for one build to replace them.
+     * A library whose earlier upload was only a SYMBOL_TABLE (function names) is
+     * upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+; the server
+     * never downgrades), so [forceDebugSymbolsUpload] is not needed for that.
      *
      * Default: `true`
      */

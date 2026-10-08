@@ -15,8 +15,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  * [alreadyHasSymbols] models a server that already stores the library: it
  * answers the appserver's nested `DuplicateSymbolsFoundError` (16004) unless the
  * POST asks to `"overwrite":true`.
+ *
+ * [storedVariant] (`"symtab"` or `"dwarf"`) models a stored copy of known richness
+ * (bugsee-cli >= 0.8.1 / appserver `replace_if_richer`): a POST declaring a richer
+ * `format_variant` with `"replace_if_richer":true` replaces a `symtab` copy; the
+ * server never downgrades and otherwise answers 16004.
  */
-internal class MockSymbolServer(var alreadyHasSymbols: Boolean = false) : AutoCloseable {
+internal class MockSymbolServer(
+    var alreadyHasSymbols: Boolean = false,
+    var storedVariant: String? = null,
+) : AutoCloseable {
 
     data class Req(val method: String, val path: String, val body: ByteArray) {
         val text: String get() = String(body, Charsets.ISO_8859_1)
@@ -42,9 +50,14 @@ internal class MockSymbolServer(var alreadyHasSymbols: Boolean = false) : AutoCl
         requests += req
         val reply: String = when {
             req.method == "POST" && req.path.endsWith("/symbols") -> {
-                if (alreadyHasSymbols && !req.text.contains("\"overwrite\":true")) {
+                val overwrite = req.text.contains("\"overwrite\":true")
+                val upgrade = storedVariant == "symtab" &&
+                    req.text.contains("\"replace_if_richer\":true") &&
+                    req.text.contains("\"format_variant\":\"dwarf\"")
+                if ((alreadyHasSymbols || storedVariant != null) && !overwrite && !upgrade) {
                     """{"ok":false,"error":{"type":"DuplicateSymbolsFoundError","code":16004}}"""
                 } else {
+                    if (upgrade) storedVariant = "dwarf"
                     """{"code":0,"endpoint":"$url/put/${requests.size}"}"""
                 }
             }

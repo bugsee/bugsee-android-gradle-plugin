@@ -136,8 +136,9 @@ needs bugsee-cli 0.8.0+), so file:line frames no longer depend on
 `android.defaultConfig.ndk.debugSymbolLevel` and the app's AAB does not grow.
 Unchanged prebuilt libraries are deduplicated server-side. Set
 `useMergedNativeLibs` to `false` to use only AGP's `native-debug-symbols.zip`.
-If an earlier release uploaded SYMBOL_TABLE symbols for a prebuilt library,
-set `forceDebugSymbolsUpload` for one build to replace them.
+A library that an earlier release uploaded only as SYMBOL_TABLE (function names)
+is upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+); the server
+never replaces debug info with a poorer file, so no `forceDebugSymbolsUpload` is needed.
 
 ### Leak detection
 
