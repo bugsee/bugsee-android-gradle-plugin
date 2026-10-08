@@ -2,6 +2,57 @@
 
 Configuration reference for the Bugsee Android Gradle plugin.
 
+## Compatibility
+
+Minimums: **AGP 8.6.0**, **Gradle 8.7**, Bugsee Android SDK **7.x**. The public
+docs have the full
+[requirements & compatibility page](https://docs.bugsee.com/sdk/android/gradle-plugin/requirements).
+
+### Gradle 9
+
+Gradle 9 is supported from plugin **4.0.3**.
+
+| Plugin | Gradle 8.x | Gradle 9.x |
+|---|---|---|
+| 4.0.0 – 4.0.2 | ✅ | ❌ |
+| **4.0.3 and newer** | ✅ | ✅ |
+
+Plugin 4.0.0 – 4.0.2 call `ProjectDependency.getDependencyProject()`, which
+Gradle 9.0 removed. On Gradle 9, the consumer's build fails during configuration:
+
+```text
+A problem occurred configuring project ':app'.
+> Failed to notify project evaluation listener.
+   > 'org.gradle.api.Project org.gradle.api.artifacts.ProjectDependency.getDependencyProject()'
+```
+
+`ProjectDependencyCompat` fixes this in 4.0.3 by resolving the dependency's
+project reflectively (commit `2066da5`).
+
+### Verified combinations
+
+Each combination below was built with plugin **4.0.7** as a minified release
+build (R8), checking bytecode instrumentation, `BUILD_UUID` manifest injection
+and the mapping upload. Plugin 4.0.3 – 4.0.6 were also verified on Gradle 9.8.0
+with AGP 9.4.1. Verified September 2026.
+
+| Gradle | AGP | Configuration cache | Result |
+|---|---|---|---|
+| 9.8.0 | 9.4.1 | ✅ | ✅ Also verified on a multi-module app (library module, product flavors, Compose, NDK) |
+| 9.7.0 | 9.4.1 | ✅ | ✅ |
+| 9.1.0 | 9.0.1 | Not tested | ✅ |
+| 9.0.0 | 8.13.2 | ✅ | ✅ |
+| 8.14.3 | 8.13.2 | Not tested | ✅ |
+
+Known pitfalls that are not caused by this plugin:
+
+- **AGP and Gradle must be compatible with each other.** For example, AGP 8.13
+  fails inside AGP on Gradle 9.7. See Google's
+  [AGP–Gradle compatibility table](https://developer.android.com/build/releases/about-agp#updating-gradle).
+- **AGP 9 compiles Kotlin itself.** Applying `org.jetbrains.kotlin.android` in
+  an AGP 9 module fails with `Cannot add extension with name 'kotlin'`, whether
+  or not the Bugsee plugin is applied.
+
 ## Configuration sources
 
 Plugin behavior can be configured from two sources, with the
@@ -77,6 +128,17 @@ dotted-path form as the DSL field names.
 |---|---|---|
 | `plugin.ndk.enabled` | Boolean | `false` |
 | `plugin.ndk.forceDebugSymbolsUpload` | Boolean | `false` |
+| `plugin.ndk.useMergedNativeLibs` | Boolean | `true` |
+
+With `ndk.enabled`, native symbols are uploaded from the **unstripped libraries**
+in `build/intermediates/merged_native_libs/<variant>` (keyed by GNU build-id,
+needs bugsee-cli 0.8.0+), so file:line frames no longer depend on
+`android.defaultConfig.ndk.debugSymbolLevel` and the app's AAB does not grow.
+Unchanged prebuilt libraries are deduplicated server-side. Set
+`useMergedNativeLibs` to `false` to use only AGP's `native-debug-symbols.zip`.
+A library that an earlier release uploaded only as SYMBOL_TABLE (function names)
+is upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+); the server
+never replaces debug info with a poorer file, so no `forceDebugSymbolsUpload` is needed.
 
 ### Leak detection
 

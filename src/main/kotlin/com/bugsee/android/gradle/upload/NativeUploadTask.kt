@@ -19,6 +19,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import org.json.JSONObject
 import java.io.File
+import java.util.zip.ZipFile
 import javax.inject.Inject
 
 /**
@@ -60,6 +61,17 @@ abstract class NativeUploadTask : DefaultTask() {
 
     @get:Input
     abstract val forceUpload: Property<Boolean>
+
+    @get:Input
+    abstract val useMergedNativeLibs: Property<Boolean>
+
+    /**
+     * `build/intermediates/merged_native_libs/<variant>` — the unstripped
+     * libraries AGP merges before stripping. `@Internal` for the same reason as
+     * [buildDirectory]: the library bytes are uploaded, not task identity.
+     */
+    @get:Internal
+    abstract val mergedNativeLibsDir: DirectoryProperty
 
     /**
      * Path to the `bugsee-cli` binary. Wired from
@@ -211,7 +223,7 @@ abstract class NativeUploadTask : DefaultTask() {
         val basePath = buildDirectory.get().asFile.absolutePath
         val skipCache = forceUpload.get()
         val cacheFile = File(rootProjectDirectory.get().asFile, ".gradle/bugsee/native-symbol-cache.json")
-        val cacheKey = "${HashUtils.sha1Hex(appToken)}:${variantName.get()}"
+        val cacheKey = nativeSymbolCacheKey(appToken, variantName.get())
 
         val uploaderChoice = uploader.get()
 
@@ -231,6 +243,42 @@ abstract class NativeUploadTask : DefaultTask() {
             )
         } else {
             null
+        }
+
+        // Preferred source: the unstripped libraries, uploaded in place as a
+        // directory (bugsee-cli >= 0.8.0). Independent of ndk.debugSymbolLevel.
+        // Falls through to the AGP-produced sources below when unavailable.
+        if (useMergedNativeLibs.get() &&
+            cliBinary != null &&
+            CliBinaryResolver.supportsElfDirectory(cliVersion.orNull, cliPath.orNull)
+        ) {
+            val libsDir = findMergedNativeLibs(mergedNativeLibsDir.asFile.orNull)
+            if (libsDir != null) {
+                if (isDebug) logger.warn("Bugsee: Uploading unstripped native libraries from ${libsDir.path}")
+                val result = CliUploader.uploadElf(
+                    execOps = execOps,
+                    cliBinary = cliBinary,
+                    symbolsZip = libsDir,
+                    appToken = appToken,
+                    endpoint = endpoint.get(),
+                    version = versionName ?: "",
+                    build = versionCode,
+                    uuid = buildUUID,
+                    logger = logger,
+                    debug = isDebug,
+                    force = skipCache,
+                )
+                // Success, or a substantive failure already logged (token / network /
+                // server: the zip path would hit the same error). Failures specific
+                // to the directory input continue to the AGP-produced sources:
+                // nothing usable (10), an unreadable directory or a CLI too old to
+                // take one (11), or a structural CLI failure.
+                if (result.success || !(result.shouldFallback || result.exitCode in DIRECTORY_INPUT_EXIT_CODES)) return
+                logger.warn(
+                    "Bugsee: could not upload native libraries from ${libsDir.path} " +
+                        "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
+                )
+            }
         }
 
         // Check for intermediate symbols folder first
@@ -348,6 +396,11 @@ abstract class NativeUploadTask : DefaultTask() {
                     uuid = buildUUID,
                     logger = logger,
                     debug = isDebug,
+                    // Same build-id is shared by a library's SYMBOL_TABLE and FULL
+                    // symbols, and the server dedups on it. FULL (DWARF) must
+                    // replace a poorer copy uploaded by an earlier release, so
+                    // force whenever the zip carries DWARF (or the user asked).
+                    force = skipCache || containsFullDebugSymbols(zip),
                 )
                 when {
                     cliResult.success -> {
@@ -382,4 +435,44 @@ abstract class NativeUploadTask : DefaultTask() {
             SymbolHashCache.put(cacheFile, cacheKey, hash)
         }
     }
+}
+
+/**
+ * Key into [SymbolHashCache] for a native-symbol zip. Namespaced by
+ * [CliBinaryResolver.DEFAULT_VERSION] so a CLI floor bump discards hashes cached
+ * as "uploaded" by an older CLI. 0.7.0–0.7.11 exited 0 having sent nothing for
+ * `.so.sym` entries, and the cached hash would otherwise keep a fixed CLI from
+ * ever re-trying the same zip.
+ *
+ * The `elf-force-v1` generation is independent of the CLI floor: FULL zips cached
+ * before `--force` was sent for `.so.dbg` entries never replaced SYMBOL_TABLE
+ * symbols on the server, so they must be re-sent once with `--force`.
+ */
+internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
+    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-force-v1"
+
+/** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
+internal fun containsFullDebugSymbols(zip: File): Boolean = try {
+    ZipFile(zip).use { z -> z.entries().asSequence().any { it.name.endsWith(".so.dbg") } }
+} catch (_: java.io.IOException) {
+    false
+}
+
+/**
+ * bugsee-cli exit codes that only the directory input can cause: 10 = input not
+ * found / no libraries in the directory, 11 = invalid input (a scan I/O error, or an
+ * older CLI trying to open the directory as a zip).
+ */
+private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
+
+/**
+ * [dir] when it exists and holds at least one native library the CLI would
+ * pick up (`.so`, `.so.dbg`, `.so.sym`), else `null`.
+ */
+internal fun findMergedNativeLibs(dir: File?): File? {
+    if (dir == null || !dir.isDirectory) return null
+    val hasLibs = dir.walkTopDown().any { f ->
+        f.isFile && (f.name.endsWith(".so") || f.name.endsWith(".so.dbg") || f.name.endsWith(".so.sym"))
+    }
+    return dir.takeIf { hasLibs }
 }

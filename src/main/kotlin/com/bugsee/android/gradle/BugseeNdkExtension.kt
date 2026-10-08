@@ -72,4 +72,23 @@ abstract class BugseeNdkExtension @Inject constructor(objects: ObjectFactory) {
      */
     val forceDebugSymbolsUpload: Property<Boolean> =
         objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
+     * Upload native symbols from the unstripped libraries in
+     * `build/intermediates/merged_native_libs/<variant>` (keyed by GNU build-id),
+     * independent of the app's `ndk.debugSymbolLevel`. Needs bugsee-cli 0.8.0+.
+     *
+     * Unchanged prebuilt libraries (`libreactnative.so`, `libc++_shared.so`, ...)
+     * are deduplicated server-side by build-id, so they are not re-sent. Set to
+     * `false` to use only AGP's `native_debug_metadata` / `native-debug-symbols.zip`
+     * (which depend on `debugSymbolLevel`).
+     *
+     * A library whose earlier upload was only a SYMBOL_TABLE (function names) is
+     * upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+; the server
+     * never downgrades), so [forceDebugSymbolsUpload] is not needed for that.
+     *
+     * Default: `true`
+     */
+    val useMergedNativeLibs: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(true)
 }
