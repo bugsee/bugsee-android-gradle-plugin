@@ -41,7 +41,7 @@ internal object BundleUploader {
      * access to a project's builds so they must not land verbatim in
      * CI logs / exception messages / bug reports.
      */
-    private fun maskAppToken(token: String): String =
+    internal fun maskAppToken(token: String): String =
         if (token.length <= 8) "****" else "${token.take(4)}…${token.takeLast(4)}"
 
     /**
@@ -52,7 +52,7 @@ internal object BundleUploader {
      * exposing the 7-day-valid PUT credential. Returns the input
      * verbatim when there's no `?` separator.
      */
-    private fun redactPresignedUrl(url: String): String {
+    internal fun redactPresignedUrl(url: String): String {
         val q = url.indexOf('?')
         return if (q >= 0) url.substring(0, q) + "?…<redacted>" else url
     }
