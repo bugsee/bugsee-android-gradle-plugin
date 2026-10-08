@@ -481,26 +481,36 @@ internal object CliUploader {
     private val APP_TOKEN_IN_URL = Regex("(/v2/apps/)[^/\\s?#]+")
 
     /**
-     * The argv as it is safe to print. Masked with `***`: the value of `--app-token` (also
-     * `--app-token=<value>`), and — defence in depth — the token segment of any
-     * `…/v2/apps/<token>/…` URL, the shape of the URLs this plugin builds itself (see
-     * [ApiEndpoint]). The build-info `--upload-url` is the server-signed URL from the registration
-     * response and is not expected to contain the token, so it is printed as is.
+     * The argv as it is safe to print. Masked:
+     *  - the value of `--app-token` (also `--app-token=<value>`) → `***`;
+     *  - the value of `--upload-url` (also `--upload-url=<value>`): the build-info bundle is PUT to
+     *    a server-signed S3 URL whose query string is a write credential valid for days, so the
+     *    query is dropped (same policy as [BundleUploader.redactPresignedUrl] on the Kotlin path
+     *    and bugsee-cli's own `redact_url`);
+     *  - defence in depth, in any value: the token segment of a `…/v2/apps/<token>/…` URL, the
+     *    shape of the URLs this plugin builds itself (see [ApiEndpoint]).
      *
      * Only for logging: the real argv is passed to the process unchanged.
      */
     internal fun redactForLog(argv: List<String>): String {
         var maskNext = false
+        var urlNext = false
         return argv.joinToString(" ") { arg ->
             val shown = when {
                 maskNext -> "***"
+                urlNext -> redactUrl(arg)
                 arg.startsWith("--app-token=") -> "--app-token=***"
+                arg.startsWith("--upload-url=") -> "--upload-url=" + redactUrl(arg.removePrefix("--upload-url="))
                 else -> APP_TOKEN_IN_URL.replace(arg, "$1***")
             }
             maskNext = arg == "--app-token"
+            urlNext = arg == "--upload-url"
             shown
         }
     }
+
+    private fun redactUrl(url: String): String =
+        APP_TOKEN_IN_URL.replace(BundleUploader.redactPresignedUrl(url), "$1***")
 
     internal fun buildBuildInfoArgv(
         uploadUrl: String,

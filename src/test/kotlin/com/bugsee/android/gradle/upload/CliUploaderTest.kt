@@ -436,6 +436,30 @@ class CliUploaderTest {
         assertTrue(shown.contains("/v2/apps/***/builds"), shown)
     }
 
+    @Test fun `redactForLog drops the query of the presigned build-info upload URL`() {
+        val signature = "SECRETSIG0123456789"
+        val url = "https://s3.example/final/build-info/abc-tid.zip?X-Amz-Signature=$signature&X-Amz-Credential=AKIAEXAMPLE"
+        val argv = CliUploader.buildBuildInfoArgv(url, depsJsonFile = null, timingsJsonFile = null)
+        assertTrue(argv.contains(url), "precondition: the real argv carries the full URL")
+        val shown = CliUploader.redactForLog(argv)
+        assertFalse(shown.contains(signature), shown)
+        assertFalse(shown.contains("AKIAEXAMPLE"), shown)
+        assertTrue(shown.contains("--upload-url https://s3.example/final/build-info/abc-tid.zip?…<redacted>"), shown)
+        assertTrue(argv.contains(url), "the argv passed to the process is not modified")
+    }
+
+    @Test fun `redactForLog drops the query in the --upload-url=value form too`() {
+        val shown = CliUploader.redactForLog(listOf("upload", "build-info", "--upload-url=https://s3.example/k.zip?sig=SECRETSIG"))
+        assertEquals("upload build-info --upload-url=https://s3.example/k.zip?…<redacted>", shown)
+    }
+
+    @Test fun `redactForLog leaves an upload URL without a query unchanged`() {
+        assertEquals(
+            "upload build-info --upload-url https://s3.example/u",
+            CliUploader.redactForLog(listOf("upload", "build-info", "--upload-url", "https://s3.example/u")),
+        )
+    }
+
     @Test fun `redactForLog masks the --app-token=value form and leaves the input argv untouched`() {
         val argv = listOf("upload", "build", "--app-token=$secretToken", "--chunked")
         assertEquals("upload build --app-token=*** --chunked", CliUploader.redactForLog(argv))
