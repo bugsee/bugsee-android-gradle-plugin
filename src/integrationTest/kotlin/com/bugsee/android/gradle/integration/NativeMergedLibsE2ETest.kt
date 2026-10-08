@@ -135,6 +135,27 @@ class NativeMergedLibsE2ETest {
     }
 
     @Test
+    fun `a stored symbol table is upgraded to DWARF without --force`() {
+        MockSymbolServer(storedVariant = "symtab").use { server ->
+            assemble(fixture(), server)
+            val post = server.symbolPosts.single()
+            assertFalse("no blanket --force", post.text.contains("\"overwrite\":true"))
+            assertTrue("declares it is DWARF and asks for an upgrade", post.text.contains("\"replace_if_richer\":true"))
+            assertEquals("the richer copy was transferred once", 1, server.puts.size)
+            assertEquals("and the server now holds DWARF", "dwarf", server.storedVariant)
+        }
+    }
+
+    @Test
+    fun `a stored DWARF copy is never re-sent or downgraded`() {
+        MockSymbolServer(storedVariant = "dwarf").use { server ->
+            assemble(fixture(), server)
+            assertEquals(1, server.symbolPosts.size)
+            assertTrue(server.puts.isEmpty())
+        }
+    }
+
+    @Test
     fun `legacy FULL zip path still uploads with --force when merged libs are disabled`() {
         MockSymbolServer(alreadyHasSymbols = true).use { server ->
             val fx = fixture()

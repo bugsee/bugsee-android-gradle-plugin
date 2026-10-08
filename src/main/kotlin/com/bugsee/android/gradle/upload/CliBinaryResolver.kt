@@ -58,6 +58,12 @@ internal object CliBinaryResolver {
      * recursively, read in place), which the native upload uses to ship the
      * unstripped `merged_native_libs` without re-zipping ([ELF_DIRECTORY_MIN_VERSION]).
      *
+     * `0.8.1` makes `--type elf` upgrade a stored symbol table to DWARF for the
+     * same build-id without `--force` (`replace_if_richer`, bugsee-cli#78), so a
+     * directory upload needs no blanket force to replace SYMBOL_TABLE symbols that an
+     * earlier release uploaded. (Needs the appserver support, bugsee-appserver#65-#67;
+     * against an older server the CLI behaves as 0.8.0.)
+     *
      * This is the version the plugin downloads. Keeping the CLI current is
      * the CLI's own job: once a binary is on disk, the plugin invokes
      * `bugsee-cli update --max-age 12h`, which discovers the newest
@@ -65,7 +71,7 @@ internal object CliBinaryResolver {
      * verifies, and self-replaces in place — all throttled and best-effort.
      * The plugin no longer re-implements any version discovery.
      */
-    const val DEFAULT_VERSION: String = "0.8.0"
+    const val DEFAULT_VERSION: String = "0.8.1"
 
     /** Lowest CLI whose `debug-files upload --type elf` accepts a directory of libraries. */
     const val ELF_DIRECTORY_MIN_VERSION: String = "0.8.0"
