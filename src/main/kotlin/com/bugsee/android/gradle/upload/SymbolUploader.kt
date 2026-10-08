@@ -103,7 +103,7 @@ internal object SymbolUploader {
             }
 
             val contentText = EntityUtils.toString(resEntity, "utf-8")
-            if (debug) logger.warn("Bugsee: Upload step 2. Response: $contentText")
+            if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText)}")
 
             // Parse the body defensively. The 2xx range covers
             // 201 Created / 202 Accepted / 204 No Content responses
@@ -144,7 +144,7 @@ internal object SymbolUploader {
                 if (error != null) {
                     val errorType = error.optString("type", "")
                     if (errorType == "ApplicationNotFoundError") {
-                        logger.warn("App token is invalid: $appToken")
+                        logger.warn("App token is invalid: ${BundleUploader.maskAppToken(appToken)}")
                     } else {
                         logger.warn("Bugsee upload failed with error: $error")
                     }
@@ -155,7 +155,8 @@ internal object SymbolUploader {
             }
 
             // 2. Upload to presigned URL
-            if (debug) logger.warn("Bugsee: Uploading to endpoint: $presignedEndpoint")
+            // The presigned URL's query string is a write credential valid for days: never log it.
+            if (debug) logger.warn("Bugsee: Uploading to endpoint: ${BundleUploader.redactPresignedUrl(presignedEndpoint)}")
             val httpPut = HttpPut(presignedEndpoint)
             httpPut.entity = FileEntity(file)
             val putResponse = client.execute(httpPut)
@@ -177,6 +178,21 @@ internal object SymbolUploader {
             if (debug) logger.warn("Bugsee: Upload complete.")
             true
         }
+    }
+
+    /**
+     * The metadata POST's reply as it is safe to log: the `endpoint` field is a presigned PUT URL whose
+     * query string is a write credential valid for days, so only the query is dropped and every other field
+     * stays visible. A body that is not a JSON object is truncated instead.
+     */
+    internal fun redactedResponseForLog(contentText: String): String = try {
+        val json = JSONObject(contentText)
+        if (json.has("endpoint")) {
+            json.put("endpoint", BundleUploader.redactPresignedUrl(json.optString("endpoint", "")))
+        }
+        json.toString()
+    } catch (e: Exception) {
+        contentText.take(200)
     }
 
     /**
