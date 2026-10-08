@@ -240,7 +240,7 @@ internal object CliUploader {
 
         val argv = buildPackArgv(artifactFile, mappingFile, outZip)
         if (debug) {
-            logger.warn("Bugsee: invoking bugsee-cli with args: ${argv.joinToString(" ")}")
+            logger.warn("Bugsee: invoking bugsee-cli with args: ${redactForLog(argv)}")
         }
 
         val stderr = ByteArrayOutputStream()
@@ -310,9 +310,9 @@ internal object CliUploader {
         }
 
         if (debug) {
-            // app-token is intentionally NOT scrubbed here — we log it the same
-            // way the Kotlin uploader logs the metadata JSON when `debug=true`.
-            logger.warn("Bugsee: invoking bugsee-cli with args: ${argv.joinToString(" ")}")
+            // The app token is a credential and CI logs are routinely shared or public, so it is
+            // masked even in debug output (see [redactForLog]).
+            logger.warn("Bugsee: invoking bugsee-cli with args: ${redactForLog(argv)}")
         }
 
         val stderr = ByteArrayOutputStream()
@@ -476,6 +476,28 @@ internal object CliUploader {
         add("--artifact"); add(artifactFile.absolutePath)
         mappingFile?.let { add("--mapping"); add(it.absolutePath) }
         add("--out"); add(outZip.absolutePath)
+    }
+
+    private val APP_TOKEN_IN_URL = Regex("(/v2/apps/)[^/\\s?#]+")
+
+    /**
+     * The argv as it is safe to print. The app token reaches the CLI two ways, and both are masked
+     * with `***`: as the value of `--app-token` (also `--app-token=<value>`), and as the path
+     * segment of an upload URL (`…/v2/apps/<token>/builds…`, see [ApiEndpoint]).
+     *
+     * Only for logging: the real argv is passed to the process unchanged.
+     */
+    internal fun redactForLog(argv: List<String>): String {
+        var maskNext = false
+        return argv.joinToString(" ") { arg ->
+            val shown = when {
+                maskNext -> "***"
+                arg.startsWith("--app-token=") -> "--app-token=***"
+                else -> APP_TOKEN_IN_URL.replace(arg, "$1***")
+            }
+            maskNext = arg == "--app-token"
+            shown
+        }
     }
 
     internal fun buildBuildInfoArgv(
