@@ -46,3 +46,7 @@ esac
 # Single Gradle invocation builds both the main plugin and the
 # compose-compiler-plugin subproject.
 ./gradlew clean build :compose-compiler-plugin:build "${GRADLE_ARGS[@]}"
+
+# buildSrc is a separate build: root `build` never runs its tests. They cover the Maven Central
+# signature-checksum filter that the sonatype publish tasks call before uploading.
+./gradlew -p buildSrc test

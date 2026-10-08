@@ -1,3 +1,8 @@
+import com.bugsee.publish.MavenSignatureChecksums
+import org.gradle.api.credentials.PasswordCredentials
+import org.gradle.api.publish.maven.tasks.PublishToMavenRepository
+import java.net.URI
+
 plugins {
     `java-gradle-plugin`
     `maven-publish`
@@ -412,4 +417,105 @@ tasks.withType<PublishToMavenRepository>().configureEach {
 }
 tasks.withType<PublishToMavenLocal>().configureEach {
     dependsOn(tasks.withType<Sign>())
+}
+
+// Gradle 8.7 checksums every file it PUTs, and a .asc signature is just another file, so each
+// signature gains .md5/.sha1 (and .sha256/.sha512 unless gradle.properties sets the switch).
+// Central does not require checksums of signatures. The checksums are not task outputs — they
+// are generated inside the publisher at upload time — so the only way to omit them on this
+// Gradle is to let that publisher write a local Maven repo, delete the signature checksums,
+// and PUT the remainder ourselves. PublishToMavenRepository snapshots the repository inside
+// its task action, which runs after doFirst, so the repository installed here is the one
+// Gradle writes. The sonatype repository carries HTTP credentials, and Gradle's file
+// transport rejects those ("Authentication scheme 'all' is not supported by protocol
+// 'file'"), so the staged copy is a repository that was never given credentials. It is
+// removed from the project's resolution repositories so it is not used to resolve
+// dependencies and does not grow a second publish task.
+// Applies to every project that publishes: this root (plugin + marker) and
+// :compose-compiler-plugin (one publication per Kotlin line). scripts/deploy.sh runs without
+// the configuration cache (this hook, the nexus plugin and Dokka are not compatible with it).
+// publishToMavenLocal is a different task type and is left alone.
+// Ported from the Bugsee Android SDK (see buildSrc/.../MavenSignatureChecksums.java).
+allprojects {
+    plugins.withId("maven-publish") {
+        val target = this@allprojects
+        tasks.withType<PublishToMavenRepository>().configureEach {
+            if (!name.endsWith("ToSonatypeRepository")) {
+                return@configureEach
+            }
+            val filteredDir = target.layout.buildDirectory.dir("maven-central-filtered/$name")
+            val localRepo = target.repositories.maven {
+                name = "mavenCentralFiltered-$name"
+                url = target.uri(filteredDir)
+            }
+            check(target.repositories.remove(localRepo)) {
+                "failed to detach the local staging repository from ${target.path}"
+            }
+            var remoteUrl: URI? = null
+            var username: String? = null
+            var password: String? = null
+            var snapshot = false
+            doFirst {
+                val repo = repository
+                remoteUrl = repo.url
+                val credentials = repo.credentials as? PasswordCredentials
+                username = credentials?.username
+                password = credentials?.password
+                if (username.isNullOrBlank()) {
+                    throw GradleException(
+                        "NEXUS_USERNAME is not set; refusing to publish ${target.path} " +
+                            "because signature checksums would be uploaded with the artifacts"
+                    )
+                }
+                val dir = filteredDir.get().asFile
+                dir.deleteRecursively()
+                dir.mkdirs()
+                // Gradle merges maven-metadata.xml from the repository it publishes into.
+                // A release staging repo is empty, so there is nothing to copy. A snapshot
+                // publishes to the shared snapshot repo; seeding those two files (module and
+                // version) is what keeps older versions and the build counter. 404 is a first
+                // publish. Anything else fails the task before we replace the remote metadata.
+                val published = publication
+                    ?: throw GradleException("Maven publication is missing for ${target.path}")
+                snapshot = published.version.endsWith("SNAPSHOT")
+                if (snapshot) {
+                    val destination = remoteUrl
+                        ?: throw GradleException("Sonatype URL was not captured for ${target.path}")
+                    MavenSignatureChecksums.seedSnapshotMetadata(
+                        dir,
+                        destination,
+                        published.groupId,
+                        published.artifactId,
+                        published.version,
+                        username!!,
+                        password ?: ""
+                    )
+                }
+                localRepo.setUrl(dir)
+                setRepository(localRepo)
+            }
+            doLast {
+                val dir = filteredDir.get().asFile
+                val staged = dir.walkTopDown().any { it.isFile }
+                if (!staged) {
+                    throw GradleException(
+                        "Maven publish for ${project.path} did not stage files into $dir. " +
+                            "Refusing to continue: the remote repository may contain signature checksums."
+                    )
+                }
+                val removed = MavenSignatureChecksums.deleteSignatureChecksums(dir)
+                val destination = remoteUrl
+                    ?: throw GradleException("Sonatype URL was not captured for ${project.path}")
+                val user = username
+                    ?: throw GradleException("Sonatype username was not captured for ${project.path}")
+                logger.lifecycle(
+                    "Uploading ${project.path} to $destination without $removed signature checksum(s)"
+                )
+                // OSSRH staging allows PUT, GET, and HEAD only. Deleting leftover
+                // metadata checksums is for the shared snapshot repository, which is
+                // the only place those files are overwritten in place.
+                MavenSignatureChecksums.upload(dir, destination, user, password ?: "", snapshot)
+            }
+        }
+    }
 }
