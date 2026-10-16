@@ -72,6 +72,42 @@ class SymbolUploaderHttpTest {
 
     private val sampleJson = """{"uuid":"u-1","version":"1.0","build":1,"hash":"abc"}"""
 
+    // ── credentials never reach the log ──────────────────────────────
+
+    @Test fun `ApplicationNotFoundError logs a masked token, not the full app token`() {
+        server.setPostBody("""{"ok":false,"error":{"type":"ApplicationNotFoundError"}}""")
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+        )
+        assertFalse(ok, "an unknown app token must fail the upload")
+        val line = logger.warnMessages.singleOrNull { it.contains("App token is invalid") }
+        assertTrue(line != null, "must warn about the invalid token; got: ${logger.warnMessages}")
+        assertFalse(logger.warnMessages.any { it.contains(appToken) }, "full token must not be logged; got: ${logger.warnMessages}")
+        assertTrue(line.contains("test…oken"), "must show the masked form; got: $line")
+    }
+
+    @Test fun `debug logging drops the query of the presigned upload URL`() {
+        server.setPostBody("""{"endpoint":"${server.baseUrl}/presigned/blob?X-Amz-Signature=SECRETSIG0123"}""")
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = true,
+        )
+        assertTrue(ok, "upload must still succeed; warns: ${logger.warnMessages}")
+        val line = logger.warnMessages.singleOrNull { it.contains("Uploading to endpoint") }
+        assertTrue(line != null, "debug must log the upload endpoint; got: ${logger.warnMessages}")
+        assertFalse(logger.warnMessages.any { it.contains("SECRETSIG0123") }, "signature must not be logged; got: ${logger.warnMessages}")
+        assertTrue(line.contains("/presigned/blob?…<redacted>"), "must keep the path, drop the query; got: $line")
+    }
+
     // ── POST-metadata status handling ────────────────────────────────
 
     @Test fun `POST returning 200 succeeds (baseline)`() {
@@ -332,6 +368,30 @@ class SymbolUploaderHttpTest {
             "warn must explain the parse failure with status code; got: ${logger.warnMessages}",
         )
     }
+
+    private fun assertNonJsonBodyNotLogged(debug: Boolean) {
+        // A proxy / CDN page can echo anything, including a presigned URL with its signature.
+        server.setPostStatus(200)
+        server.setPostBody("<html>retry https://s3.example/blob?X-Amz-Signature=SECRETSIG0123</html>")
+
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = debug,
+        )
+        assertFalse(ok)
+        assertFalse(
+            logger.warnMessages.any { it.contains("SECRETSIG0123") },
+            "body must not be logged (debug=$debug); got: ${logger.warnMessages}",
+        )
+    }
+
+    @Test fun `non-JSON 2xx body is never echoed into the log`() = assertNonJsonBodyNotLogged(debug = false)
+
+    @Test fun `non-JSON 2xx body is never echoed into the debug log`() = assertNonJsonBodyNotLogged(debug = true)
 
     @Test fun `POST 200 with HTML error page (proxy-injected) fails gracefully`() {
         // Intermediate proxies (corporate forward proxies, CDN

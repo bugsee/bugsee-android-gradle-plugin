@@ -38,6 +38,10 @@ internal object BaselineClient {
         val build: String?,
     )
 
+    /** [url] with every occurrence of the app token replaced by its masked form (no-op for an empty token). */
+    private fun maskTokenIn(url: String, appToken: String): String =
+        if (appToken.isEmpty()) url else url.replace(appToken, BundleUploader.maskAppToken(appToken))
+
     /**
      * Fetch the baseline build's recorded artifact size for a
      * (package_id, format, build_configuration) tuple.
@@ -70,7 +74,8 @@ internal object BaselineClient {
             return null
         }
 
-        if (debug) logger.warn("Bugsee: size-check fetching baseline from $url")
+        // The URL path carries the app token (`/v2/apps/<token>/builds/baseline`): mask it.
+        if (debug) logger.warn("Bugsee: size-check fetching baseline from ${maskTokenIn(url, appToken)}")
 
         val httpGet = HttpGet(url)
         val requestConfig = RequestConfig.custom()
