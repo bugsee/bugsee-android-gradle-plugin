@@ -54,6 +54,9 @@ internal object CliUploader {
     /** Per the CLI's documented exit-code contract: 2 = Usage (argv error). */
     private const val EXIT_USAGE = 2
 
+    /** The environment variable bugsee-cli reads the app token from (`--app-token` is its flag form). */
+    internal const val APP_TOKEN_ENV = "BUGSEE_APP_TOKEN"
+
     @Suppress("LongParameterList")
     fun uploadMapping(
         execOps: ExecOperations,
@@ -72,13 +75,13 @@ internal object CliUploader {
         cliBinary = cliBinary,
         argv = buildMappingArgv(
             endpoint = endpoint,
-            appToken = appToken,
             version = version,
             build = build,
             uuid = uuid,
             mappingFile = mappingFile,
             iconFile = iconFile,
         ),
+        appToken = appToken,
         logger = logger,
         debug = debug,
     )
@@ -101,13 +104,13 @@ internal object CliUploader {
         cliBinary = cliBinary,
         argv = buildElfArgv(
             endpoint = endpoint,
-            appToken = appToken,
             version = version,
             build = build,
             uuid = uuid,
             symbolsZip = symbolsZip,
             force = force,
         ),
+        appToken = appToken,
         logger = logger,
         debug = debug,
     )
@@ -150,6 +153,8 @@ internal object CliUploader {
             depsJsonFile = depsJsonFile,
             timingsJsonFile = timingsJsonFile,
         ),
+        // Pre-signed mode: the URL authorises the PUT, so there is no app token to hand over.
+        appToken = null,
         logger = logger,
         debug = debug,
     )
@@ -193,7 +198,6 @@ internal object CliUploader {
         cliBinary = cliBinary,
         argv = buildBuildArgv(
             endpoint = endpoint,
-            appToken = appToken,
             payloadJsonFile = payloadJsonFile,
             artifactFile = artifactFile,
             mappingFile = mappingFile,
@@ -201,6 +205,7 @@ internal object CliUploader {
             timingsJsonFile = timingsJsonFile,
             chunked = chunked,
         ),
+        appToken = appToken,
         logger = logger,
         debug = debug,
     )
@@ -283,6 +288,7 @@ internal object CliUploader {
         argv: List<String>,
         logger: Logger,
         debug: Boolean,
+        appToken: String?,
     ): CliUploadResult {
         if (!cliBinary.isFile) {
             logger.warn(
@@ -321,6 +327,10 @@ internal object CliUploader {
             val result = execOps.exec { spec ->
                 spec.executable = cliBinary.absolutePath
                 spec.args = argv
+                // The app token goes in the environment, not on the command line: argv is world-
+                // readable to other local users and processes (ps, /proc/<pid>/cmdline), the
+                // environment of a process is not. bugsee-cli reads BUGSEE_APP_TOKEN (every version).
+                appToken?.let { spec.environment(APP_TOKEN_ENV, it) }
                 // The CLI logs all diagnostics to stderr via the `tracing` crate;
                 // forward to the Gradle logger so users see what happened.
                 // stdout stays untouched — currently unused, reserved for future
@@ -395,7 +405,6 @@ internal object CliUploader {
      */
     internal fun buildMappingArgv(
         endpoint: String,
-        appToken: String,
         version: String,
         build: String,
         uuid: String,
@@ -403,7 +412,6 @@ internal object CliUploader {
         iconFile: File?,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
-        add("--app-token"); add(appToken)
         add("debug-files"); add("upload")
         add("--type"); add("proguard")
         add("--version"); add(version)
@@ -425,7 +433,6 @@ internal object CliUploader {
      */
     internal fun buildElfArgv(
         endpoint: String,
-        appToken: String,
         version: String,
         build: String,
         uuid: String,
@@ -433,7 +440,6 @@ internal object CliUploader {
         force: Boolean = false,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
-        add("--app-token"); add(appToken)
         add("debug-files"); add("upload")
         add("--type"); add("elf")
         if (force) add("--force")
@@ -491,8 +497,9 @@ internal object CliUploader {
 
     /**
      * Constructs the argv vector for `bugsee-cli upload build`. Carries
-     * `--endpoint` / `--app-token` (the CLI does the registration POST, unlike
-     * build-info's pre-signed mode). `--artifact` is the RAW `.aab`/`.apk` (the
+     * `--endpoint`; the app token is NOT in argv, it is passed through the environment
+     * ([APP_TOKEN_ENV]) — the CLI does the registration POST, unlike
+     * build-info's pre-signed mode. `--artifact` is the RAW `.aab`/`.apk` (the
      * CLI packs it + the optional `--mapping`); omit `--deps`/`--timings` when
      * not collected; `--chunked` opts into the chunked transport.
      *
@@ -501,7 +508,6 @@ internal object CliUploader {
     @Suppress("LongParameterList")
     internal fun buildBuildArgv(
         endpoint: String,
-        appToken: String,
         payloadJsonFile: File,
         artifactFile: File,
         mappingFile: File?,
@@ -510,7 +516,6 @@ internal object CliUploader {
         chunked: Boolean,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
-        add("--app-token"); add(appToken)
         add("upload"); add("build")
         add("--payload-json"); add(payloadJsonFile.absolutePath)
         add("--artifact"); add(artifactFile.absolutePath)

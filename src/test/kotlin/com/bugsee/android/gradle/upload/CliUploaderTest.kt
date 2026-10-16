@@ -38,7 +38,6 @@ class CliUploaderTest {
     @Test fun `buildMappingArgv without icon produces the documented flag order`() {
         val argv = CliUploader.buildMappingArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.2.3",
             build = "42",
             uuid = "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
@@ -48,7 +47,6 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "token-xyz",
                 "debug-files", "upload",
                 "--type", "proguard",
                 "--version", "1.2.3",
@@ -64,7 +62,6 @@ class CliUploaderTest {
         val icon = File("/tmp/ic_launcher.png")
         val argv = CliUploader.buildMappingArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -85,7 +82,6 @@ class CliUploaderTest {
     @Test fun `buildElfArgv produces the documented flag order`() {
         val argv = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.2.3",
             build = "42",
             uuid = "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
@@ -94,7 +90,6 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "token-xyz",
                 "debug-files", "upload",
                 "--type", "elf",
                 "--version", "1.2.3",
@@ -109,7 +104,6 @@ class CliUploaderTest {
     @Test fun `buildElfArgv adds --force only when requested`() {
         fun argv(force: Boolean) = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -127,7 +121,6 @@ class CliUploaderTest {
         val dir = File("/tmp/merged_native_libs/release")
         val argv = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -144,7 +137,6 @@ class CliUploaderTest {
         // silently start sending --icon and breaking native uploads.
         val argv = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -247,7 +239,6 @@ class CliUploaderTest {
     @Test fun `buildBuildArgv with all inputs produces the documented flag order`() {
         val argv = CliUploader.buildBuildArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "tok",
             payloadJsonFile = File("/tmp/payload.json"),
             artifactFile = File("/tmp/app.aab"),
             mappingFile = File("/tmp/mapping.txt"),
@@ -258,7 +249,6 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "tok",
                 "upload", "build",
                 "--payload-json", "/tmp/payload.json",
                 "--artifact", "/tmp/app.aab",
@@ -274,7 +264,6 @@ class CliUploaderTest {
     @Test fun `buildBuildArgv omits optional flags when not supplied`() {
         val argv = CliUploader.buildBuildArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "tok",
             payloadJsonFile = File("/tmp/payload.json"),
             artifactFile = File("/tmp/app.apk"),
             mappingFile = null,
@@ -285,7 +274,6 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "tok",
                 "upload", "build",
                 "--payload-json", "/tmp/payload.json",
                 "--artifact", "/tmp/app.apk",
@@ -429,7 +417,13 @@ class CliUploaderTest {
         private val cliExitValue: Int,
         private val stderr: String = "",
     ) : ExecOperations {
+        /** The argv and environment the production code gave the process, as recorded from the spec. */
+        var recordedArgs: List<String> = emptyList()
+        val recordedEnv: MutableMap<String, String> = mutableMapOf()
+        var execCount = 0
+
         override fun exec(action: Action<in ExecSpec>): ExecResult {
+            execCount++
             // Capture into a local so the anonymous ExecResult below
             // references THIS value — not its own getExitValue() (a name
             // clash with the Java `exitValue` property → infinite recursion).
@@ -441,6 +435,11 @@ class CliUploaderTest {
             ) { proxy, method, args ->
                 when (method.name) {
                     "setErrorOutput" -> { capturedErr = args[0] as? java.io.OutputStream; proxy }
+                    "setArgs" -> { recordedArgs = (args[0] as Iterable<*>).map { it.toString() }; proxy }
+                    "environment" -> {
+                        if (args.size == 2) recordedEnv[args[0] as String] = args[1].toString()
+                        proxy
+                    }
                     "getErrorOutput" -> capturedErr
                     // Defaults for the few getters Gradle might probe — the
                     // production code only sets executable/args/errorOutput.
@@ -489,6 +488,50 @@ class CliUploaderTest {
             logger = Logging.getLogger("test"),
             debug = false,
         )
+
+    // ── the app token goes in the environment, never on the command line ──
+
+    private val envToken = "tok_SECRET_0123456789abcdef"
+
+    @Test fun `uploadMapping passes the token via BUGSEE_APP_TOKEN and not on argv`() {
+        val exec = FakeExec(cliExitValue = 0)
+        CliUploader.uploadMapping(
+            execOps = exec, cliBinary = executableCliStub(), mappingFile = mappingFile, iconFile = null,
+            appToken = envToken, endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = Logging.getLogger("test"), debug = false,
+        )
+        assertEquals(1, exec.execCount)
+        assertEquals(envToken, exec.recordedEnv["BUGSEE_APP_TOKEN"])
+        assertFalse(exec.recordedArgs.any { it.contains(envToken) }, "token must not be on argv: ${exec.recordedArgs}")
+        assertFalse(exec.recordedArgs.contains("--app-token"), "no --app-token flag: ${exec.recordedArgs}")
+        assertTrue(exec.recordedArgs.containsAll(listOf("--endpoint", "https://api.bugsee.com", "debug-files", "upload")))
+    }
+
+    @Test fun `uploadElf passes the token via BUGSEE_APP_TOKEN and not on argv`() {
+        val exec = FakeExec(cliExitValue = 0)
+        CliUploader.uploadElf(
+            execOps = exec, cliBinary = executableCliStub(), symbolsZip = symbolsZip, appToken = envToken,
+            endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = Logging.getLogger("test"), debug = false,
+        )
+        assertEquals(envToken, exec.recordedEnv["BUGSEE_APP_TOKEN"])
+        // Prove argv was actually recorded, so the "not on argv" checks below cannot pass vacuously.
+        assertTrue(exec.recordedArgs.containsAll(listOf("--endpoint", "https://api.bugsee.com", "--type", "elf")), "argv=${exec.recordedArgs}")
+        assertFalse(exec.recordedArgs.any { it.contains(envToken) }, "token must not be on argv: ${exec.recordedArgs}")
+        assertFalse(exec.recordedArgs.contains("--app-token"), "no --app-token flag: ${exec.recordedArgs}")
+    }
+
+    @Test fun `uploadBuild passes the token via BUGSEE_APP_TOKEN and not on argv`() {
+        val exec = FakeExec(cliExitValue = 0)
+        CliUploader.uploadBuild(
+            execOps = exec, cliBinary = executableCliStub(), endpoint = "https://api.bugsee.com", appToken = envToken,
+            payloadJsonFile = File("/tmp/payload.json"), artifactFile = File("/tmp/app.aab"), mappingFile = null,
+            depsJsonFile = null, timingsJsonFile = null, chunked = false, logger = Logging.getLogger("test"), debug = false,
+        )
+        assertEquals(envToken, exec.recordedEnv["BUGSEE_APP_TOKEN"])
+        assertFalse(exec.recordedArgs.any { it.contains(envToken) }, "token must not be on argv: ${exec.recordedArgs}")
+        assertTrue(exec.recordedArgs.containsAll(listOf("upload", "build")), "argv=${exec.recordedArgs}")
+    }
 
     @Test fun `verifyAndExec maps exit 0 to success with no fallback`() {
         val result = runUploadMapping(FakeExec(cliExitValue = 0), executableCliStub())
