@@ -369,6 +369,30 @@ class SymbolUploaderHttpTest {
         )
     }
 
+    private fun assertNonJsonBodyNotLogged(debug: Boolean) {
+        // A proxy / CDN page can echo anything, including a presigned URL with its signature.
+        server.setPostStatus(200)
+        server.setPostBody("<html>retry https://s3.example/blob?X-Amz-Signature=SECRETSIG0123</html>")
+
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = debug,
+        )
+        assertFalse(ok)
+        assertFalse(
+            logger.warnMessages.any { it.contains("SECRETSIG0123") },
+            "body must not be logged (debug=$debug); got: ${logger.warnMessages}",
+        )
+    }
+
+    @Test fun `non-JSON 2xx body is never echoed into the log`() = assertNonJsonBodyNotLogged(debug = false)
+
+    @Test fun `non-JSON 2xx body is never echoed into the debug log`() = assertNonJsonBodyNotLogged(debug = true)
+
     @Test fun `POST 200 with HTML error page (proxy-injected) fails gracefully`() {
         // Intermediate proxies (corporate forward proxies, CDN
         // error edges) occasionally rewrite the response body to

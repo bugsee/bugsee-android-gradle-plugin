@@ -125,8 +125,7 @@ internal object SymbolUploader {
             } catch (e: Exception) {
                 logger.warn(
                     "Bugsee upload failed: response body is not valid JSON " +
-                        "(status=$statusCode): ${e.message}. Body preview: " +
-                        contentText.take(200),
+                        "(status=$statusCode, ${contentText.length} chars): ${e.message}",
                 )
                 return@use false
             }
@@ -183,7 +182,8 @@ internal object SymbolUploader {
     /**
      * The metadata POST's reply as it is safe to log: the `endpoint` field is a presigned PUT URL whose
      * query string is a write credential valid for days, so only the query is dropped and every other field
-     * stays visible. A body that is not a JSON object is truncated instead.
+     * stays visible. A body that is not a JSON object is reduced to its length: a proxy or CDN page can echo
+     * anything, including a presigned URL.
      */
     internal fun redactedResponseForLog(contentText: String): String = try {
         val json = JSONObject(contentText)
@@ -192,7 +192,7 @@ internal object SymbolUploader {
         }
         json.toString()
     } catch (e: Exception) {
-        contentText.take(200)
+        "<not a JSON object, ${contentText.length} chars>"
     }
 
     /**
