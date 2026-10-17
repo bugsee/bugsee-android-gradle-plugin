@@ -89,7 +89,7 @@ val variantJars = composeVariants.associate { variant ->
         compilerClasspath.name("org.jetbrains.kotlin:kotlin-stdlib:${variant.kotlinVersion}")
         // CoreApplicationEnvironment reaches for kotlinx.coroutines, which the compiler's own POM
         // does not pull in.
-        compilerClasspath.name("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0")
+        compilerClasspath.name("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
     }
 
     val outputDir = layout.buildDirectory.dir("composeVariants/${variant.id}/classes")
@@ -217,7 +217,7 @@ val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
         cfg.name("org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion")
         cfg.name("org.jetbrains.kotlin:kotlin-script-runtime:$kotlinVersion")
         cfg.name("org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion")
-        cfg.name("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0")
+        cfg.name("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0")
     }
     cfg
 }
