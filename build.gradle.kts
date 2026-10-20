@@ -71,8 +71,8 @@ dependencies {
     // depending on. If the plugin ever drops to a Method/Class API
     // added in ASM 9.6+, surface the minimum AGP requirement in the
     // plugin's POM constraint instead of relying on this comment.
-    compileOnly("org.ow2.asm:asm-tree:9.7")
-    compileOnly("org.ow2.asm:asm-analysis:9.7")
+    compileOnly("org.ow2.asm:asm-tree:9.11")
+    compileOnly("org.ow2.asm:asm-analysis:9.11")
 
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
@@ -94,10 +94,10 @@ dependencies {
     // ASM toolchain used by the app-startup-tracing test harness
     // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
     // for CFG-correctness assertions, tree + core for transform code).
-    testImplementation("org.ow2.asm:asm:9.7")
-    testImplementation("org.ow2.asm:asm-tree:9.7")
-    testImplementation("org.ow2.asm:asm-util:9.7")
-    testImplementation("org.ow2.asm:asm-analysis:9.7")
+    testImplementation("org.ow2.asm:asm:9.11")
+    testImplementation("org.ow2.asm:asm-tree:9.11")
+    testImplementation("org.ow2.asm:asm-util:9.11")
+    testImplementation("org.ow2.asm:asm-analysis:9.11")
 
     // Kotlin compiler embeddable for the test harness's Kotlin-source
     // compiler (compiles inline Kotlin snippets to class bytes that the
