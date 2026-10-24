@@ -4,6 +4,17 @@ import org.gradle.api.Action
 import org.gradle.api.provider.Property
 
 /**
+ * DSL marker for the `bugsee { }` extension and its `variant { }` blocks.
+ *
+ * Inside a `variant("x") { }` block the Kotlin compiler refuses implicit access
+ * to the enclosing [BugseePluginExtension] receiver, so global-only settings
+ * cannot be referenced there by accident. Nested blocks such as `ndk { }` do not
+ * carry the marker and keep reaching outer members as before.
+ */
+@DslMarker
+annotation class BugseeDsl
+
+/**
  * The subset of [BugseePluginExtension] settings that may be overridden per
  * build variant inside a `variant("name") { ... }` block.
  *
@@ -25,7 +36,14 @@ import org.gradle.api.provider.Property
  *
  * Note: `instrumentation.excludes` is ignored inside a variant block; set it
  * on the top-level `bugsee { instrumentation { ... } }` block instead.
+ *
+ * Enforcement: in the Kotlin DSL, referencing a global-only setting inside a
+ * `variant { }` block is a compile error (the [BugseeDsl] marker hides the outer
+ * receiver). In Groovy there is no such protection: the outer extension remains
+ * reachable through closure owner resolution, so a global-only setting named
+ * inside a block would silently read or write the GLOBAL value.
  */
+@BugseeDsl
 interface BugseeVariantSettings {
     /** Bugsee API endpoint URL. See [BugseePluginExtension.endpoint]. */
     val endpoint: Property<String>

@@ -36,6 +36,7 @@ import javax.inject.Inject
  * for the full key reference and precedence rules.
  */
 
+@BugseeDsl
 abstract class BugseePluginExtension @Inject constructor(private val objects: ObjectFactory) : BugseeVariantSettings {
 
     /**

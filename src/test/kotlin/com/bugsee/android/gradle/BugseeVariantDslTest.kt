@@ -69,4 +69,35 @@ class BugseeVariantDslTest {
         assertEquals("https://api.bugsee.com", b.endpoint.get())
         assertFalse(a.debug.get())
     }
+
+    @Test
+    fun dslMarkerOnBothReceiverTypes() {
+        // kotlin.DslMarker has BINARY retention (invisible to reflection), so check the
+        // marker's class file for the DslMarker annotation descriptor.
+        val markerBytes =
+            BugseeDsl::class.java
+                .getResourceAsStream("BugseeDsl.class")!!
+                .use { it.readBytes() }
+        assertTrue(
+            "BugseeDsl must be annotated with @DslMarker",
+            String(markerBytes, Charsets.ISO_8859_1).contains("Lkotlin/DslMarker;"),
+        )
+        for (type in listOf(BugseeVariantSettings::class.java, BugseePluginExtension::class.java)) {
+            assertTrue(
+                "$type must carry @BugseeDsl",
+                type.isAnnotationPresent(BugseeDsl::class.java),
+            )
+        }
+    }
+
+    @Test
+    fun parentTokenDoesNotLeakIntoBlock() {
+        val ext = newExt()
+        ext.appToken("P")
+        ext.variant("staging", Action { })
+        val block = ext.variantBlocks.getValue("staging")
+        assertEquals(null, block.defaultAppToken)
+        assertTrue(block.variantBlocks.isEmpty())
+        assertEquals("P", ext.defaultAppToken)
+    }
 }
