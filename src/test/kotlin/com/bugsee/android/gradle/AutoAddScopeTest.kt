@@ -65,6 +65,17 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun variantOnlyDisableDoesNotDisableAutoAddProjectWide() {
+        val viaDsl = Harness(null) { variant("release") { it.instrumentation.okhttp.set(false) } }
+        viaDsl.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertTrue("bugsee-android-okhttp" in viaDsl.autoAdded(), "global unset: other variants keep the default (on)")
+
+        val viaFile = Harness("variant.release.plugin.instrumentation.okhttp=false\n")
+        viaFile.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertTrue("bugsee-android-okhttp" in viaFile.autoAdded())
+    }
+
+    @Test
     fun okhttpUnsetFallsBackToGradleProperty() {
         val off = Harness(null, gradleProperties = mapOf("bugsee.instrumentation.okhttp" to "false"))
         off.declare("com.squareup.okhttp3:okhttp:4.12.0")

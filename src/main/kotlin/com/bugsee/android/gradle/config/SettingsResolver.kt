@@ -99,7 +99,8 @@ internal class SettingsResolver(
 
     /**
      * Whether any scope (global, any DSL block, any file variant entry) resolves [def] to true;
-     * false if some scope sets it and none resolves true; null if nothing sets it anywhere.
+     * false if the global scope sets it to false and none resolves true; null if the global scope
+     * sets nothing and no scope resolves true (the caller's default then applies).
      * Each scope is resolved with the normal precedence, but the answer is conservative: it may
      * report true for a name that every real variant shadows or that matches no variant at all
      * (e.g. a typo). Used to decide project-wide additions, where over-adding is accepted.
@@ -121,16 +122,29 @@ internal class SettingsResolver(
         // Any real variant's winner is also the winner for the global scope or for a variant
         // whose single lookup name is the winner's name, so these scopes cover every outcome.
         val values = ArrayList<Boolean>()
+        var globalSet = false
         for (scope in listOf(emptyList<String>()) + names.map { listOf(it) }) {
             when (val c = choose(def, scope, warnShadow = false)) {
-                is Choice.Fixed -> values += c.value
+                is Choice.Fixed -> {
+                    values += c.value
+                    if (scope.isEmpty()) globalSet = true
+                }
                 is Choice.Linked ->
                     // The global property itself is the global scope's answer; count it once.
-                    if (c.property !== globalProp || scope.isEmpty()) c.property.orNull?.let { values += it }
+                    if (c.property !== globalProp || scope.isEmpty()) {
+                        c.property.orNull?.let {
+                            values += it
+                            if (scope.isEmpty()) globalSet = true
+                        }
+                    }
             }
         }
-        if (values.isEmpty()) return null
-        return values.any { it }
+        if (values.any { it }) return true
+        // Nothing enables it. If the global scope sets nothing, the default (which callers
+        // resolve) applies to every variant that does not override it, so a variant-only `false`
+        // must not turn the feature off project-wide.
+        if (!globalSet) return null
+        return false
     }
 
     /**
