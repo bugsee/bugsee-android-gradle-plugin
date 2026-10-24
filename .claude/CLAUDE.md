@@ -21,7 +21,8 @@ Release builds: set `RELEASE=true` environment variable to drop `-SNAPSHOT` suff
 
 ## Testing
 
-No test suite currently exists. After making changes:
+After making changes:
+0. `./gradlew :test` (unit tests) and `./gradlew :integrationTest` (Gradle TestKit tests)
 1. `./gradlew build` — plugin compiles and `validatePlugins` passes
 2. `./gradlew publishToMavenLocal` — publishes `com.bugsee:bugsee-android-gradle-plugin:4.0.0-SNAPSHOT`
 3. Apply plugin in the SDK's `app/` module → `./gradlew :app:assembleDebug` — verify manifest UUID injection
@@ -61,7 +62,13 @@ The plugin does four things:
 src/main/kotlin/com/bugsee/android/gradle/
 ├── BugseePlugin.kt                          # Entry point: extension, variant wiring, instrumentation
 ├── BugseePluginExtension.kt                 # DSL: endpoint, appToken, debug, ndk, instrumentationEnabled
+├── BugseeVariantSettings.kt                 # @BugseeDsl DSL for variant("x") { } blocks (per-variant subset)
 ├── AppTokenProvider.kt                      # Interface: getAppToken(variantName: String)
+├── config/
+│   ├── ExplicitSetProbe.kt                  # Detects an explicit Property.set (clear convention, isPresent, restore)
+│   ├── SettingDefinitions.kt                # Registry of file-settable keys, parsers, VARIANT/GLOBAL scope
+│   ├── SettingsFile.kt                      # Parses bugsee.properties incl. variant.<name>.* keys
+│   └── SettingsResolver.kt                  # Lookup order, DSL-vs-file precedence, token chain, shadow warning
 ├── manifest/
 │   ├── ManifestModifier.kt                  # XML DOM: remove old BUILD_UUID, inject new, read meta-data
 │   └── BugseeManifestTask.kt               # DefaultTask wired via SingleArtifact.MERGED_MANIFEST
@@ -153,11 +160,16 @@ Error handling:
 
 ### App Token Resolution (`AppTokenResolver`)
 
-Priority order:
-1. `appTokenByVariant` closure: `(variantName: String) -> String?`
+Chain, implemented in `SettingsResolver` (default mode):
+1. `appTokenByVariant` closure: `(variantName: String) -> String?` (null/empty falls through)
 2. `AppTokenProvider` interface: `getAppToken(variantName: String): String?`
-3. `defaultAppToken` property
-4. `com.bugsee.android.APP_TOKEN` meta-data in manifest (supports `@string/` references)
+3. DSL `variant("x") { appToken(..) }` per lookup order, then `defaultAppToken`
+4. `bugsee.properties`: `variant.<name>.app_token` per lookup order, then root `app_token`
+5. `com.bugsee.android.APP_TOKEN` meta-data in manifest (supports `@string/` references)
+
+Lookup order inside a source: variant name, each product flavor (AGP dimension order),
+build type, then the root/global value; first match wins. With `preferSettingsFile` step 4
+moves to the front. Wrappers (React Native) mirror the file lookup.
 
 ### DSL Extension (`BugseePluginExtension`)
 
@@ -171,8 +183,22 @@ bugsee {
     appToken("your-token")                   // Default token
     appToken { variantName -> "token" }      // Per-variant token
     appToken(myAppTokenProvider)             // Strong-typed provider
+
+    variant("staging") {                     // variant, flavor or build type name
+        appToken("STAGING_TOKEN")            // per-variant subset only (BugseeVariantSettings):
+        endpoint.set("https://staging.example.com") // endpoint, debug, optimizeExtensionsLoading,
+        ndk { enabled.set(true) }            // ndk, buildInfo, instrumentation, appToken
+    }
+    preferSettingsFile.set(false)            // true: bugsee.properties beats the DSL (whole build)
 }
 ```
+
+Precedence: `DSL (variant, then global) > bugsee.properties (variant.* then root) > default`,
+flipped by `preferSettingsFile`. Global-only settings (`feedback`, `leak`, `sdkAutoLoad`,
+`cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader`, `instrumentation.excludes`) are a compile
+error inside `variant { }` in Kotlin (`@BugseeDsl`); in Groovy they silently hit the global value.
+A `variant.*` file key shadowed by the DSL warns once; a shadowed root key does not.
+Per-variant capability is declared by `SettingScope` in `SettingDefinitions.kt`.
 
 All properties use `Property<T>` for lazy evaluation and Gradle configuration avoidance.
 

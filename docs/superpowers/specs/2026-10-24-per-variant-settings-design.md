@@ -111,7 +111,10 @@ bugsee {
 
 - A `variant("<name>") { }` block exposes only the settings under "Per-variant
   settings". Global-only settings are not available inside it (compile error,
-  stricter than the file's warn-and-ignore).
+  stricter than the file's warn-and-ignore). This holds in the Kotlin DSL via a
+  `@BugseeDsl` `@DslMarker`; in Groovy a global-only setting named inside a block
+  resolves to the outer extension and silently hits the global value.
+  `instrumentation.excludes` is global-only and ignored inside a block.
 - `<name>` is matched like the file's `variant.<name>`: variant name, flavor
   name or build type name, case-sensitive, using the same lookup order.
 - Settings set outside any `variant` block are global values and the fallback
@@ -161,19 +164,26 @@ Default is `false`.
 
 ### Shadow warning
 
-When a file key (root or `variant.*`) is ignored because the DSL already set
-that value, log a warning once per key, e.g.:
+When a `variant.<name>.*` file key (a setting or `variant.<name>.app_token`) is
+ignored because the DSL already set that value, in default mode only, log a
+warning once per key, e.g.:
 
-> Bugsee: variant.staging.plugin.endpoint ignored: `endpoint` is set in the
-> DSL (set `preferSettingsFile` to let the settings file win).
+> Bugsee: variant.staging.plugin.endpoint ignored: endpoint is set in the DSL
+> (set preferSettingsFile to let the settings file win).
 
-### Technical risk to settle early
+No warning is logged when a ROOT file key (`plugin.<key>`, `app_token`) is
+shadowed by the DSL: that is the long-standing documented precedence and
+warning would add noise for existing builds.
+
+### Technical risk (settled)
 
 Gradle's `Property<T>` cannot tell whether a value came from `.set()` or from a
 convention. Both the shadow warning and the file-wins mode need that
-distinction. A short spike must establish how to detect an explicit DSL set (or
-an equivalent design) before the plan is finalised. The spike result may change
-the mechanism but not the behaviour described here.
+distinction. Shipped technique (`ExplicitSetProbe`): clear the property's
+convention, test `isPresent`, restore the resolved value as the convention. It
+replaced the originally sketched recording-convention provider, which Gradle
+rejects (`ProviderInternal` cast). It flattens conventions, so it is only valid
+after DSL evaluation.
 
 ## Per-variant settings
 
@@ -235,7 +245,9 @@ With `preferSettingsFile`: the file (step 4) moves to the front; the rest keep
 their order.
 
 The token shadow warning fires only when a DSL source returned a non-null value
-for that variant and the file also has a token for it.
+for that variant and a `variant.<name>.app_token` file key exists for it; a
+shadowed root `app_token` does not warn. The `appTokenByVariant` / `AppTokenProvider`
+chain is unchanged.
 
 ## Calls made while writing this (author's decisions, not the user's)
 
@@ -254,7 +266,19 @@ for that variant and the file also has a token for it.
   variants exist, so use the conservative rule: add the module if it is enabled
   globally or any `variant.*` key enables it. A variant that disabled the
   feature may then carry an unused runtime module; that is acceptable. The
-  per-variant upload task and bytecode transform stay exact.
+  per-variant upload task and bytecode transform stay exact. Known limitation:
+  the Compose Kotlin compiler-plugin gate is project-level and uses the same
+  any-scope rule, so if one variant enables compose every Kotlin compilation
+  gets the compiler plugin, including variants that disabled it
+  (variant-exactness would need a compilation-to-variant mapping; not done).
+- Value fixing: values from `variant.*` file keys (and file root values when
+  `preferSettingsFile` ranks them above the DSL) are fixed when variants are
+  configured; values resolved from the DSL stay live, so a late
+  `afterEvaluate { bugsee { endpoint.set(..) } }` still reaches the tasks when
+  no `variant.*` input outranks it.
+- With `plugin.debug` true for a variant the plugin logs
+  `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`.
+- The empty `app_token=` warning appears once when the file is parsed.
 - Precedence is a hard requirement; the shadow warning is best-effort. If the
   spike shows explicit-DSL-set detection is infeasible on the existing
   `Property` objects, the builder may route DSL values through a shadow
@@ -270,9 +294,9 @@ for that variant and the file also has a token for it.
 - Reuse the existing type coercers (bool/int/long/double/string/enum) and error
   handling (malformed value: warn, fall through).
 - Application variants only (library variants are skipped as today).
-- No test suite exists today; the plan should say what verification replaces it
-  (build + publishToMavenLocal + an app with two flavors, and any unit tests
-  for the pure resolver logic).
+- Verification: unit tests (`./gradlew :test`) for the pure resolver and file
+  logic, TestKit integration tests (`./gradlew :integrationTest`) with a
+  two-flavor app, plus build and publishToMavenLocal.
 
 ## Mechanism (the author's guess, not agreed)
 
