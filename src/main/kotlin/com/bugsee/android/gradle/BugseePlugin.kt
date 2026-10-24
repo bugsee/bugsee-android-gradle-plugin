@@ -3,7 +3,11 @@ package com.bugsee.android.gradle
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.bugsee.android.gradle.config.BUGSEE_PROPERTIES_FILENAME
 import com.bugsee.android.gradle.config.PluginPropertiesApplier
+import com.bugsee.android.gradle.config.SettingsFileParser
+import com.bugsee.android.gradle.config.SettingsResolver
+import com.bugsee.android.gradle.config.VariantContext
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
@@ -46,6 +50,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     // resolve depends on the CONSUMER's Kotlin version — see ComposeKotlinCompatibility. A plugin
     // instance is created per project, so this reference is unambiguous.
     private var appliedProject: Project? = null
+
+    // Per-variant settings view (DSL `variant { }` blocks + `variant.*` keys in
+    // bugsee.properties). Built on first use from `onVariants`, i.e. after the user's
+    // `bugsee { }` block has been evaluated, as SettingsResolver requires.
+    private var settingsResolver: SettingsResolver? = null
 
     // Injected by Gradle at plugin apply time — the service registry
     // we need to hook the BuildTimingService into the task-completion
@@ -218,11 +227,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
 
         androidComponents.onVariants { variant ->
-            val isDebug = extension.debug.get()
+            val globalDebug = extension.debug.get()
             val variantName = variant.name
             val capitalizedVariant = variantName.replaceFirstChar { it.uppercase() }
 
-            if (isDebug) project.logger.warn("Bugsee: Configuring variant $variantName")
+            if (globalDebug) project.logger.warn("Bugsee: Configuring variant $variantName")
 
             // Gate every plugin-side wiring on `variant is
             // ApplicationVariant`. The bugsee plugin's contract is
@@ -248,7 +257,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // plugin side-effect to `ApplicationVariant`, which is
             // also what the README has always documented.
             if (variant !is ApplicationVariant) {
-                if (isDebug) {
+                if (globalDebug) {
                     project.logger.warn(
                         "Bugsee: skipping plugin wiring for non-application variant " +
                             "$variantName (${variant.javaClass.simpleName}). " +
@@ -257,6 +266,20 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     )
                 }
                 return@onVariants
+            }
+
+            // This variant's resolved settings. Every variant-level read below goes
+            // through `effective`; it does not carry app tokens (see resolveCcSafeInputs).
+            val variantContext = variantContextOf(variant)
+            val effective = settingsResolver().effectiveFor(variantContext)
+            val isDebug = effective.debug.get()
+            if (isDebug) {
+                val token = settingsResolver().appTokenFor(variantContext, debug = false)
+                project.logger.warn(
+                    "Bugsee: variant $variantName resolved: " +
+                        "token=${token?.let { AppTokenResolver.maskToken(it) } ?: "none"} " +
+                        "endpoint=${effective.endpoint.get()}"
+                )
             }
 
             // Resolved EARLY (before the manifest task) because the manifest task's
@@ -268,7 +291,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // `register<Name>Extension()` call — silently dead at runtime.
             val sourceManifest = project.file("src/main/AndroidManifest.xml")
             val configResolver = InstrumentationConfigResolver(
-                extension.instrumentation,
+                effective.instrumentation,
                 project,
                 sourceManifest.takeIf { it.exists() }
             )
@@ -288,7 +311,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // Pre-R8 manifest transform writes a deterministic *fallback*
             // BUILD_UUID into the manifest meta-data.
             val manifestTaskProvider = registerManifestTask(
-                project, variant, extension, capitalizedVariant,
+                project, variant, effective, capitalizedVariant,
                 instrumentationGloballyEnabled = instrumentationGloballyEnabled,
                 declaredSdkVersion = declaredSdkVersion,
             )
@@ -306,12 +329,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
             // --- Application variant specific tasks (upload mapping, NDK symbols, bundle) ---
             registerMappingUploadTask(
-                project, variant, extension, capitalizedVariant, resolveTaskProvider
+                project, variant, effective, capitalizedVariant, resolveTaskProvider
             )
 
-            if (extension.ndk.enabled.get()) {
+            if (effective.ndk.enabled.get()) {
                 registerNativeUploadTask(
-                    project, variant, extension, capitalizedVariant, resolveTaskProvider
+                    project, variant, effective, capitalizedVariant, resolveTaskProvider
                 )
             }
 
@@ -320,9 +343,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // that piggybacks on the same task — when both are
             // active, the task additionally requests a presigned
             // PUT URL and ships the artefact bytes.
-            if (shouldRegisterBuildInfoFor(project, variant, extension, isDebug)) {
+            if (shouldRegisterBuildInfoFor(project, variant, effective, isDebug)) {
                 registerBundleUploadTask(
-                    project, variant, extension, capitalizedVariant, resolveTaskProvider
+                    project, variant, effective, capitalizedVariant, resolveTaskProvider
                 )
             }
 
@@ -331,7 +354,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // before the manifest task, so provider-stripping and the
             // ExtensionsInit injection share one gate.)
             if (instrumentationGloballyEnabled) {
-                val extensionsInit = ExtensionsInitInstrumentation(extension, manifestTaskProvider)
+                val extensionsInit = ExtensionsInitInstrumentation(effective, manifestTaskProvider)
                 val extras = listOf<Instrumentation>(extensionsInit)
                 // Core-only instrumentations must also apply when the plugin
                 // is going to auto-add the core SDK: at this point that
@@ -340,7 +363,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 val coreSdkAutoLoad = extension.sdkAutoLoad.get() && !isCoreSdkPresent(project)
                 val registrar = InstrumentationRegistrar(
                     project, project.logger, isDebug, configResolver,
-                    extension.instrumentation.excludes.getOrElse(emptySet()),
+                    effective.instrumentation.excludes.getOrElse(emptySet()),
                     extras,
                     coreSdkAutoLoad,
                 )
@@ -355,6 +378,23 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
     }
+
+    /**
+     * The per-variant settings resolver, created on first call. Callers are on the
+     * `onVariants` path, which runs after the user's `bugsee { }` block: the resolver
+     * probes which DSL properties were explicitly set, so it must not be built at apply
+     * time. The file is read through `providers.fileContents` (a configuration-cache
+     * input), as [PluginPropertiesApplier.applyTo] does.
+     */
+    private fun settingsResolver(): SettingsResolver = settingsResolver ?: run {
+        val project = checkNotNull(appliedProject) { "Bugsee plugin not applied" }
+        val extension = checkNotNull(pluginExtension) { "Bugsee plugin not applied" }
+        val root = project.rootProject
+        val text = root.providers
+            .fileContents(root.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME))
+            .asText.orNull
+        SettingsResolver(extension, SettingsFileParser.parse(text, project.logger), project.objects, project.logger)
+    }.also { settingsResolver = it }
 
     private fun registerManifestTask(
         project: Project,
@@ -682,11 +722,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     ): CcSafeUploadInputs {
         val isDebug = extension.debug.getOrElse(false)
 
-        val preResolvedToken: String? = AppTokenResolver.resolveFromExtension(
-            extension, variant.name, project.logger, isDebug,
-        ) ?: AppTokenResolver.resolveFromPropertiesFile(
-            project.rootProject.projectDir, project.logger, isDebug,
-        )
+        // [extension] is the variant's effective view, which carries no app tokens:
+        // the token chain (DSL, `variant { }` blocks, bugsee.properties) is the resolver's.
+        val preResolvedToken: String? = settingsResolver().appTokenFor(variantContextOf(variant), isDebug)
 
         val stringResFiles: List<File> = try {
             val android = project.extensions.findByName("android")
@@ -1445,6 +1483,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     companion object {
+
+        /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
+        internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
+            VariantContext(variant.name, variant.productFlavors.map { it.second }, variant.buildType)
 
         private const val PLUGIN_NAME = "bugsee"
         // Maven group of all Bugsee artifacts. Centralised so dependency
