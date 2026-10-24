@@ -443,7 +443,9 @@ Gradle log level:
 | `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
 | Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |
 
-An empty `app_token=` warns once when the file is parsed.
+An empty root `app_token=` warns once, when the root token is actually consulted
+(not when a DSL token already won). An empty `variant.<name>.app_token=` warns
+when the file is parsed.
 
 ## Example
 
