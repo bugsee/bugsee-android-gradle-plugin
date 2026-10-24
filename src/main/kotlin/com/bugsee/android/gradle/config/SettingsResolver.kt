@@ -55,9 +55,17 @@ internal class SettingsResolver(
     fun <T : Any> resolve(def: SettingDef<T>, ctx: VariantContext?): Resolved<T>? =
         resolve(def, ctx, warnShadow = true)
 
-    /** [resolve] at global scope, else the global property's own value (throws if it has none). */
+    /**
+     * [resolve] at global scope, else the global property's own value. Only for settings with a
+     * built-in default: throws when nothing sets [def] and it has no default convention. For
+     * settings without one, use [globalValueOrNull] or `resolve(def, null)`.
+     */
     fun <T : Any> globalValue(def: SettingDef<T>): T =
         globalValueOrNull(def) ?: def.property(global).get()
+
+    /** [resolve] at global scope, else the global property's own value, else null. */
+    fun <T : Any> globalValueOrNull(def: SettingDef<T>): T? =
+        resolve(def, null)?.value ?: def.property(global).orNull
 
     /**
      * A new extension holding [ctx]'s resolved view. VARIANT-scoped settings are set only when
@@ -75,8 +83,10 @@ internal class SettingsResolver(
     /**
      * Whether any scope (global, any DSL block, any file variant entry) resolves [def] to true;
      * false if some scope sets it and none resolves true; null if nothing sets it anywhere.
-     * Each scope is resolved with the normal precedence, so a value shadowed in every variant
-     * does not count. Emits no shadow warnings.
+     * Each scope is resolved with the normal precedence, but the answer is conservative: it may
+     * report true for a name that every real variant shadows or that matches no variant at all
+     * (e.g. a typo). Used to decide project-wide additions, where over-adding is accepted.
+     * Emits no shadow warnings.
      */
     fun anyScopeValue(def: SettingDef<Boolean>): Boolean? {
         val names = LinkedHashSet<String>().apply {
@@ -92,9 +102,6 @@ internal class SettingsResolver(
     }
 
     // ── Internals ───────────────────────────────────────────────────
-
-    private fun <T : Any> globalValueOrNull(def: SettingDef<T>): T? =
-        resolve(def, null)?.value ?: def.property(global).orNull
 
     private fun <T : Any> copyInto(effective: BugseePluginExtension, def: SettingDef<T>, ctx: VariantContext) {
         val value = when (def.scope) {
@@ -133,19 +140,20 @@ internal class SettingsResolver(
     private fun <T : Any> fileValue(def: SettingDef<T>, names: List<String>): Resolved<T>? {
         for (name in names) {
             val raw = file.variants[name]?.plugin?.get(def.key) ?: continue
-            val value = parse(def, variantFileKey(name, def), raw) ?: continue
+            val value = parse(def, variantFileKey(name, def), raw, warn = true) ?: continue
             return Resolved(value, SettingSource.FILE_VARIANT)
         }
         val raw = file.rootPlugin[def.key] ?: return null
-        val value = parse(def, rootFileKey(def), raw) ?: return null
+        // PluginPropertiesApplier already warns about malformed root values; do not repeat it.
+        val value = parse(def, rootFileKey(def), raw, warn = false) ?: return null
         return Resolved(value, SettingSource.FILE_ROOT)
     }
 
-    private fun <T : Any> parse(def: SettingDef<T>, fileKey: String, raw: String): T? =
+    private fun <T : Any> parse(def: SettingDef<T>, fileKey: String, raw: String, warn: Boolean): T? =
         try {
             def.parse(raw)
         } catch (e: IllegalArgumentException) {
-            if (warnedMalformedKeys.add(fileKey)) logger.warn("Bugsee: ignoring $fileKey=$raw — ${e.message}")
+            if (warn && warnedMalformedKeys.add(fileKey)) logger.warn("Bugsee: ignoring $fileKey=$raw — ${e.message}")
             null
         }
 

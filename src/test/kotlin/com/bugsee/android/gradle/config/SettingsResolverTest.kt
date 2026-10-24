@@ -5,7 +5,6 @@ import org.gradle.api.Project
 import org.gradle.testfixtures.ProjectBuilder
 import org.junit.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -241,6 +240,88 @@ class SettingsResolverTest {
         assertEquals("https://api.bugsee.com", resolver.effectiveFor(stagingRelease).endpoint.get())
     }
 
+    // ── Variant block present but setting unset ────────────────────
+
+    @Test
+    fun blockWithoutSetting_fileVariantStillWins() {
+        val global = newExtension()
+        global.variant("staging") { it.debug.set(true) } // endpoint carries only its default
+        val file = file(variants = mapOf("staging" to mapOf("endpoint" to "https://staging-file.example.com")))
+        val resolver = resolver(global, file)
+
+        assertEquals(
+            Resolved("https://staging-file.example.com", SettingSource.FILE_VARIANT),
+            resolver.resolve(endpoint, stagingRelease),
+        )
+        assertEquals(Resolved(true, SettingSource.DSL_VARIANT), resolver.resolve(debug, stagingRelease))
+    }
+
+    @Test
+    fun blockWithoutSetting_dslGlobalWins() {
+        val global = newExtension()
+        global.endpoint.set("https://global.example.com")
+        global.variant("staging") { it.debug.set(true) }
+
+        assertEquals(
+            Resolved("https://global.example.com", SettingSource.DSL_GLOBAL),
+            resolver(global).resolve(endpoint, stagingRelease),
+        )
+    }
+
+    @Test
+    fun blockWithoutSetting_preferMode_fallsThroughToDslGlobal() {
+        val global = newExtension()
+        global.preferSettingsFile.set(true)
+        global.endpoint.set("https://global.example.com")
+        global.variant("staging") { it.debug.set(true) }
+        // File has an entry for the variant, but not for endpoint.
+        val file = file(variants = mapOf("staging" to mapOf("debug" to "false")))
+        val resolver = resolver(global, file)
+
+        assertEquals(
+            Resolved("https://global.example.com", SettingSource.DSL_GLOBAL),
+            resolver.resolve(endpoint, stagingRelease),
+        )
+        // Nothing explicit anywhere for endpoint below the block: no global DSL either.
+        val noGlobal = newExtension().also {
+            it.preferSettingsFile.set(true)
+            it.variant("staging") { b -> b.debug.set(true) }
+        }
+        assertNull(resolver(noGlobal, file).resolve(endpoint, stagingRelease))
+    }
+
+    // ── Malformed file values ───────────────────────────────────────
+
+    @Test
+    fun malformedFileValue_warnsOnceAndIsSkipped() {
+        val file = file(
+            root = mapOf("debug" to "true"),
+            variants = mapOf("staging" to mapOf("debug" to "maybe")),
+        )
+        val resolver = resolver(newExtension(), file)
+
+        assertEquals(Resolved(true, SettingSource.FILE_ROOT), resolver.resolve(debug, stagingRelease))
+        resolver.resolve(debug, stagingRelease)
+
+        assertEquals(
+            listOf("Bugsee: ignoring variant.staging.plugin.debug=maybe — " +
+                "expected one of true/false (also accepted: yes/no, on/off, 1/0)"),
+            logger.warnings,
+        )
+    }
+
+    @Test
+    fun malformedRootValue_notWarnedByResolver() {
+        // PluginPropertiesApplier already reports malformed root values.
+        val resolver = resolver(newExtension(), file(root = mapOf("debug" to "maybe")))
+
+        assertNull(resolver.resolve(debug, stagingRelease))
+        assertNull(resolver.resolve(debug, null))
+        resolver.effectiveFor(stagingRelease)
+
+        assertEquals(emptyList(), logger.warnings)
+    }
+
     // ── Scope ───────────────────────────────────────────────────────
 
     @Test
@@ -469,20 +550,4 @@ class SettingsResolverTest {
     @Suppress("UNCHECKED_CAST")
     private fun <T : Any> def(key: String): SettingDef<T> =
         requireNotNull(SettingDefinitions.byKey(key)) { "no setting $key" } as SettingDef<T>
-
-    @Test
-    fun malformedFileValue_warnsOnceAndIsSkipped() {
-        val file = file(
-            root = mapOf("debug" to "true"),
-            variants = mapOf("staging" to mapOf("debug" to "maybe")),
-        )
-        val resolver = resolver(newExtension(), file)
-
-        assertEquals(Resolved(true, SettingSource.FILE_ROOT), resolver.resolve(debug, stagingRelease))
-        resolver.resolve(debug, stagingRelease)
-
-        assertEquals(1, logger.warnings.size, "got: ${logger.warnings}")
-        assertTrue(logger.warnings[0].startsWith("Bugsee: ignoring variant.staging.plugin.debug=maybe — "))
-        assertFalse(logger.warnings[0].contains("null"))
-    }
 }
