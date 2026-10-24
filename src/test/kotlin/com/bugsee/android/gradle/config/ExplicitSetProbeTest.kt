@@ -74,4 +74,41 @@ class ExplicitSetProbeTest {
         assertTrue(ExplicitSetProbe.isExplicitlySet(x))
         assertEquals("x", x.get())
     }
+
+    // ── Properties that can no longer change ───────────────────────
+
+    @Test
+    fun finalizeValueOnRead_doesNotThrow_explicitIffPresent() {
+        val set = project.objects.property(String::class.java).convention("d").also {
+            it.set("x")
+            it.finalizeValueOnRead()
+        }
+        assertTrue(ExplicitSetProbe.isExplicitlySet(set))
+        assertEquals("x", set.get())
+
+        // A final property's convention cannot be cleared: present counts as explicit.
+        val conventionOnly = project.objects.property(String::class.java).convention("d").also { it.finalizeValue() }
+        assertTrue(ExplicitSetProbe.isExplicitlySet(conventionOnly))
+        assertEquals("d", conventionOnly.get())
+    }
+
+    @Test
+    fun disallowChanges_doesNotThrow_explicitIffPresent() {
+        val set = project.objects.property(Boolean::class.javaObjectType).convention(false).also {
+            it.set(true)
+            it.disallowChanges()
+        }
+        assertTrue(ExplicitSetProbe.isExplicitlySet(set))
+        assertEquals(true, set.get())
+
+        val absent = project.objects.property(String::class.java).also { it.disallowChanges() }
+        assertFalse(ExplicitSetProbe.isExplicitlySet(absent))
+    }
+
+    @Test
+    fun setToMissingProvider_isNotExplicit() {
+        val p = project.objects.property(String::class.java)
+        p.set(project.provider<String> { null })
+        assertFalse(ExplicitSetProbe.isExplicitlySet(p))
+    }
 }

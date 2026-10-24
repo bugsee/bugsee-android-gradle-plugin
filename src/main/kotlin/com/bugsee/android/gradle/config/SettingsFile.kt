@@ -16,6 +16,11 @@ internal data class SettingsFile(
     val rootAppToken: String?,
     val rootPlugin: Map<String, String>,
     val variants: Map<String, VariantFileEntries>,
+    /**
+     * Root `app_token` is declared with an empty value. Not warned at parse time: the resolver
+     * warns when it actually consults the root token (as the pre-variant code did).
+     */
+    val rootAppTokenWasEmpty: Boolean = false,
 ) {
     companion object {
         val EMPTY = SettingsFile(null, emptyMap(), emptyMap())
@@ -37,6 +42,7 @@ internal object SettingsFileParser {
         if (all.isEmpty()) return SettingsFile.EMPTY
 
         var rootToken: String? = null
+        var rootTokenWasEmpty = false
         val rootPlugin = HashMap<String, String>()
         val tokens = HashMap<String, String?>()
         val plugins = HashMap<String, MutableMap<String, String>>()
@@ -44,7 +50,10 @@ internal object SettingsFileParser {
         for ((key, rawValue) in all) {
             val value = rawValue.trim()
             when {
-                key == TOKEN_KEY -> rootToken = tokenOrNull(key, value, logger)
+                key == TOKEN_KEY -> {
+                    rootToken = value.ifEmpty { null }
+                    rootTokenWasEmpty = value.isEmpty()
+                }
                 key.startsWith(PLUGIN_PREFIX) -> {
                     val stripped = key.substring(PLUGIN_PREFIX.length)
                     if (stripped.isNotEmpty()) rootPlugin[stripped] = value
@@ -86,7 +95,7 @@ internal object SettingsFileParser {
         for (name in tokens.keys + plugins.keys) {
             variants[name] = VariantFileEntries(tokens[name], plugins[name].orEmpty())
         }
-        return SettingsFile(rootToken, rootPlugin, variants)
+        return SettingsFile(rootToken, rootPlugin, variants, rootTokenWasEmpty)
     }
 
     private fun tokenOrNull(key: String, value: String, logger: Logger): String? {

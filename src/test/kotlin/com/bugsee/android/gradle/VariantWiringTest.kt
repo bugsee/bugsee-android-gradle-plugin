@@ -177,6 +177,21 @@ class VariantWiringTest {
     }
 
     @Test
+    fun noVariantInput_wiringDoesNotQueryLazyDslValues() {
+        // e.g. cliPath.set(buildCli.map { … }): querying it before the producing task runs fails.
+        var queries = 0
+        val h = Harness("plugin.ndk.enabled=true\n")
+        h.extension.cliPath.set(h.project.provider { queries++; "/opt/bugsee-cli" })
+        h.extension.endpoint.set(h.project.provider { queries++; "https://lazy.example.com" })
+        h.extension.ndk.forceDebugSymbolsUpload.set(h.project.provider { queries++; true })
+        h.runVariant("release")
+
+        assertEquals(0, queries, "onVariants wiring must not read lazy DSL values")
+        assertEquals("/opt/bugsee-cli", h.mappingTask("Release").cliPath.get())
+        assertEquals(true, h.nativeTask("Release")!!.forceUpload.get())
+    }
+
+    @Test
     fun rootFileTokenUsedWhenDslHasNone() {
         val h = Harness("app_token=root-file-token\n")
         h.runVariant("release")

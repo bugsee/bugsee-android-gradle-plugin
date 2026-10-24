@@ -250,6 +250,26 @@ class SettingsResolverTokenTest {
     private fun resolver(global: BugseePluginExtension, file: SettingsFile = SettingsFile.EMPTY) =
         SettingsResolver(global, file, project.objects, logger)
 
+    // ── Empty root app_token ────────────────────────────────────────
+
+    @Test
+    fun emptyRootToken_warnsOnlyWhenConsulted_once() {
+        val emptyRoot = SettingsFile(null, emptyMap(), emptyMap(), rootAppTokenWasEmpty = true)
+        val message = "Bugsee: bugsee.properties declares app_token with an empty value — " +
+            "falling through to next resolver source."
+
+        // The DSL supplies the token: the file is never consulted, so no warning (as before).
+        val dsl = newExtension().also { it.appToken("dsl-token") }
+        assertEquals("dsl-token", resolver(dsl, emptyRoot).appTokenFor(stagingRelease, debug = false))
+        assertTrue(logger.warnings.isEmpty(), "unexpected: ${logger.warnings}")
+
+        // No DSL token: the root token is consulted and found empty; warned once per resolver.
+        val r = resolver(newExtension(), emptyRoot)
+        assertNull(r.appTokenFor(stagingRelease, debug = false))
+        assertNull(r.appTokenFor(stagingRelease, debug = false))
+        assertEquals(listOf(message), logger.warnings)
+    }
+
     private fun tokens(root: String? = null, variants: Map<String, String> = emptyMap()) = SettingsFile(
         rootAppToken = root,
         rootPlugin = emptyMap(),

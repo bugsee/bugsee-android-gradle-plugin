@@ -46,11 +46,12 @@ class SettingsFileParserTest {
     }
 
     @Test
-    fun emptyRootToken_isNullAndWarns() {
+    fun emptyRootToken_isNullAndFlagged_warnedOnlyWhenConsulted() {
+        // The resolver warns when it actually consults the root token (see SettingsResolverTokenTest).
         val f = SettingsFileParser.parse("app_token=", logger)
         assertNull(f.rootAppToken)
-        assertEquals(1, logger.warnings.size)
-        assertTrue(logger.warnings[0].contains("app_token"))
+        assertTrue(f.rootAppTokenWasEmpty)
+        assertTrue(logger.warnings.isEmpty(), "no parse-time warning: ${logger.warnings}")
     }
 
     @Test

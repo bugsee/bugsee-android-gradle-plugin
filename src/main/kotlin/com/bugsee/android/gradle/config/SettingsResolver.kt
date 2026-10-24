@@ -38,6 +38,14 @@ internal data class Resolved<T>(val value: T, val source: SettingSource)
  * DSL values count only when explicitly set ([ExplicitSetProbe]); file root values are read from
  * [file], never back from the global property's convention (where `PluginPropertiesApplier` puts
  * them). Construct this only after the user's DSL has been evaluated.
+ *
+ * No-variant-input fast path: the production paths ([effectiveFor], [globalValue],
+ * [globalValueOrNull], [anyScopeValue]) assume `PluginPropertiesApplier` has layered the root file
+ * in as conventions, so the global property already encodes DSL > root file > default. Without
+ * `preferSettingsFile` and without any `variant { }` block or `variant.*` file key for the setting
+ * and names at hand, they use the global property directly (linked, or read exactly as the code
+ * before per-variant settings read it) and never probe or read it early. A global property is
+ * probed only when a `variant.*` file key competes with it in default mode, or by [resolve].
  */
 internal class SettingsResolver(
     private val global: BugseePluginExtension,
@@ -48,6 +56,7 @@ internal class SettingsResolver(
 
     private val warnedShadowKeys = HashSet<String>()
     private val warnedMalformedKeys = HashSet<String>()
+    private var warnedRootTokenEmpty = false
 
     /**
      * The value for [def] in [ctx], or null when no source sets it (the caller falls back to the
@@ -58,16 +67,16 @@ internal class SettingsResolver(
         resolve(def, ctx, warnShadow = true)
 
     /**
-     * [resolve] at global scope, else the global property's own value. Only for settings with a
-     * built-in default: throws when nothing sets [def] and it has no default convention. For
-     * settings without one, use [globalValueOrNull] or `resolve(def, null)`.
+     * The global-scope value of [def]: the global property's `get()` (DSL > root file convention >
+     * default), or with `preferSettingsFile` the root file value first. Throws where `get()` does
+     * (nothing sets [def] and it has no default convention); use [globalValueOrNull] for those.
      */
     fun <T : Any> globalValue(def: SettingDef<T>): T =
-        globalValueOrNull(def) ?: def.property(global).get()
+        rootFileValueIfPreferred(def) ?: def.property(global).get()
 
-    /** [resolve] at global scope, else the global property's own value, else null. */
+    /** As [globalValue], but `orNull` on the global property. */
     fun <T : Any> globalValueOrNull(def: SettingDef<T>): T? =
-        resolve(def, null)?.value ?: def.property(global).orNull
+        rootFileValueIfPreferred(def) ?: def.property(global).orNull
 
     /**
      * A new extension holding [ctx]'s resolved view. VARIANT-scoped settings resolve for [ctx];
@@ -75,9 +84,11 @@ internal class SettingsResolver(
      *
      * Each effective property is LINKED to the property it resolves from (the global one, or the
      * winning `variant { }` block's), so a DSL value set or changed after this call still reaches
-     * the consumers, as it did when they were wired to the global extension directly. Only a value
-     * that wins from the file over the global property's own value is copied: file values are static.
-     * A setting absent in its source stays absent here.
+     * the consumers, as it did when they were wired to the global extension directly. Only a file
+     * value that wins over the global property (a `variant.*` key, or the root key with
+     * `preferSettingsFile`) is copied: file values are static. A setting absent in its source stays
+     * absent here. With no per-variant input every property is simply linked to the global one
+     * (see the class KDoc), which is the wiring the tasks had before per-variant settings.
      */
     fun effectiveFor(ctx: VariantContext): BugseePluginExtension {
         val effective = objects.newInstance(BugseePluginExtension::class.java)
@@ -93,16 +104,31 @@ internal class SettingsResolver(
      * report true for a name that every real variant shadows or that matches no variant at all
      * (e.g. a typo). Used to decide project-wide additions, where over-adding is accepted.
      * Emits no shadow warnings.
+     *
+     * The global scope contributes the global property's value when present (so a default
+     * convention counts as a value); without any per-variant input and without
+     * `preferSettingsFile` the result is exactly `if (prop.isPresent) prop.get() else null`.
      */
     fun anyScopeValue(def: SettingDef<Boolean>): Boolean? {
+        val globalProp = def.property(global)
         val names = LinkedHashSet<String>().apply {
             addAll(global.variantBlocks.keys)
             addAll(file.variants.keys)
         }
+        if (!global.preferSettingsFile.get() && names.isEmpty()) {
+            return if (globalProp.isPresent) globalProp.get() else null
+        }
         // Any real variant's winner is also the winner for the global scope or for a variant
         // whose single lookup name is the winner's name, so these scopes cover every outcome.
-        val values = (listOf<VariantContext?>(null) + names.map { VariantContext(it, emptyList(), null) })
-            .mapNotNull { resolve(def, it, warnShadow = false)?.value }
+        val values = ArrayList<Boolean>()
+        for (scope in listOf(emptyList<String>()) + names.map { listOf(it) }) {
+            when (val c = choose(def, scope, warnShadow = false)) {
+                is Choice.Fixed -> values += c.value
+                is Choice.Linked ->
+                    // The global property itself is the global scope's answer; count it once.
+                    if (c.property !== globalProp || scope.isEmpty()) c.property.orNull?.let { values += it }
+            }
+        }
         if (values.isEmpty()) return null
         return values.any { it }
     }
@@ -138,9 +164,24 @@ internal class SettingsResolver(
     }
 
     private fun fileToken(ctx: VariantContext, debug: Boolean): String? {
-        val (key, token) = fileTokenEntry(ctx) ?: return null
+        val entry = fileTokenEntry(ctx)
+        if (entry == null) {
+            warnRootTokenEmptyOnce()
+            return null
+        }
+        val (key, token) = entry
         if (debug) logger.warn("Bugsee: Using $BUGSEE_PROPERTIES_FILENAME:$key: ${AppTokenResolver.maskToken(token)}")
         return token
+    }
+
+    /** Warns once when the root `app_token` was consulted and is declared empty. */
+    private fun warnRootTokenEmptyOnce() {
+        if (!file.rootAppTokenWasEmpty || warnedRootTokenEmpty) return
+        warnedRootTokenEmpty = true
+        logger.warn(
+            "Bugsee: $BUGSEE_PROPERTIES_FILENAME declares $TOKEN_KEY with an empty value — " +
+                "falling through to next resolver source.",
+        )
     }
 
     /** The file token for [ctx] with its key: `variant.<name>.app_token` in lookup order, then root `app_token`. */
@@ -170,28 +211,56 @@ internal class SettingsResolver(
 
 
     private fun <T : Any> copyInto(effective: BugseePluginExtension, def: SettingDef<T>, ctx: VariantContext) {
-        val scopeCtx = if (def.scope == SettingScope.VARIANT) ctx else null
-        val resolved = resolve(def, scopeCtx)
-        val globalProp = def.property(global)
+        val names = if (def.scope == SettingScope.VARIANT) ctx.lookupNames else emptyList()
         val target = def.property(effective)
-        when (resolved?.source) {
-            // Nothing set anywhere: the global property carries the default (or stays absent).
-            null, SettingSource.DSL_GLOBAL -> target.set(globalProp)
-            SettingSource.DSL_VARIANT ->
-                target.set(checkNotNull(dslVariantProperty(def, scopeCtx?.lookupNames.orEmpty())))
-            SettingSource.FILE_VARIANT -> target.set(resolved.value)
-            // In default mode the root file value is the global property's convention
-            // (PluginPropertiesApplier), so link to it; with preferSettingsFile it sits above any DSL
-            // value and is copied. Copied as well when the global does not carry it (a resolver built
-            // without the applier, as in unit tests).
-            SettingSource.FILE_ROOT ->
-                if (!global.preferSettingsFile.get() && globalProp.orNull == resolved.value) {
-                    target.set(globalProp)
-                } else {
-                    target.set(resolved.value)
-                }
+        when (val c = choose(def, names, warnShadow = true)) {
+            is Choice.Linked -> target.set(c.property)
+            is Choice.Fixed -> target.set(c.value)
         }
     }
+
+    /** What a scope's value comes from: a live property (DSL or global), or a static file value. */
+    private sealed class Choice<T : Any> {
+        class Linked<T : Any>(val property: Property<T>) : Choice<T>()
+        class Fixed<T : Any>(val value: T) : Choice<T>()
+    }
+
+    /**
+     * The source of [def] for the scope with lookup [names] (empty = global scope), with the same
+     * outcome as [resolve] when `PluginPropertiesApplier` has layered the root file into the global
+     * property's conventions, but probing as little as possible:
+     *
+     * - only `variant { }` blocks named in [names] are probed;
+     * - the global property is linked rather than read, and probed only in default mode when a
+     *   `variant.<name>.plugin.<key>` entry for [names] competes with it;
+     * - with `preferSettingsFile`, a file value (variant, then root) wins and is copied.
+     */
+    private fun <T : Any> choose(def: SettingDef<T>, names: List<String>, warnShadow: Boolean): Choice<T> {
+        val globalProp = def.property(global)
+        if (global.preferSettingsFile.get()) {
+            fileValue(def, names)?.let { return Choice.Fixed(it.value) }
+            dslVariantProperty(def, names)?.let { return Choice.Linked(it) }
+            return Choice.Linked(globalProp)
+        }
+        dslVariantProperty(def, names)?.let {
+            if (warnShadow) warnIfShadowing(def, names)
+            return Choice.Linked(it)
+        }
+        if (names.none { file.variants[it]?.plugin?.containsKey(def.key) == true }) {
+            return Choice.Linked(globalProp)
+        }
+        if (ExplicitSetProbe.isExplicitlySet(globalProp)) {
+            if (warnShadow) warnIfShadowing(def, names)
+            return Choice.Linked(globalProp)
+        }
+        // A variant file value, or (all malformed) the root file value the global property carries.
+        val fromFile = fileValue(def, names)?.takeIf { it.source == SettingSource.FILE_VARIANT }
+        return if (fromFile != null) Choice.Fixed(fromFile.value) else Choice.Linked(globalProp)
+    }
+
+    /** The root file value of [def] when `preferSettingsFile` puts the file first, else null. */
+    private fun <T : Any> rootFileValueIfPreferred(def: SettingDef<T>): T? =
+        if (global.preferSettingsFile.get()) fileValue(def, emptyList())?.value else null
 
     /** The first `variant { }` block property in [names] order that was explicitly set, or null. */
     private fun <T : Any> dslVariantProperty(def: SettingDef<T>, names: List<String>): Property<T>? {

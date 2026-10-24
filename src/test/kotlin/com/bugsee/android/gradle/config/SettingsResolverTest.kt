@@ -59,7 +59,11 @@ class SettingsResolverTest {
     @Test
     fun fileRootBeatsDefault() {
         val file = file(root = mapOf("endpoint" to "https://root-file.example.com"))
-        val resolver = resolver(newExtension(), file)
+        // As in production, PluginPropertiesApplier has layered the root file into the conventions;
+        // the effective view links to the global property, which carries it.
+        val global = newExtension()
+        PluginPropertiesApplier.applyText("plugin.endpoint=https://root-file.example.com\n", global, RecordingLogger())
+        val resolver = resolver(global, file)
 
         assertEquals(
             Resolved("https://root-file.example.com", SettingSource.FILE_ROOT),
@@ -480,7 +484,10 @@ class SettingsResolverTest {
 
     @Test
     fun nullWhenNowhere() {
-        assertNull(resolver(newExtension()).anyScopeValue(ndkEnabled))
+        // Nothing sets it and it has no default: null. A setting with a default (ndk.enabled)
+        // reports that default, exactly as the pre-variant `isPresent`/`get()` reads did.
+        assertNull(resolver(newExtension()).anyScopeValue(def("instrumentation.okhttp")))
+        assertEquals(false, resolver(newExtension()).anyScopeValue(ndkEnabled))
     }
 
     @Test
