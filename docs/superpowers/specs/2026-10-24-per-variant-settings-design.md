@@ -112,17 +112,22 @@ bugsee {
 - A `variant("<name>") { }` block exposes only the settings under "Per-variant
   settings". Global-only settings are not available inside it (compile error,
   stricter than the file's warn-and-ignore). This holds in the Kotlin DSL via a
-  `@BugseeDsl` `@DslMarker`; in Groovy a global-only setting named inside a block
-  resolves to the outer extension and silently hits the global value.
-  `instrumentation.excludes` is global-only and ignored inside a block.
+  `@BugseeDsl` `@DslMarker`. In Groovy there is no compile check: Gradle runs the
+  closure against the block with DELEGATE_FIRST, and the block is a full
+  `BugseePluginExtension`, so a global-only setting (`feedback true`, `leak { }`,
+  `appToken { }` closure form, a nested `variant(..)`) writes the block's own
+  copy and is silently ignored; it does not reach the global value.
+  `instrumentation.excludes` is global and DSL-only (no file key) and ignored
+  inside a block.
 - `<name>` is matched like the file's `variant.<name>`: variant name, flavor
   name or build type name, case-sensitive, using the same lookup order.
 - Settings set outside any `variant` block are global values and the fallback
   when a variant has no value of its own.
 - Calling `variant("x")` twice merges into one block.
-- Within a variant block, an unset property means "fall through", so these
-  properties carry no built-in default convention; the built-in default is
-  applied only at the end of the chain.
+- Within a variant block, an unset property means "fall through". Blocks are
+  full extensions whose properties do carry the built-in default conventions;
+  `ExplicitSetProbe` tells an explicit set apart from a default, so the built-in
+  default still applies only at the end of the chain.
 - Existing `appToken { variantName -> }` and `AppTokenProvider` keep working and
   sit in the DSL layer of the token chain (see "Token chain").
 
@@ -278,12 +283,30 @@ chain is unchanged.
   no `variant.*` input outranks it.
 - With `plugin.debug` true for a variant the plugin logs
   `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`.
-- The empty `app_token=` warning appears once when the file is parsed.
-- Precedence is a hard requirement; the shadow warning is best-effort. If the
-  spike shows explicit-DSL-set detection is infeasible on the existing
-  `Property` objects, the builder may route DSL values through a shadow
-  mechanism to keep precedence exact, and may degrade the warning (e.g. warn
-  only when detection is possible) rather than weaken precedence.
+- An empty root `app_token=` warns once, when the root token is actually
+  consulted (not when a DSL token already won); an empty
+  `variant.<name>.app_token=` warns when the file is parsed.
+- Explicit-DSL-set detection (settled): `ExplicitSetProbe` clears the
+  property's convention, checks `isPresent`, and restores the value as the
+  convention. A property set to a provider that currently resolves missing
+  counts as not set. A final or disallow-changes property is not mutated and
+  counts as set iff present. The probe runs only when per-variant input exists
+  for the setting being resolved (or `preferSettingsFile` is on); see
+  "No-variant-input fast path".
+
+## No-variant-input fast path
+
+Without `preferSettingsFile`, and without a `variant { }` block named by the
+variant's lookup names or a `variant.<name>.*` file key for the setting, the
+resolver uses the global property directly: the effective property is linked to
+it (the old `task.x.set(extension.x)` wiring), project-level reads use plain
+`get()` / `orNull`, and the any-scope gates use `isPresent` / `get()`. Nothing is
+probed or read early, and conventions are never rewritten. This is exact
+because `PluginPropertiesApplier` already layers the root file keys in as
+conventions, so the global property encodes DSL > root file > default (and a
+user's own later `.convention(..)` keeps winning, as before). With per-variant
+input in default mode, the global property is probed only when a `variant.*`
+file key competes with it.
 - `variant.<name>` matches case-sensitively against AGP's exact spelling. A name
   shared by a flavor and a build type is covered by the documented order.
 
@@ -301,7 +324,8 @@ chain is unchanged.
 ## Mechanism (the author's guess, not agreed)
 
 Keep the global extension tree. Add a per-variant DSL type holding the
-per-variant-capable subset (properties without default conventions), collected
+per-variant-capable subset (as shipped: a full extension per block, with default
+conventions, read through `ExplicitSetProbe`), collected
 by name in the extension. Add a per-variant resolved view built from the
 extension (global + variant DSL blocks), the parsed file, and the variant's
 name/flavors/build type. Wire the variant-level code to it. Reuse the applier's
@@ -314,14 +338,13 @@ DSL type, the file keys and the resolved view.
   `variant { }` form, lookup order,
   per-variant vs global-only tables, the precedence rule, `preferSettingsFile`,
   and a wrapper-facing summary of the token lookup (the part wrappers mirror).
-- Update `.claude/CLAUDE.md` / `AGENTS.md` (App Token Resolution and DSL
-  sections).
+- Update `.claude/CLAUDE.md` (App Token Resolution and DSL sections).
 - Bump nothing else; this is a plugin-only change.
 
 ## Left to the builder
 
 - Multi-dimension flavor ordering (documented, deterministic).
 - Exact shape of the resolved-view type and where it is built.
-- How to detect explicit DSL sets (the spike).
+- How to detect explicit DSL sets: settled, see `ExplicitSetProbe` above.
 - Warning wording and throttling.
 - Test strategy beyond what is listed above.

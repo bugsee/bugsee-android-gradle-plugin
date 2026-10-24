@@ -39,9 +39,11 @@ annotation class BugseeDsl
  *
  * Enforcement: in the Kotlin DSL, referencing a global-only setting inside a
  * `variant { }` block is a compile error (the [BugseeDsl] marker hides the outer
- * receiver). In Groovy there is no such protection: the outer extension remains
- * reachable through closure owner resolution, so a global-only setting named
- * inside a block would silently read or write the GLOBAL value.
+ * receiver). In Groovy there is no such protection, and the setting does not reach
+ * the global value either: Gradle runs the closure with DELEGATE_FIRST against the
+ * block, which is a full [BugseePluginExtension], so `feedback true`, `leak { }`,
+ * `appToken { }` (closure form) or a nested `variant(...)` inside a block write the
+ * block's own copy and are SILENTLY IGNORED.
  */
 @BugseeDsl
 interface BugseeVariantSettings {

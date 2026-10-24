@@ -327,19 +327,25 @@ Calling `variant("x")` twice merges into one block. A block exposes only the
 per-variant settings: `endpoint`, `debug`, `optimizeExtensionsLoading`, `ndk`,
 `buildInfo`, `instrumentation` and `appToken(String)`. In the Kotlin DSL, naming
 a global-only setting inside a block is a compile error. In Groovy there is no
-such check: a global-only setting named inside a block resolves to the outer
-extension and silently sets the **global** value. `instrumentation.excludes` is
-global-only and ignored inside a variant block.
+such check, and the setting does **not** reach the global value either: Gradle
+runs the closure against the block itself, which carries its own copy of every
+setting, so `variant("x") { feedback true }`, `leak { … }`, `appToken { … }`
+(closure form) or a nested `variant(…)` inside a block write that copy and are
+**silently ignored**. Set global-only settings outside any `variant` block.
+`instrumentation.excludes` is likewise ignored inside a variant block.
 
 ### Per-variant vs global-only
 
 | Scope | Settings |
 |---|---|
 | Per variant | `app_token`; `endpoint`, `debug`, `optimizeExtensionsLoading`; `ndk.*`; `buildInfo.*`; `instrumentation.*` (every toggle and `startupTier`) |
-| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader`, `instrumentation.excludes` |
+| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
+| Global, DSL only | `instrumentation.excludes` (no `plugin.*` file key) |
 
 A `variant.<name>.plugin.<key>` file key for a global-only setting is ignored
-with a warning.
+with a warning. `instrumentation.excludes` is not a file key at all: a
+`plugin.instrumentation.excludes` or `variant.<name>.plugin.instrumentation.excludes`
+key is reported as unknown (at `--info`) and ignored.
 
 ### Precedence
 
@@ -402,7 +408,11 @@ With `preferSettingsFile`, step 4 moves to the front.
   `variant.*` input outranks it.
 - `plugin.debug` per variant only affects that variant's logging; apply-time
   reads use the global value.
-- With no `variant.*` key and no `variant { }` block, nothing changes.
+- With no `variant.*` key and no `variant { }` block, nothing changes, except
+  the new debug-only log line `Bugsee: variant <name> resolved: …` printed when
+  `plugin.debug` is true. In that case (and without `preferSettingsFile`) the
+  plugin reads the `bugsee { }` properties exactly as before: it does not
+  inspect or read them early.
 
 ## Type coercion
 

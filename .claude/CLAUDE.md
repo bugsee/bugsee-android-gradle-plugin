@@ -68,12 +68,12 @@ src/main/kotlin/com/bugsee/android/gradle/
 │   ├── ExplicitSetProbe.kt                  # Detects an explicit Property.set (clear convention, isPresent, restore)
 │   ├── SettingDefinitions.kt                # Registry of file-settable keys, parsers, VARIANT/GLOBAL scope
 │   ├── SettingsFile.kt                      # Parses bugsee.properties incl. variant.<name>.* keys
-│   └── SettingsResolver.kt                  # Lookup order, DSL-vs-file precedence, token chain, shadow warning
+│   └── SettingsResolver.kt                  # Lookup order, DSL-vs-file precedence, token chain, shadow warning; no-variant-input fast path
 ├── manifest/
 │   ├── ManifestModifier.kt                  # XML DOM: remove old BUILD_UUID, inject new, read meta-data
 │   └── BugseeManifestTask.kt               # DefaultTask wired via SingleArtifact.MERGED_MANIFEST
 ├── upload/
-│   ├── AppTokenResolver.kt                 # Priority: closure → provider → default → manifest meta-data
+│   ├── AppTokenResolver.kt                 # Token building blocks + manifest fallback; full chain is in SettingsResolver.appTokenFor
 │   ├── SymbolUploader.kt                    # Two-stage HTTP: POST → presigned URL, PUT → upload
 │   ├── MappingUploadTask.kt                # ZIP mapping+icon, SHA-1 hash, upload
 │   ├── NativeUploadTask.kt                 # Find NDK symbols (2 locations), zip, upload
@@ -158,9 +158,10 @@ Error handling:
 - `ApplicationNotFoundError` → invalid app token
 - Uses `StandardHttpRequestRetryHandler` for transient failures
 
-### App Token Resolution (`AppTokenResolver`)
+### App Token Resolution (`SettingsResolver.appTokenFor`)
 
-Chain, implemented in `SettingsResolver` (default mode):
+`AppTokenResolver` holds the building blocks (closure/provider/default token, masking, the
+execution-time manifest fallback); the full chain is `SettingsResolver.appTokenFor` (default mode):
 1. `appTokenByVariant` closure: `(variantName: String) -> String?` (null/empty falls through)
 2. `AppTokenProvider` interface: `getAppToken(variantName: String): String?`
 3. DSL `variant("x") { appToken(..) }` per lookup order, then `defaultAppToken`
@@ -195,8 +196,16 @@ bugsee {
 
 Precedence: `DSL (variant, then global) > bugsee.properties (variant.* then root) > default`,
 flipped by `preferSettingsFile`. Global-only settings (`feedback`, `leak`, `sdkAutoLoad`,
-`cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader`, `instrumentation.excludes`) are a compile
-error inside `variant { }` in Kotlin (`@BugseeDsl`); in Groovy they silently hit the global value.
+`cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader`) are a compile error inside `variant { }`
+in Kotlin (`@BugseeDsl`). In Groovy the closure runs against the block (DELEGATE_FIRST), which is a
+full `BugseePluginExtension`, so they write the block's own copy and are SILENTLY IGNORED (they do
+not reach the global value). `instrumentation.excludes` is DSL-only (no file key) and ignored inside
+a block.
+
+No-variant-input fast path: without `preferSettingsFile` and without a `variant { }` block or
+`variant.*` key for the setting at hand, `SettingsResolver` links/reads the global properties
+exactly as the pre-variant code did (`task.x.set(extension.x)`, plain `get()`/`isPresent`) and
+never runs `ExplicitSetProbe` (which reads properties and rewrites conventions).
 A `variant.*` file key shadowed by the DSL warns once; a shadowed root key does not.
 Per-variant capability is declared by `SettingScope` in `SettingDefinitions.kt`.
 
