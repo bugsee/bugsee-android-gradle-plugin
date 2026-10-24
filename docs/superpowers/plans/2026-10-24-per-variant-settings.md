@@ -22,7 +22,7 @@
 - `plugin.debug` per variant affects variant-level logging only; apply-time reads use the root/global value.
 - Dependency auto-add (ndk runtime, okhttp/compose/ktor/cronet modules) is decided before variants exist: add when enabled globally OR any variant scope enables it.
 - Application variants only. The file stays a configuration-cache input (`providers.fileContents`); tasks receive plain values, never the effective extension tree.
-- Existing behaviour is identical when no `variant.*` key / `variant { }` block exists. All existing tests keep passing.
+- **Backward compatibility is a hard requirement.** With no `variant.*` key and no `variant { }` block, every resolved setting and the token chain behave exactly as before (same values, same precedence, same warnings/log text, same task inputs). No existing public member of `BugseePluginExtension` changes signature. All existing unit and integration tests keep passing unmodified, except where a task says a test is updated for a removed internal.
 - Commit messages are conventional (`feat(config): …`) and end with the attribution line `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Run unit tests with `./gradlew test --tests '<fqcn>'`; integration tests with `./gradlew integrationTest --tests '<fqcn>'`. (`.claude/CLAUDE.md` says "no test suite"; that is stale, fixed in Task 10.)
 
@@ -148,6 +148,7 @@
   - Warning: `shadowWarningOncePerKey`, `noShadowWarningInPreferMode`, `noShadowWarningWhenDslNotSet`.
   - `anyScopeValue`: `nullWhenNowhere`, `trueWhenOnlyAVariantEnables`, `falseWhenAllSetFalse`.
   - `globalValueUsesFileRootInPreferMode`.
+  - Backward compat: `noVariantInputs_effectiveMatchesGlobalForEverySetting` — with an empty `SettingsFile`, no DSL blocks and default mode, for every def in `SettingDefinitions.all` the effective extension's resolved value equals the global extension's (covering DSL-set values and file-root conventions applied through `PluginPropertiesApplier`).
 - [ ] **Step 2: Run** `./gradlew test --tests 'com.bugsee.android.gradle.config.SettingsResolverTest'`. Expected: FAIL.
 - [ ] **Step 3: Implement `SettingsResolver`.** Candidate order per def — default: DSL variant lookup (explicit-set props on `variantBlocks[name]`, in `lookupNames` order), DSL global (`ExplicitSetProbe` on `global` property), file variant lookup, file root; prefer: file first, then the DSL pair. File root values come from `file.rootPlugin` parsed with `def.parse` (a parse failure warns and skips, as the applier does). Do not read file root values back from the global property's convention.
 - [ ] **Step 4: Run** `./gradlew test --tests 'com.bugsee.android.gradle.config.*'`. Expected: PASS.
@@ -159,19 +160,18 @@
 
 **Files:**
 - Modify: `src/main/kotlin/com/bugsee/android/gradle/config/SettingsResolver.kt`
-- Modify: `src/main/kotlin/com/bugsee/android/gradle/upload/AppTokenResolver.kt`
-- Modify: `src/main/kotlin/com/bugsee/android/gradle/upload/MappingUploadTask.kt`, `NativeUploadTask.kt` (drop the execution-time `resolveFromPropertiesFile` fallback and the `rootProjectDirectory` input if nothing else reads it — grep first; `BundleUploadTask` already uses only `resolveFromManifest`)
+- Modify (only if needed): `src/main/kotlin/com/bugsee/android/gradle/upload/AppTokenResolver.kt` — keep `resolveFromExtension`, `resolveFromPropertiesFile`, `resolveFromManifest` and `resolve(project, …)` with unchanged signatures and behaviour (ruling: the execution-time fallback in the mapping/native tasks stays as is; it is harmless because the registration-time chain already includes the root file token)
 - Test: `src/test/kotlin/com/bugsee/android/gradle/config/SettingsResolverTokenTest.kt`
 
 **Interfaces:**
 - Consumes: Task 5 types.
 - Produces: `fun SettingsResolver.appTokenFor(ctx: VariantContext, debug: Boolean): String?` — plugin-side chain per Global Constraints (manifest excluded). Uses `AppTokenResolver.resolveFromExtension(global, ctx.variantName, logger, debug)` for the closure/provider steps (keep its signature), then DSL block tokens (`variantBlocks[name].defaultAppToken` in `lookupNames` order), then `global.defaultAppToken`, then file (`variants[name].appToken` in lookup order, then `rootAppToken`). Prefer mode: file first. Token shadow warning (once): default mode, a DSL source returned non-null and a file token exists for ctx. Debug logging keeps the masked-token style (`maskToken`).
-- `AppTokenResolver.resolveFromPropertiesFile` and the back-compat `resolve(project, …)` are deleted if no caller remains.
+- Nothing in `AppTokenResolver` or the upload tasks is deleted or changed in this task.
 
-- [ ] **Step 1: Write failing tests**: default mode — `closureBeatsEverything`, `closureNullFallsThrough`, `providerBeatsDslBlock`, `dslBlockBeatsDefaultAppToken`, `defaultAppTokenBeatsFile`, `fileVariantBeatsFileRoot`, `fileRootTokenWhenNoVariantEntry`, `nothingSetIsNull`; prefer mode — `fileBeatsClosure`, `fileLacksToken_closureUsed`; Review Focus 2 — `emptyVariantFileToken_fallsThroughToRoot` (using a parsed `SettingsFile`); `tokenShadowWarningOnlyWhenDslReturnedValue`.
+- [ ] **Step 1: Write failing tests**: default mode — `closureBeatsEverything`, `closureNullFallsThrough`, `providerBeatsDslBlock`, `dslBlockBeatsDefaultAppToken`, `defaultAppTokenBeatsFile`, `fileVariantBeatsFileRoot`, `fileRootTokenWhenNoVariantEntry`, `nothingSetIsNull`, `noVariantInputs_chainMatchesLegacyOrder` (backward compat: closure, then provider, then `defaultAppToken`, then root file token, using the same fixtures as the legacy `resolveFromExtension` + `resolveFromPropertiesFile` pair and asserting the same result in each combination); prefer mode — `fileBeatsClosure`, `fileLacksToken_closureUsed`; Review Focus 2 — `emptyVariantFileToken_fallsThroughToRoot` (using a parsed `SettingsFile`); `tokenShadowWarningOnlyWhenDslReturnedValue`.
 - [ ] **Step 2: Run** `./gradlew test --tests 'com.bugsee.android.gradle.config.SettingsResolverTokenTest'`. Expected: FAIL.
-- [ ] **Step 3: Implement `appTokenFor`** and remove the now-dead resolver paths/task inputs.
-- [ ] **Step 4: Run** `./gradlew test`. Expected: PASS; if a task test constructed `rootProjectDirectory`, update it.
+- [ ] **Step 3: Implement `appTokenFor`** (additive; do not touch the legacy resolver methods).
+- [ ] **Step 4: Run** `./gradlew test`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(token): per-variant app token from DSL and settings file`.
 
 ---
@@ -185,7 +185,7 @@
 **Interfaces:**
 - Consumes: `SettingsResolver.effectiveFor`, `appTokenFor`, `VariantContext` (T5-6).
 - Produces: in `BugseePlugin`, a lazily-created `SettingsResolver` (file text via `project.rootProject.providers.fileContents(rootProject.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME)).asText.orNull`, parsed with `SettingsFileParser`), and `internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext` using `variant.name`, `variant.productFlavors.map { it.second }`, `variant.buildType`.
-- Inside `onVariants`, `effective = resolver.effectiveFor(ctx)` replaces `extension` for: `isDebug`, `InstrumentationConfigResolver(effective.instrumentation, …)`, `registerManifestTask`, mapping/native/bundle registration, the `ndk.enabled` gate (~312), `shouldRegisterBuildInfoFor`, `ExtensionsInitInstrumentation(effective, …)` and the registrar's excludes. `instrumentationGloballyEnabled` (manifest provider-strip gate and the ExtensionsInit injection) must be computed from the same `effective` so both agree per variant. `sdkAutoLoad` stays global. `resolveCcSafeInputs` takes the token from `resolver.appTokenFor(ctx, isDebug)`.
+- Inside `onVariants`, `effective = resolver.effectiveFor(ctx)` replaces `extension` for: `isDebug`, `InstrumentationConfigResolver(effective.instrumentation, …)`, `registerManifestTask`, mapping/native/bundle registration, the `ndk.enabled` gate (~312), `shouldRegisterBuildInfoFor`, `ExtensionsInitInstrumentation(effective, …)` and the registrar's excludes. `instrumentationGloballyEnabled` (manifest provider-strip gate and the ExtensionsInit injection) must be computed from the same `effective` so both agree per variant. `sdkAutoLoad` stays global. `resolveCcSafeInputs` takes the token from `resolver.appTokenFor(ctx, isDebug)`. The legacy `AppTokenResolver.resolveFromExtension` / `resolveFromPropertiesFile` / `resolve` stay (still used by the execution-time fallbacks); delete nothing.
 - New debug log per variant (when its effective `debug` is true): `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>` (observability for wrappers and Task 9).
 
 - [ ] **Step 1: Write failing tests**: `variantContextOf_flavorsInDimensionOrder` (fake `Variant` via a minimal interface proxy or Mockito-free stub — follow how `VariantScopedDetectionTest` fakes variants), `stripGateAndExtensionsInitAgreePerVariant` (variant with `instrumentation.enabled=false` in file → manifest task `optimizeExtensionsLoading` resolves to false for that variant only; extend the pattern in `ManifestTaskStripGateWiringTest`), `taskInputsComeFromEffectiveExtension` (variant `staging` gets endpoint from `variant.staging.plugin.endpoint`, `production` keeps default).
