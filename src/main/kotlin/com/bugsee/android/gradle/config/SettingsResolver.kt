@@ -56,6 +56,7 @@ internal class SettingsResolver(
 
     private val warnedShadowKeys = HashSet<String>()
     private val warnedMalformedKeys = HashSet<String>()
+    private var warnedIgnoredExcludes = false
     private var warnedRootTokenEmpty = false
 
     /**
@@ -91,10 +92,25 @@ internal class SettingsResolver(
      * (see the class KDoc), which is the wiring the tasks had before per-variant settings.
      */
     fun effectiveFor(ctx: VariantContext): BugseePluginExtension {
+        warnIgnoredVariantExcludes()
         val effective = objects.newInstance(BugseePluginExtension::class.java)
         for (def in SettingDefinitions.all) copyInto(effective, def, ctx)
         effective.instrumentation.excludes.set(global.instrumentation.excludes)
         return effective
+    }
+
+    /** `instrumentation.excludes` is global-only; say so once if a `variant { }` block sets it. */
+    private fun warnIgnoredVariantExcludes() {
+        if (warnedIgnoredExcludes) return
+        warnedIgnoredExcludes = true
+        for ((name, block) in global.variantBlocks) {
+            if (block.instrumentation.excludes.getOrElse(emptySet()).isNotEmpty()) {
+                logger.warn(
+                    "Bugsee: variant(\"$name\") instrumentation.excludes is ignored; " +
+                        "set it in the top-level bugsee { instrumentation { } } block."
+                )
+            }
+        }
     }
 
     /**

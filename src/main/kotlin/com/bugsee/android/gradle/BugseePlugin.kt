@@ -397,7 +397,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             .fileContents(root.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME))
             .asText.orNull
         // PluginPropertiesApplier has already reported a malformed file; do not repeat it.
-        val parsed = SettingsFileParser.parse(text, project.logger, reportMalformedFile = false)
+        // The file is shared by every module, so its diagnostics are reported by the first project
+        // that reads it; later projects parse silently.
+        val warnedKey = "bugsee.settingsFileDiagnosticsReported"
+        val rootExtras = root.extensions.extraProperties
+        val parseLogger = if (rootExtras.has(warnedKey)) {
+            discardingLogger()
+        } else {
+            rootExtras.set(warnedKey, true)
+            project.logger
+        }
+        val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
         SettingsResolver(extension, parsed, project.objects, project.logger)
     }.also { settingsResolver = it }
 
@@ -1425,6 +1435,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun consumerKotlinVersion(project: Project): String? = runCatching {
         project.plugins.withType(KotlinBasePlugin::class.java).firstOrNull()?.pluginVersion
     }.getOrNull()
+
+    /** A [org.gradle.api.logging.Logger] that drops every message. */
+    private fun discardingLogger(): org.gradle.api.logging.Logger =
+        java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java)
+        ) { _, method, _ ->
+            when (method.returnType) {
+                java.lang.Boolean.TYPE -> false
+                String::class.java -> "bugsee"
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
 
     private fun warnUnsupportedKotlinOnce(project: Project, version: String?) {
         val key = "bugsee.composeCompilerKotlinWarned"

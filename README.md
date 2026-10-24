@@ -298,8 +298,12 @@ no merging:
 4. the root / global value (`plugin.<key>` / `app_token`, or the DSL value
    outside any `variant` block)
 
-This is the contract that wrappers (for example React Native) mirror. To read
-the same token a wrapper looks up `variant.<variant>.app_token`, then
+This is the contract that wrappers (for example React Native) mirror for
+settings-file tokens. It describes only the file lookup, not the plugin's overall
+token precedence: when the DSL also supplies a token (and `preferSettingsFile`
+is off) the plugin uses the DSL token, so a wrapper that must target the same
+Bugsee application as the uploads has to use the effective token, or set
+`preferSettingsFile` so the file wins. To read the file token a wrapper looks up `variant.<variant>.app_token`, then
 `variant.<flavor>.app_token` for each flavor, then
 `variant.<buildType>.app_token`, then `app_token` in
 `<rootProject>/bugsee.properties`.

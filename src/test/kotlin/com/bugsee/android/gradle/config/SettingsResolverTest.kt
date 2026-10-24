@@ -599,6 +599,17 @@ class SettingsResolverTest {
         }
     }
 
+    @Test
+    fun variantExcludesAreIgnoredWithOneWarning() {
+        val global = newExtension()
+        global.variant("staging") { it.instrumentation.excludes.add("com.acme.Legacy") }
+        val r = resolver(global)
+        r.effectiveFor(stagingRelease)
+        r.effectiveFor(stagingRelease)
+        val hits = logger.warnings.filter { it.contains("variant(\"staging\") instrumentation.excludes is ignored") }
+        kotlin.test.assertEquals(1, hits.size)
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────
 
     private fun newExtension(): BugseePluginExtension =
