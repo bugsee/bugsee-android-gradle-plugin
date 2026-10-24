@@ -56,9 +56,10 @@ internal object PluginPropertiesLoader {
     /**
      * Read every key of `bugsee.properties` content, unfiltered. Strips a
      * leading BOM, and on malformed content warns once and returns empty.
-     * Null/blank text returns empty silently.
+     * Null/blank text returns empty silently. [warnMalformed] false skips the malformed-content
+     * warning (for a second read of content already reported).
      */
-    fun readAll(text: String?, logger: Logger): Map<String, String> {
+    fun readAll(text: String?, logger: Logger, warnMalformed: Boolean = true): Map<String, String> {
         if (text == null) return emptyMap()
         if (text.isBlank()) return emptyMap()
 
@@ -81,10 +82,10 @@ internal object PluginPropertiesLoader {
             // dependent). A malformed file is a user error, but failing
             // the build for it would be hostile — the DSL surface still
             // works without the file. Surface once and fall back.
-            logger.warn(malformedMessage(e))
+            if (warnMalformed) logger.warn(malformedMessage(e))
             return emptyMap()
         } catch (e: IllegalArgumentException) {
-            logger.warn(malformedMessage(e))
+            if (warnMalformed) logger.warn(malformedMessage(e))
             return emptyMap()
         }
 

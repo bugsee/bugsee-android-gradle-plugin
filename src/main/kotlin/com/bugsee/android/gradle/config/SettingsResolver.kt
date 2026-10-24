@@ -4,6 +4,7 @@ import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.upload.AppTokenResolver
 import org.gradle.api.logging.Logger
 import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.Property
 
 /**
  * The names a variant is matched by, in lookup order: the variant name, its
@@ -69,15 +70,19 @@ internal class SettingsResolver(
         resolve(def, null)?.value ?: def.property(global).orNull
 
     /**
-     * A new extension holding [ctx]'s resolved view. VARIANT-scoped settings are set only when
-     * [resolve] finds a value (otherwise the built-in default convention stays); GLOBAL-scoped
-     * settings and `instrumentation.excludes` come from the global scope.
+     * A new extension holding [ctx]'s resolved view. VARIANT-scoped settings resolve for [ctx];
+     * GLOBAL-scoped settings and `instrumentation.excludes` come from the global scope.
+     *
+     * Each effective property is LINKED to the property it resolves from (the global one, or the
+     * winning `variant { }` block's), so a DSL value set or changed after this call still reaches
+     * the consumers, as it did when they were wired to the global extension directly. Only a value
+     * that wins from the file over the global property's own value is copied: file values are static.
+     * A setting absent in its source stays absent here.
      */
     fun effectiveFor(ctx: VariantContext): BugseePluginExtension {
         val effective = objects.newInstance(BugseePluginExtension::class.java)
         for (def in SettingDefinitions.all) copyInto(effective, def, ctx)
-        val excludes = global.instrumentation.excludes
-        if (excludes.isPresent) effective.instrumentation.excludes.set(excludes.get())
+        effective.instrumentation.excludes.set(global.instrumentation.excludes)
         return effective
     }
 
@@ -148,9 +153,13 @@ internal class SettingsResolver(
         return if (root.isNullOrEmpty()) null else TOKEN_KEY to root
     }
 
-    /** Warns once about the file token key that would have won for [ctx] had the DSL not set a token. */
+    /**
+     * Warns once about the `variant.<name>.app_token` key that would have won for [ctx] had the DSL
+     * not set a token. A root `app_token` shadowed by the DSL is not warned about.
+     */
     private fun warnIfTokenShadowed(ctx: VariantContext) {
         val (key, _) = fileTokenEntry(ctx) ?: return
+        if (!key.startsWith(VARIANT_KEY_PREFIX)) return
         if (warnedShadowKeys.add(key)) {
             logger.warn(
                 "Bugsee: $key ignored: an app token is set in the DSL " +
@@ -161,11 +170,37 @@ internal class SettingsResolver(
 
 
     private fun <T : Any> copyInto(effective: BugseePluginExtension, def: SettingDef<T>, ctx: VariantContext) {
-        val value = when (def.scope) {
-            SettingScope.VARIANT -> resolve(def, ctx)?.value
-            SettingScope.GLOBAL -> globalValueOrNull(def)
+        val scopeCtx = if (def.scope == SettingScope.VARIANT) ctx else null
+        val resolved = resolve(def, scopeCtx)
+        val globalProp = def.property(global)
+        val target = def.property(effective)
+        when (resolved?.source) {
+            // Nothing set anywhere: the global property carries the default (or stays absent).
+            null, SettingSource.DSL_GLOBAL -> target.set(globalProp)
+            SettingSource.DSL_VARIANT ->
+                target.set(checkNotNull(dslVariantProperty(def, scopeCtx?.lookupNames.orEmpty())))
+            SettingSource.FILE_VARIANT -> target.set(resolved.value)
+            // In default mode the root file value is the global property's convention
+            // (PluginPropertiesApplier), so link to it; with preferSettingsFile it sits above any DSL
+            // value and is copied. Copied as well when the global does not carry it (a resolver built
+            // without the applier, as in unit tests).
+            SettingSource.FILE_ROOT ->
+                if (!global.preferSettingsFile.get() && globalProp.orNull == resolved.value) {
+                    target.set(globalProp)
+                } else {
+                    target.set(resolved.value)
+                }
         }
-        if (value != null) def.property(effective).set(value)
+    }
+
+    /** The first `variant { }` block property in [names] order that was explicitly set, or null. */
+    private fun <T : Any> dslVariantProperty(def: SettingDef<T>, names: List<String>): Property<T>? {
+        for (name in names) {
+            val block = global.variantBlocks[name] ?: continue
+            val prop = def.property(block)
+            if (ExplicitSetProbe.isExplicitlySet(prop)) return prop
+        }
+        return null
     }
 
     private fun <T : Any> resolve(def: SettingDef<T>, ctx: VariantContext?, warnShadow: Boolean): Resolved<T>? {
@@ -184,11 +219,7 @@ internal class SettingsResolver(
     }
 
     private fun <T : Any> dslValue(def: SettingDef<T>, names: List<String>): Resolved<T>? {
-        for (name in names) {
-            val block = global.variantBlocks[name] ?: continue
-            val prop = def.property(block)
-            if (ExplicitSetProbe.isExplicitlySet(prop)) return Resolved(prop.get(), SettingSource.DSL_VARIANT)
-        }
+        dslVariantProperty(def, names)?.let { return Resolved(it.get(), SettingSource.DSL_VARIANT) }
         val prop = def.property(global)
         if (ExplicitSetProbe.isExplicitlySet(prop)) return Resolved(prop.get(), SettingSource.DSL_GLOBAL)
         return null
@@ -214,11 +245,14 @@ internal class SettingsResolver(
             null
         }
 
-    /** Warns about the file key that would have won for this scope had the DSL not set [def]. */
+    /**
+     * Warns about the `variant.<name>.plugin.<key>` file key that would have won for this scope had
+     * the DSL not set [def]. A root `plugin.<key>` shadowed by the DSL is the long-standing documented
+     * precedence and is not warned about.
+     */
     private fun warnIfShadowing(def: SettingDef<*>, names: List<String>) {
         val shadowed = names.firstOrNull { file.variants[it]?.plugin?.containsKey(def.key) == true }
             ?.let { variantFileKey(it, def) }
-            ?: rootFileKey(def).takeIf { file.rootPlugin.containsKey(def.key) }
             ?: return
         if (warnedShadowKeys.add(shadowed)) {
             logger.warn(
@@ -234,5 +268,6 @@ internal class SettingsResolver(
 
     private companion object {
         const val TOKEN_KEY = "app_token"
+        const val VARIANT_KEY_PREFIX = "variant."
     }
 }

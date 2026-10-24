@@ -28,8 +28,12 @@ internal object SettingsFileParser {
     private const val PLUGIN_PREFIX = "plugin."
     private const val VARIANT_PREFIX = "variant."
 
-    fun parse(text: String?, logger: Logger): SettingsFile {
-        val all = PluginPropertiesLoader.readAll(text, logger)
+    /**
+     * @param reportMalformedFile false when [PluginPropertiesApplier] has already reported a
+     *        malformed file for this build, so the warning is not repeated.
+     */
+    fun parse(text: String?, logger: Logger, reportMalformedFile: Boolean = true): SettingsFile {
+        val all = PluginPropertiesLoader.readAll(text, logger, reportMalformedFile)
         if (all.isEmpty()) return SettingsFile.EMPTY
 
         var rootToken: String? = null

@@ -220,16 +220,10 @@ class SettingsResolverTokenTest {
             logger.warnings,
         )
 
-        // Root key is named when no variant entry matches.
+        // A root app_token shadowed by the DSL is the long-standing precedence: no warning.
         logger.warnings.clear()
-        resolver(dsl, tokens(root = "file-root-token")).appTokenFor(stagingRelease, debug = false)
-        assertEquals(
-            listOf(
-                "Bugsee: app_token ignored: an app token is set in the DSL " +
-                    "(set preferSettingsFile to let the settings file win).",
-            ),
-            logger.warnings,
-        )
+        assertEquals("default-token", resolver(dsl, tokens(root = "file-root-token")).appTokenFor(stagingRelease, debug = false))
+        assertTrue(logger.warnings.isEmpty(), "no warning for a shadowed root token: ${logger.warnings}")
 
         // DSL token but no file token: no warning.
         logger.warnings.clear()

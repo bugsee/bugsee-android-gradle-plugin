@@ -108,4 +108,16 @@ class SettingsFileParserTest {
         assertEquals(VariantFileEntries("ta", emptyMap()), f.variants["a"])
         assertEquals(VariantFileEntries("tb", mapOf("debug" to "true")), f.variants["b"])
     }
+
+    @Test
+    fun malformedFile_warnsByDefault_quietWhenTheApplierAlreadyReportedIt() {
+        val malformed = "plugin.endpoint=https://x.test\\uZZZZ"
+
+        assertEquals(SettingsFile.EMPTY, SettingsFileParser.parse(malformed, logger))
+        assertEquals(1, logger.warnings.size, "default parse reports the malformed file: ${logger.warnings}")
+
+        logger.warnings.clear()
+        assertEquals(SettingsFile.EMPTY, SettingsFileParser.parse(malformed, logger, reportMalformedFile = false))
+        assertTrue(logger.warnings.isEmpty(), "quiet parse must not repeat the applier's warning: ${logger.warnings}")
+    }
 }

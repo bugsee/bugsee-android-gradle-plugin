@@ -10,6 +10,7 @@ import com.bugsee.android.gradle.manifest.ExtensionStripGate
 import com.bugsee.android.gradle.upload.AppTokenResolver
 import com.bugsee.android.gradle.upload.MappingUploadTask
 import com.bugsee.android.gradle.upload.NativeUploadTask
+import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Action
 import org.gradle.api.Project
 import org.gradle.api.provider.Provider
@@ -22,6 +23,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Pins how `BugseePlugin`'s `onVariants` callback wires each variant to its
@@ -94,6 +96,16 @@ class VariantWiringTest {
             debug.set(true)
             appToken("dsl-token")
             instrumentation.excludes.set(setOf("com.example.*"))
+            // GLOBAL-scope settings set in the DSL.
+            cliVersion.set("9.8.7")
+            cliAutoUpdate.set(false)
+            uploader.set(UploaderStrategy.KOTLIN)
+            buildInfo { b ->
+                b.sizeAnalysis { it.chunkedUpload.set(false); it.enabled.set(true) }
+                b.sizeCheck { it.warningPercent.set(5.0); it.failBytes.set(4096L) }
+                b.dependencies { it.scope.set("runtime"); it.maxCount.set(7) }
+                b.timings { it.enabled.set(false) }
+            }
         }
         h.runVariant("release")
         val ext = h.extension
@@ -116,15 +128,85 @@ class VariantWiringTest {
         for (task in listOf(h.mappingTask("Release"), h.nativeTask("Release")!!)) {
             assertEquals(ext.endpoint.get(), task.inputValue("endpoint"))
             assertEquals(ext.debug.get(), task.inputValue("debug"))
-            assertEquals(ext.cliVersion.orNull, task.inputValue("cliVersion"))
-            assertEquals(ext.cliAutoUpdate.orNull, task.inputValue("cliAutoUpdate"))
-            assertEquals(ext.uploader.orNull, task.inputValue("uploader"))
+            assertEquals("9.8.7", task.inputValue("cliVersion"))
+            assertEquals(false, task.inputValue("cliAutoUpdate"))
+            assertEquals(UploaderStrategy.KOTLIN, task.inputValue("uploader"))
             assertEquals(oldToken, task.inputValue("preResolvedAppToken"))
         }
         val native = h.nativeTask("Release")!!
         assertEquals(ext.ndk.forceDebugSymbolsUpload.get(), native.forceUpload.get())
         assertEquals(false, native.useMergedNativeLibs.get())
-        assertNotNull(h.project.tasks.findByName("uploadBugseeReleaseBundle"), "release variant registers build-info")
+
+        val info = ext.buildInfo
+        for (cap in listOf("Bundle", "Apk")) {
+            val bundle = h.project.tasks.getByName("uploadBugseeRelease$cap")
+            assertEquals(ext.endpoint.get(), bundle.inputValue("endpoint"))
+            assertEquals(ext.debug.get(), bundle.inputValue("debug"))
+            assertEquals("9.8.7", bundle.inputValue("cliVersion"))
+            assertEquals(oldToken, bundle.inputValue("preResolvedAppToken"))
+            assertEquals(info.sizeAnalysis.chunkedUpload.get(), bundle.inputValue("chunkedUpload"))
+            assertEquals(info.sizeAnalysis.enabled.get(), bundle.inputValue("requestArtifactUpload"))
+            assertEquals(info.sizeCheck.warningPercent.get(), bundle.inputValue("sizeCheckWarningPercent"))
+            assertEquals(info.sizeCheck.failBytes.get(), bundle.inputValue("sizeCheckFailBytes"))
+            assertEquals(info.dependencies.enabled.get(), bundle.inputValue("requestDependenciesUpload"))
+            assertEquals(info.dependencies.scope.get(), bundle.inputValue("dependenciesScope"))
+            assertEquals(info.dependencies.includeSelectedReason.get(), bundle.inputValue("dependenciesIncludeReason"))
+            assertEquals(info.dependencies.maxCount.get(), bundle.inputValue("dependenciesMaxCount"))
+            assertEquals(info.timings.enabled.get(), bundle.inputValue("timingsEnabled"))
+        }
+    }
+
+    @Test
+    fun lateDslValuesReachTaskInputs() {
+        // AGP runs onVariants from its own afterEvaluate, so a user's later afterEvaluate { bugsee { … } }
+        // used to reach the tasks through the live global properties. It still must.
+        val h = Harness("plugin.ndk.enabled=true\nplugin.ndk.forceDebugSymbolsUpload=false\n")
+        h.extension.endpoint.set("https://early.example.com")
+        h.runVariant("release")
+
+        h.extension.endpoint.set("https://late.example.com")
+        h.extension.cliVersion.set("9.9.9")
+        h.extension.ndk.forceDebugSymbolsUpload.set(true) // overrides the root-file convention late
+        h.extension.optimizeExtensionsLoading.set(false)
+
+        val mapping = h.mappingTask("Release")
+        assertEquals("https://late.example.com", mapping.endpoint.get())
+        assertEquals("9.9.9", mapping.cliVersion.get())
+        assertEquals(true, h.nativeTask("Release")!!.forceUpload.get())
+        assertEquals(false, h.manifestTask("Release").optimizeExtensionsLoading.get())
+    }
+
+    @Test
+    fun rootFileTokenUsedWhenDslHasNone() {
+        val h = Harness("app_token=root-file-token\n")
+        h.runVariant("release")
+
+        assertEquals("root-file-token", h.mappingTask("Release").preResolvedAppToken.orNull)
+    }
+
+    @Test
+    fun debugSummaryLine_formatAndMasking() {
+        assertEquals(
+            "Bugsee: variant stagingRelease resolved: token=${AppTokenResolver.maskToken("secret-token-value")} " +
+                "endpoint=https://x.example.com",
+            BugseePlugin.variantResolvedMessage("stagingRelease", "secret-token-value", "https://x.example.com"),
+        )
+        assertEquals(
+            "Bugsee: variant release resolved: token=none endpoint=https://api.bugsee.com",
+            BugseePlugin.variantResolvedMessage("release", null, "https://api.bugsee.com"),
+        )
+
+        // The real wiring logs it (only under debug) and never prints the raw token.
+        val quiet = Harness("app_token=secret-token-value\n")
+        assertTrue(quiet.captureOutput { quiet.runVariant("release") }.none { "resolved:" in it })
+
+        val h = Harness("app_token=secret-token-value\nplugin.debug=true\n")
+        val output = h.captureOutput { h.runVariant("release") }
+        assertTrue(output.none { "secret-token-value" in it }, "raw token leaked: $output")
+        assertTrue(
+            BugseePlugin.variantResolvedMessage("release", "secret-token-value", "https://api.bugsee.com") in output,
+            "summary line missing from: $output",
+        )
     }
 
     @Test
@@ -180,6 +262,30 @@ class VariantWiringTest {
         fun mappingTask(cap: String) = project.tasks.getByName("uploadBugsee${cap}Mapping") as MappingUploadTask
 
         fun nativeTask(cap: String) = project.tasks.findByName("uploadBugsee${cap}Native") as NativeUploadTask?
+
+        /**
+         * Messages logged while [block] runs. ProjectBuilder's loggers write through Gradle's
+         * slf4j logger context, which has no public hook, so the test swaps its output listener.
+         */
+        fun captureOutput(block: () -> Unit): List<String> {
+            val context = org.slf4j.LoggerFactory.getILoggerFactory()
+            val type = context.javaClass
+            val listenerType = org.gradle.internal.logging.events.OutputEventListener::class.java
+            val original = type.getMethod("getOutputEventListener").invoke(context) as
+                org.gradle.internal.logging.events.OutputEventListener
+            val setter = type.getMethod("setOutputEventListener", listenerType)
+            val lines = mutableListOf<String>()
+            setter.invoke(context, org.gradle.internal.logging.events.OutputEventListener { event ->
+                if (event is org.gradle.internal.logging.events.LogEvent) lines += event.message
+                original.onOutput(event)
+            })
+            try {
+                block()
+            } finally {
+                setter.invoke(context, original)
+            }
+            return lines
+        }
 
         private fun fakeComponents(): Any {
             val handler = InvocationHandler { proxy, method, args ->

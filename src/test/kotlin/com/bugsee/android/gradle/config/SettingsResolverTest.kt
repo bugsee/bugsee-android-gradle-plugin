@@ -370,11 +370,76 @@ class SettingsResolverTest {
             listOf(
                 "Bugsee: variant.staging.plugin.endpoint ignored: endpoint is set in the DSL " +
                     "(set preferSettingsFile to let the settings file win).",
-                "Bugsee: plugin.endpoint ignored: endpoint is set in the DSL " +
-                    "(set preferSettingsFile to let the settings file win).",
             ),
             logger.warnings,
         )
+    }
+
+    @Test
+    fun noShadowWarningForRootKey() {
+        // DSL > root plugin.<key> is the long-standing documented precedence: no new noise.
+        val global = newExtension()
+        global.endpoint.set("https://global.example.com")
+        global.cliPath.set("/opt/bugsee-cli")
+        val file = file(root = mapOf("endpoint" to "https://root-file.example.com", "cliPath" to "/root/cli"))
+        val resolver = resolver(global, file)
+
+        resolver.resolve(endpoint, stagingRelease)
+        resolver.resolve(endpoint, null)
+        resolver.effectiveFor(stagingRelease)
+
+        assertEquals(emptyList(), logger.warnings)
+    }
+
+    // ── Laziness ────────────────────────────────────────────────────
+
+    @Test
+    fun effectiveFollowsLateDslChanges() {
+        val global = newExtension()
+        global.endpoint.set("https://early.example.com")
+        global.variant("staging") { it.debug.set(true) }
+        val resolver = resolver(global, file(variants = mapOf("staging" to mapOf("ndk.enabled" to "true"))))
+        val effective = resolver.effectiveFor(stagingRelease)
+
+        // Changed after effectiveFor (e.g. a user's afterEvaluate running after AGP's onVariants).
+        global.endpoint.set("https://late.example.com")
+        global.cliVersion.set("9.9.9")
+        global.variantBlocks.getValue("staging").debug.set(false)
+        global.instrumentation.excludes.add("com.example.Late")
+
+        assertEquals("https://late.example.com", effective.endpoint.get(), "DSL_GLOBAL is linked")
+        assertEquals("9.9.9", effective.cliVersion.get(), "GLOBAL-scope setting is linked")
+        assertEquals(false, effective.debug.get(), "DSL_VARIANT is linked to the block")
+        assertEquals(setOf("com.example.Late"), effective.instrumentation.excludes.get())
+        assertEquals(true, effective.ndk.enabled.get(), "FILE_VARIANT is a static file value")
+        assertNull(effective.instrumentation.okhttp.orNull, "absent stays absent")
+    }
+
+    @Test
+    fun effectiveFollowsLateDslOverRootFileConvention() {
+        val text = "plugin.endpoint=https://root-file.example.com\n"
+        val global = newExtension()
+        PluginPropertiesApplier.applyText(text, global, RecordingLogger())
+        val effective = resolver(global, SettingsFileParser.parse(text, RecordingLogger())).effectiveFor(stagingRelease)
+        assertEquals("https://root-file.example.com", effective.endpoint.get())
+
+        global.endpoint.set("https://late-dsl.example.com")
+
+        assertEquals("https://late-dsl.example.com", effective.endpoint.get())
+    }
+
+    @Test
+    fun preferMode_rootFileValueIsCopied() {
+        val text = "plugin.endpoint=https://root-file.example.com\n"
+        val global = newExtension()
+        PluginPropertiesApplier.applyText(text, global, RecordingLogger())
+        global.preferSettingsFile.set(true)
+        global.endpoint.set("https://dsl.example.com")
+        val effective = resolver(global, SettingsFileParser.parse(text, RecordingLogger())).effectiveFor(stagingRelease)
+
+        global.endpoint.set("https://late-dsl.example.com")
+
+        assertEquals("https://root-file.example.com", effective.endpoint.get())
     }
 
     @Test

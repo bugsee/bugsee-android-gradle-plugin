@@ -275,11 +275,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             val isDebug = effective.debug.get()
             if (isDebug) {
                 val token = settingsResolver().appTokenFor(variantContext, debug = false)
-                project.logger.warn(
-                    "Bugsee: variant $variantName resolved: " +
-                        "token=${token?.let { AppTokenResolver.maskToken(it) } ?: "none"} " +
-                        "endpoint=${effective.endpoint.get()}"
-                )
+                project.logger.warn(variantResolvedMessage(variantName, token, effective.endpoint.get()))
             }
 
             // Resolved EARLY (before the manifest task) because the manifest task's
@@ -393,7 +389,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         val text = root.providers
             .fileContents(root.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME))
             .asText.orNull
-        SettingsResolver(extension, SettingsFileParser.parse(text, project.logger), project.objects, project.logger)
+        // PluginPropertiesApplier has already reported a malformed file; do not repeat it.
+        val parsed = SettingsFileParser.parse(text, project.logger, reportMalformedFile = false)
+        SettingsResolver(extension, parsed, project.objects, project.logger)
     }.also { settingsResolver = it }
 
     private fun registerManifestTask(
@@ -1487,6 +1485,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
             VariantContext(variant.name, variant.productFlavors.map { it.second }, variant.buildType)
+
+        /** The per-variant debug summary. [token] is masked; it is never printed in full. */
+        internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =
+            "Bugsee: variant $variantName resolved: " +
+                "token=${token?.let { AppTokenResolver.maskToken(it) } ?: "none"} endpoint=$endpoint"
 
         private const val PLUGIN_NAME = "bugsee"
         // Maven group of all Bugsee artifacts. Centralised so dependency
