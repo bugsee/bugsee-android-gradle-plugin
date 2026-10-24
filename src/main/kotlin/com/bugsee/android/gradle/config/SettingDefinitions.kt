@@ -71,6 +71,15 @@ internal object SettingDefinitions {
 
     fun byKey(key: String): SettingDef<*>? = byKey[key]
 
+    /** The boolean setting [key]; throws when there is none or it is not boolean. */
+    fun booleanByKey(key: String): SettingDef<Boolean> {
+        val def = requireNotNull(byKey[key]) { "no setting $key" }
+        // A boolean def parses "true" to a Boolean; any other type yields another type or throws.
+        require(runCatching { def.parse("true") }.getOrNull() is Boolean) { "setting $key is not boolean" }
+        @Suppress("UNCHECKED_CAST")
+        return def as SettingDef<Boolean>
+    }
+
     fun variantScoped(): List<SettingDef<*>> = all.filter { it.scope == SettingScope.VARIANT }
 
     /**
