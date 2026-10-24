@@ -43,17 +43,33 @@ internal object PluginPropertiesLoader {
      *        `plugin.*` keys/is malformed.
      */
     fun load(text: String?, logger: Logger): Map<String, String> {
+        val out = HashMap<String, String>()
+        for ((key, value) in readAll(text, logger)) {
+            if (!key.startsWith(KEY_PREFIX)) continue
+            val stripped = key.substring(KEY_PREFIX.length)
+            if (stripped.isEmpty()) continue
+            out[stripped] = value
+        }
+        return out
+    }
+
+    /**
+     * Read every key of `bugsee.properties` content, unfiltered. Strips a
+     * leading BOM, and on malformed content warns once and returns empty.
+     * Null/blank text returns empty silently.
+     */
+    fun readAll(text: String?, logger: Logger): Map<String, String> {
         if (text == null) return emptyMap()
         if (text.isBlank()) return emptyMap()
 
         // Strip a leading UTF-8 BOM (U+FEFF). Without this, Windows
         // Notepad / VS Code editors that save with BOM-on prepend the
         // BOM character to the first line — `Properties.load` then
-        // treats `﻿plugin.endpoint` as the key name, which our
+        // treats `\uFEFFplugin.endpoint` as the key name, which our
         // prefix filter does NOT match. The first key would silently
         // route to the unknown-key log and the user would see no
         // effect from their config.
-        val normalized = text.removePrefix("﻿")
+        val normalized = text.removePrefix("\uFEFF")
 
         val raw = try {
             val props = Properties()
@@ -72,21 +88,12 @@ internal object PluginPropertiesLoader {
             return emptyMap()
         }
 
-        if (raw.isEmpty) return emptyMap()
-
-        // Snapshot into a plain Kotlin map so the returned object has
-        // no live connection to the Properties instance (which the JDK
-        // exposes as a Hashtable — synchronised, with rawtypes).
-        // Plain HashMap, not LinkedHashMap, since Properties iteration
-        // order is unspecified (it extends Hashtable) so we don't have
-        // a meaningful order to preserve anyway.
+        // Plain HashMap snapshot: no live connection to the Hashtable-based
+        // Properties; iteration order is unspecified anyway.
         val out = HashMap<String, String>(raw.size)
         for ((rawKey, rawValue) in raw) {
             val key = rawKey?.toString() ?: continue
-            if (!key.startsWith(KEY_PREFIX)) continue
-            val stripped = key.substring(KEY_PREFIX.length)
-            if (stripped.isEmpty()) continue
-            out[stripped] = rawValue?.toString().orEmpty()
+            out[key] = rawValue?.toString().orEmpty()
         }
         return out
     }
