@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.config
 
 import com.bugsee.android.gradle.BugseePluginExtension
+import com.bugsee.android.gradle.upload.AppTokenResolver
 import org.gradle.api.logging.Logger
 import org.gradle.api.model.ObjectFactory
 
@@ -101,7 +102,63 @@ internal class SettingsResolver(
         return values.any { it }
     }
 
+    /**
+     * The plugin-side app token for [ctx], or null when none is configured (the caller then falls
+     * back to the merged manifest at execution time). Default order: `appTokenByVariant` closure,
+     * `AppTokenProvider`, DSL `variant { appToken(…) }` blocks in [VariantContext.lookupNames] order,
+     * global `defaultAppToken`, then the file (`variant.<name>.app_token` in lookup order, then root
+     * `app_token`). With `preferSettingsFile` the file moves to the front. Empty tokens fall through.
+     */
+    fun appTokenFor(ctx: VariantContext, debug: Boolean): String? {
+        if (global.preferSettingsFile.get()) {
+            return fileToken(ctx, debug) ?: dslToken(ctx, debug)
+        }
+        val dsl = dslToken(ctx, debug) ?: return fileToken(ctx, debug)
+        warnIfTokenShadowed(ctx)
+        return dsl
+    }
+
     // ── Internals ───────────────────────────────────────────────────
+
+    private fun dslToken(ctx: VariantContext, debug: Boolean): String? {
+        AppTokenResolver.resolveFromClosureOrProvider(global, ctx.variantName, logger, debug)?.let { return it }
+        for (name in ctx.lookupNames) {
+            val token = global.variantBlocks[name]?.defaultAppToken
+            if (!token.isNullOrEmpty()) {
+                if (debug) logger.warn("Bugsee: Using variant(\"$name\") appToken: ${AppTokenResolver.maskToken(token)}")
+                return token
+            }
+        }
+        return AppTokenResolver.resolveFromDefaultToken(global, logger, debug)
+    }
+
+    private fun fileToken(ctx: VariantContext, debug: Boolean): String? {
+        val (key, token) = fileTokenEntry(ctx) ?: return null
+        if (debug) logger.warn("Bugsee: Using $BUGSEE_PROPERTIES_FILENAME:$key: ${AppTokenResolver.maskToken(token)}")
+        return token
+    }
+
+    /** The file token for [ctx] with its key: `variant.<name>.app_token` in lookup order, then root `app_token`. */
+    private fun fileTokenEntry(ctx: VariantContext): Pair<String, String>? {
+        for (name in ctx.lookupNames) {
+            val token = file.variants[name]?.appToken
+            if (!token.isNullOrEmpty()) return "variant.$name.$TOKEN_KEY" to token
+        }
+        val root = file.rootAppToken
+        return if (root.isNullOrEmpty()) null else TOKEN_KEY to root
+    }
+
+    /** Warns once about the file token key that would have won for [ctx] had the DSL not set a token. */
+    private fun warnIfTokenShadowed(ctx: VariantContext) {
+        val (key, _) = fileTokenEntry(ctx) ?: return
+        if (warnedShadowKeys.add(key)) {
+            logger.warn(
+                "Bugsee: $key ignored: an app token is set in the DSL " +
+                    "(set preferSettingsFile to let the settings file win).",
+            )
+        }
+    }
+
 
     private fun <T : Any> copyInto(effective: BugseePluginExtension, def: SettingDef<T>, ctx: VariantContext) {
         val value = when (def.scope) {
@@ -174,4 +231,8 @@ internal class SettingsResolver(
     private fun variantFileKey(name: String, def: SettingDef<*>) = "variant.$name.plugin.${def.key}"
 
     private fun rootFileKey(def: SettingDef<*>) = "plugin.${def.key}"
+
+    private companion object {
+        const val TOKEN_KEY = "app_token"
+    }
 }

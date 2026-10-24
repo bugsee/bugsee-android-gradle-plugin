@@ -12,7 +12,7 @@ internal object AppTokenResolver {
     private const val APP_TOKEN_TAG = "com.bugsee.android.APP_TOKEN"
     private const val PROPERTIES_TOKEN_KEY = "app_token"
 
-    private fun maskToken(token: String): String {
+    internal fun maskToken(token: String): String {
         if (token.length <= 8) return "****"
         return "${token.take(4)}...${token.takeLast(4)}"
     }
@@ -39,6 +39,16 @@ internal object AppTokenResolver {
         variantName: String,
         logger: Logger,
         debug: Boolean,
+    ): String? =
+        resolveFromClosureOrProvider(extension, variantName, logger, debug)
+            ?: resolveFromDefaultToken(extension, logger, debug)
+
+    /** Steps 1-2 of [resolveFromExtension]: the `appTokenByVariant` closure, then the `AppTokenProvider`. */
+    internal fun resolveFromClosureOrProvider(
+        extension: BugseePluginExtension,
+        variantName: String,
+        logger: Logger,
+        debug: Boolean,
     ): String? {
         extension.appTokenByVariant?.let { resolver ->
             val token = resolver(variantName)
@@ -54,6 +64,15 @@ internal object AppTokenResolver {
                 return token
             }
         }
+        return null
+    }
+
+    /** Step 3 of [resolveFromExtension]: the non-empty `defaultAppToken`. */
+    internal fun resolveFromDefaultToken(
+        extension: BugseePluginExtension,
+        logger: Logger,
+        debug: Boolean,
+    ): String? {
         extension.defaultAppToken?.let { token ->
             if (token.isNotEmpty()) {
                 if (debug) logger.warn("Bugsee: Using defaultAppToken: ${maskToken(token)}")
