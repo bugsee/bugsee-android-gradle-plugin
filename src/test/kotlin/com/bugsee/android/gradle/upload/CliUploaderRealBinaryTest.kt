@@ -787,6 +787,18 @@ class CliUploaderRealBinaryTest {
         }
     }
 
+    /** Skips unless the binary is a bugsee-cli that accepts a directory for `--type elf`. */
+    private fun requireElfDirectorySupport() {
+        val cliVersion = ProcessBuilder(requireBinary().absolutePath, "--version")
+            .redirectErrorStream(true).start().let { p ->
+                p.inputStream.bufferedReader().readText().also { p.waitFor() }
+            }.trim().substringAfterLast(' ')
+        assumeTrue(
+            "directory input needs bugsee-cli >= ${CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION}; got '$cliVersion'",
+            CliBinaryResolver.versionAtLeast(cliVersion, CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION),
+        )
+    }
+
     @Test
     fun `uploadElf registers each zip library under its own build-id with breakpad transform`() {
         requireBinary()
@@ -820,14 +832,7 @@ class CliUploaderRealBinaryTest {
 
     @Test
     fun `uploadElf accepts a directory of libraries and registers each under its build-id`() {
-        val cliVersion = ProcessBuilder(requireBinary().absolutePath, "--version")
-            .redirectErrorStream(true).start().let { p ->
-                p.inputStream.bufferedReader().readText().also { p.waitFor() }
-            }.trim().substringAfterLast(' ')
-        assumeTrue(
-            "directory input needs bugsee-cli >= ${CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION}; got '$cliVersion'",
-            CliBinaryResolver.versionAtLeast(cliVersion, CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION),
-        )
+        requireElfDirectorySupport()
         val tmp = Files.createTempDirectory("bugsee-upload-elf-dir").toFile()
         val server = MockBuildsServer(appToken = "tok")
         server.start()
@@ -856,7 +861,7 @@ class CliUploaderRealBinaryTest {
 
     @Test
     fun `uploadElf skips a library without a GNU build-id and makes no requests`() {
-        requireBinary()
+        requireElfDirectorySupport()
         val tmp = Files.createTempDirectory("bugsee-upload-elf-noid").toFile()
         val server = MockBuildsServer(appToken = "tok")
         server.start()
