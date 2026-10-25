@@ -139,3 +139,21 @@ bugsee {
         optimizeExtensionsLoading.set(optimizeExt == "true")
     }
 }
+
+// Opt-in: simulates Flutter's Gradle plugin, whose `copyFlutterAssets<Variant>`
+// task writes into AGP's merged-assets directory without AGP knowing
+// (issue #33). Off by default so other tests are unaffected.
+if (project.findProperty("bugseeFixtureFakeFlutter")?.toString() == "true") {
+    val mergedAssets = layout.buildDirectory.dir("intermediates/assets/debug/mergeDebugAssets")
+    val flutterSrc = layout.buildDirectory.file("fake-flutter/flutter_marker.txt")
+    val copyFlutter = tasks.register<Copy>("copyFlutterAssetsDebug") {
+        from(flutterSrc)
+        into(mergedAssets)
+        doFirst {
+            flutterSrc.get().asFile.apply { parentFile.mkdirs(); writeText("flutter") }
+        }
+    }
+    tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+        finalizedBy(copyFlutter)
+    }
+}
