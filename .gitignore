@@ -22,3 +22,5 @@ node-compile-cache/
 
 # Kotlin 2.x incremental compile cache
 .kotlin/
+# Per-developer Claude Code settings (shared guidance lives in .claude/CLAUDE.md and .claude/agents/)
+.claude/settings.local.json
