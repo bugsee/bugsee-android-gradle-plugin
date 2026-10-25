@@ -397,19 +397,19 @@ class CliUploaderTest {
 
     private val secretToken = "tok_SECRET_0123456789abcdef"
 
-    @Test fun `redactForLog masks the value after --app-token in a real mapping argv`() {
+    @Test fun `a real mapping argv carries no app token and redactForLog keeps the rest`() {
         val argv = CliUploader.buildMappingArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = secretToken,
             mappingFile = mappingFile,
             version = "1.2.3",
             build = "45",
             uuid = "uuid-1",
             iconFile = null,
         )
+        // The token travels in BUGSEE_APP_TOKEN, never in argv.
+        assertFalse(argv.any { it.startsWith("--app-token") }, argv.toString())
         val shown = CliUploader.redactForLog(argv)
         assertFalse(shown.contains(secretToken), shown)
-        assertTrue(shown.contains("--app-token ***"), shown)
         // Everything else is still there for debugging.
         assertTrue(shown.contains("--endpoint https://api.bugsee.com"), shown)
         assertTrue(shown.contains("--version 1.2.3"), shown)
