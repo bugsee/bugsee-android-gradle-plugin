@@ -394,6 +394,11 @@ Default order, first non-empty value wins:
 
 With `preferSettingsFile`, step 4 moves to the front.
 
+The placeholder token `00000000-0000-4000-8000-000000000000` (shipped by templates and CI
+projects without a real token) is treated like a missing one at every step: it is skipped
+with an info-level message, the chain falls through, and when no real token remains the
+upload tasks skip instead of failing.
+
 ### Notes and limitations
 
 - **Dependency auto-add is decided before variants exist.** The NDK runtime and

@@ -12,6 +12,24 @@ internal object AppTokenResolver {
     private const val APP_TOKEN_TAG = "com.bugsee.android.APP_TOKEN"
     private const val PROPERTIES_TOKEN_KEY = "app_token"
 
+    /**
+     * The all-zero token that templates and CI projects ship instead of a real one. It identifies
+     * no application, so every source treats it as absent: the chain falls through, and with no
+     * real token left the upload tasks skip.
+     */
+    internal const val PLACEHOLDER_TOKEN = "00000000-0000-4000-8000-000000000000"
+
+    /**
+     * True when [token] is a usable app token: non-empty and not [PLACEHOLDER_TOKEN]. A placeholder
+     * is reported at info level ([source] names where it came from) and rejected.
+     */
+    internal fun isUsable(token: String?, source: String, logger: Logger): Boolean {
+        if (token.isNullOrEmpty()) return false
+        if (!token.trim().equals(PLACEHOLDER_TOKEN, ignoreCase = true)) return true
+        logger.info("Bugsee: Ignoring placeholder app token from $source; treating it as not configured (uploads are skipped).")
+        return false
+    }
+
     internal fun maskToken(token: String): String {
         if (token.length <= 8) return "****"
         return "${token.take(4)}...${token.takeLast(4)}"
@@ -52,14 +70,14 @@ internal object AppTokenResolver {
     ): String? {
         extension.appTokenByVariant?.let { resolver ->
             val token = resolver(variantName)
-            if (!token.isNullOrEmpty()) {
+            if (token != null && isUsable(token, "appTokenByVariant", logger)) {
                 if (debug) logger.warn("Bugsee: Using appTokenByVariant: ${maskToken(token)}")
                 return token
             }
         }
         extension.appTokenProvider?.let { provider ->
             val token = provider.getAppToken(variantName)
-            if (!token.isNullOrEmpty()) {
+            if (token != null && isUsable(token, "AppTokenProvider", logger)) {
                 if (debug) logger.warn("Bugsee: Using AppTokenProvider: ${maskToken(token)}")
                 return token
             }
@@ -74,7 +92,7 @@ internal object AppTokenResolver {
         debug: Boolean,
     ): String? {
         extension.defaultAppToken?.let { token ->
-            if (token.isNotEmpty()) {
+            if (isUsable(token, "defaultAppToken", logger)) {
                 if (debug) logger.warn("Bugsee: Using defaultAppToken: ${maskToken(token)}")
                 return token
             }
@@ -125,6 +143,7 @@ internal object AppTokenResolver {
             }
             return null
         }
+        if (!isUsable(token, "${file.name}:$PROPERTIES_TOKEN_KEY", logger)) return null
         if (debug) {
             logger.warn(
                 "Bugsee: Using ${file.name}:${PROPERTIES_TOKEN_KEY}: ${maskToken(token)}",
@@ -165,11 +184,12 @@ internal object AppTokenResolver {
             return null
         }
 
-        if (StringResourceResolver.isStringResource(appToken)) {
-            return StringResourceResolver.resolve(stringResourceFiles, appToken, logger, debug)
+        val resolved = if (StringResourceResolver.isStringResource(appToken)) {
+            StringResourceResolver.resolve(stringResourceFiles, appToken, logger, debug)
+        } else {
+            appToken
         }
-
-        return appToken
+        return resolved?.takeIf { isUsable(it, "manifest $APP_TOKEN_TAG", logger) }
     }
 
     /**

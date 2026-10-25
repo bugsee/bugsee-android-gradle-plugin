@@ -212,7 +212,7 @@ internal class SettingsResolver(
         AppTokenResolver.resolveFromClosureOrProvider(global, ctx.variantName, logger, debug)?.let { return it }
         for (name in ctx.lookupNames) {
             val token = global.variantBlocks[name]?.defaultAppToken
-            if (!token.isNullOrEmpty()) {
+            if (token != null && AppTokenResolver.isUsable(token, "variant(\"$name\") appToken", logger)) {
                 if (debug) logger.warn("Bugsee: Using variant(\"$name\") appToken: ${AppTokenResolver.maskToken(token)}")
                 return token
             }
@@ -245,10 +245,12 @@ internal class SettingsResolver(
     private fun fileTokenEntry(ctx: VariantContext): Pair<String, String>? {
         for (name in ctx.lookupNames) {
             val token = file.variants[name]?.appToken
-            if (!token.isNullOrEmpty()) return "variant.$name.$TOKEN_KEY" to token
+            if (token != null && AppTokenResolver.isUsable(token, "$BUGSEE_PROPERTIES_FILENAME:variant.$name.$TOKEN_KEY", logger)) {
+                return "variant.$name.$TOKEN_KEY" to token
+            }
         }
         val root = file.rootAppToken
-        return if (root.isNullOrEmpty()) null else TOKEN_KEY to root
+        return if (root != null && AppTokenResolver.isUsable(root, "$BUGSEE_PROPERTIES_FILENAME:$TOKEN_KEY", logger)) TOKEN_KEY to root else null
     }
 
     /**
