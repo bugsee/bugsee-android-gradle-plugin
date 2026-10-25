@@ -25,8 +25,8 @@ class FlutterAssetsOrderingTest {
         val project = ProjectBuilder.builder().build()
         val inject = project.tasks.register("injectBugseeDebugBuildId")
         FlutterAssetsOrdering.wire(project, inject, "Debug")
-        project.tasks.register("copyFlutterDebugAssets", DefaultTask::class.java)
-        assertTrue("copyFlutterDebugAssets" in deps(project, "injectBugseeDebugBuildId"))
+        project.tasks.register("copyFlutterAssetsDebug", DefaultTask::class.java)
+        assertTrue("copyFlutterAssetsDebug" in deps(project, "injectBugseeDebugBuildId"))
     }
 
     @Test
@@ -39,12 +39,16 @@ class FlutterAssetsOrderingTest {
     }
 
     @Test
-    fun `wiring does not realize the Flutter task`() {
+    fun `resolving dependencies realizes only the Flutter task`() {
         val project = ProjectBuilder.builder().build()
-        var realized = false
-        project.tasks.register("copyFlutterAssetsDebug") { realized = true }
+        var flutterRealized = false
+        var otherRealized = false
+        project.tasks.register("copyFlutterAssetsDebug") { flutterRealized = true }
+        project.tasks.register("unrelated") { otherRealized = true }
         val inject = project.tasks.register("injectBugseeDebugBuildId")
         FlutterAssetsOrdering.wire(project, inject, "Debug")
-        assertEquals(false, realized)
+        assertEquals(false, flutterRealized)
+        deps(project, "injectBugseeDebugBuildId")
+        assertEquals(false, otherRealized)
     }
 }

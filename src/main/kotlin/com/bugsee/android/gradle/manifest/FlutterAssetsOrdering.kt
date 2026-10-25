@@ -22,11 +22,8 @@ import org.gradle.api.tasks.TaskProvider
  */
 internal object FlutterAssetsOrdering {
 
-    /** Both spellings of the Flutter task name seen across Flutter versions. */
-    fun candidateTaskNames(capitalizedVariant: String): List<String> = listOf(
-        "copyFlutterAssets$capitalizedVariant",
-        "copyFlutter${capitalizedVariant}Assets",
-    )
+    fun candidateTaskNames(capitalizedVariant: String): List<String> =
+        listOf("copyFlutterAssets$capitalizedVariant")
 
     fun wire(
         project: Project,

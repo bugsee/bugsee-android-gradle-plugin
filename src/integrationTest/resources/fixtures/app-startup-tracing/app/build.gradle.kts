@@ -145,15 +145,15 @@ bugsee {
 // (issue #33). Off by default so other tests are unaffected.
 if (project.findProperty("bugseeFixtureFakeFlutter")?.toString() == "true") {
     val mergedAssets = layout.buildDirectory.dir("intermediates/assets/debug/mergeDebugAssets")
-    val flutterSrc = layout.buildDirectory.file("fake-flutter/flutter_marker.txt")
+    val flutterSrc = layout.projectDirectory.file("fake-flutter/flutter_marker.txt")
+    // Mirrors Flutter: the copy depends on mergeAssets and writes into its
+    // output dir; processResources depends on the copy.
     val copyFlutter = tasks.register<Copy>("copyFlutterAssetsDebug") {
         from(flutterSrc)
         into(mergedAssets)
-        doFirst {
-            flutterSrc.get().asFile.apply { parentFile.mkdirs(); writeText("flutter") }
-        }
+        dependsOn("mergeDebugAssets")
     }
-    tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
-        finalizedBy(copyFlutter)
+    tasks.matching { it.name == "processDebugResources" }.configureEach {
+        dependsOn(copyFlutter)
     }
 }

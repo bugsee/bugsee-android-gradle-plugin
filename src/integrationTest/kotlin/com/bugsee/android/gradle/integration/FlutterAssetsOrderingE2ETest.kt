@@ -31,14 +31,14 @@ class FlutterAssetsOrderingE2ETest {
             result.output.indexOf(":app:copyFlutterAssetsDebug") in 0 until
                 result.output.indexOf(":app:injectBugseeDebugBuildId"),
         )
-        val asset = File(
-            fixture.projectDir,
-            "app/build/intermediates/assets/debug/mergeDebugAssets/bugsee_build_id.properties",
+        val injected = File(fixture.projectDir, "app/build/intermediates/assets/debug/injectBugseeDebugBuildId")
+        assertTrue(
+            "bugsee_build_id.properties asset must exist",
+            File(injected, "bugsee_build_id.properties").isFile,
         )
-        // Output location is AGP-owned; fall back to a search so a layout change fails loudly.
-        val found = asset.isFile ||
-            File(fixture.projectDir, "app/build").walkTopDown()
-                .any { it.name == "bugsee_build_id.properties" }
-        assertTrue("bugsee_build_id.properties asset must exist", found)
+        assertTrue(
+            "Flutter's asset must survive injection (a late copy would drop it)",
+            File(injected, "flutter_marker.txt").isFile,
+        )
     }
 }
