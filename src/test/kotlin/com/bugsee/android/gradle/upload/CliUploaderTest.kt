@@ -415,6 +415,13 @@ class CliUploaderTest {
         assertTrue(shown.contains("--version 1.2.3"), shown)
     }
 
+    @Test fun `redactForLog still masks the value after --app-token (defence in depth)`() {
+        val shown = CliUploader.redactForLog(listOf("--endpoint", "https://api.bugsee.com", "--app-token", secretToken, "--version", "1.2.3"))
+        assertFalse(shown.contains(secretToken), shown)
+        assertTrue(shown.contains("--app-token ***"), shown)
+        assertTrue(shown.contains("--version 1.2.3"), shown)
+    }
+
     @Test fun `redactForLog masks the token segment of a plugin-built v2 apps URL`() {
         val url = ApiEndpoint.buildsUrl("https://api.bugsee.com", secretToken, "/info")
         assertTrue(url.contains(secretToken), "precondition: the URL carries the token ($url)")
