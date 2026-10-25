@@ -180,12 +180,29 @@ class PlaceholderTokenTest {
 
     @Test
     fun sawPlaceholderTellsPlaceholderApartFromNothing() {
-        assertTrue(!resolver(newExtension()).sawPlaceholder(ctx))
-        assertTrue(resolver(newExtension(), "app_token=$placeholder\n").sawPlaceholder(ctx))
-        assertTrue(resolver(newExtension(), "variant.staging.app_token=$placeholder\n").sawPlaceholder(ctx))
-        assertTrue(resolver(newExtension().apply { appToken(placeholder) }).sawPlaceholder(ctx))
-        assertTrue(resolver(newExtension().apply { variant("release") { it.appToken(placeholder) } }).sawPlaceholder(ctx))
-        assertTrue(!resolver(newExtension(), "app_token=real\n").sawPlaceholder(ctx))
+        fun saw(global: BugseePluginExtension, props: String = ""): Boolean {
+            val r = resolver(global, props)
+            r.appTokenFor(ctx, debug = false)
+            return r.sawPlaceholder(ctx)
+        }
+        assertTrue(!saw(newExtension()))
+        assertTrue(saw(newExtension(), "app_token=$placeholder\n"))
+        assertTrue(saw(newExtension(), "variant.staging.app_token=$placeholder\n"))
+        assertTrue(saw(newExtension().apply { appToken(placeholder) }))
+        assertTrue(saw(newExtension().apply { variant("release") { it.appToken(placeholder) } }))
+        assertTrue(!saw(newExtension(), "app_token=real\n"))
+        // A real token found after a rejected placeholder is not a skip.
+        assertTrue(!saw(newExtension().apply { appToken(placeholder) }, "app_token=real\n"))
+    }
+
+    @Test
+    fun sourcesAreNotReReadByPlaceholderCheck() {
+        var calls = 0
+        val global = newExtension().apply { appToken { calls++; placeholder } }
+        val r = resolver(global)
+        r.appTokenFor(ctx, debug = false)
+        r.sawPlaceholder(ctx)
+        assertEquals(1, calls)
     }
 
     @Test

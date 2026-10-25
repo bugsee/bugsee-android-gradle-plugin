@@ -59,7 +59,8 @@ internal class SettingsResolver(
     private var warnedIgnoredExcludes = false
     private val seenLookupNames = HashSet<String>()
     private var warnedRootTokenEmpty = false
-    private val reportedPlaceholderSources = HashSet<String>()
+    private val placeholderReport = AppTokenResolver.PlaceholderReport()
+    private val placeholderVariants = HashSet<String>()
 
     /**
      * The value for [def] in [ctx], or null when no source sets it (the caller falls back to the
@@ -202,6 +203,13 @@ internal class SettingsResolver(
      * See [sawPlaceholder] for telling "only a placeholder" apart from "nothing".
      */
     fun appTokenFor(ctx: VariantContext, debug: Boolean): String? {
+        val hitsBefore = placeholderReport.hits
+        val token = resolveToken(ctx, debug)
+        if (token == null && placeholderReport.hits > hitsBefore) placeholderVariants.add(ctx.variantName)
+        return token
+    }
+
+    private fun resolveToken(ctx: VariantContext, debug: Boolean): String? {
         if (global.preferSettingsFile.get()) {
             return fileToken(ctx, debug) ?: dslToken(ctx, debug)
         }
@@ -211,33 +219,25 @@ internal class SettingsResolver(
     }
 
     /**
-     * True when any token source for [ctx] (closure, provider, DSL blocks, `defaultAppToken`,
-     * file `variant.*` / root `app_token`) holds the placeholder token. Meaningful only when
-     * [appTokenFor] returned null: the upload tasks then skip with an info line instead of the
-     * missing-token warning. The manifest source is checked at execution time by the task.
+     * True when [appTokenFor] returned null for [ctx] after rejecting a placeholder token. Recorded
+     * during that lookup (token sources are never re-read), so call it after [appTokenFor]. The upload
+     * tasks then skip with an info line instead of the missing-token warning; the manifest source is
+     * checked at execution time by the task.
      */
-    fun sawPlaceholder(ctx: VariantContext): Boolean {
-        val dsl = listOfNotNull(
-            global.appTokenByVariant?.invoke(ctx.variantName),
-            global.appTokenProvider?.getAppToken(ctx.variantName),
-            global.defaultAppToken,
-        ) + ctx.lookupNames.mapNotNull { global.variantBlocks[it]?.defaultAppToken }
-        val fromFile = ctx.lookupNames.mapNotNull { file.variants[it]?.appToken } + listOfNotNull(file.rootAppToken)
-        return (dsl + fromFile).any { AppTokenResolver.isPlaceholder(it) }
-    }
+    fun sawPlaceholder(ctx: VariantContext): Boolean = ctx.variantName in placeholderVariants
 
     // ── Internals ───────────────────────────────────────────────────
 
     private fun dslToken(ctx: VariantContext, debug: Boolean): String? {
-        AppTokenResolver.resolveFromClosureOrProvider(global, ctx.variantName, logger, debug, reportedPlaceholderSources)?.let { return it }
+        AppTokenResolver.resolveFromClosureOrProvider(global, ctx.variantName, logger, debug, placeholderReport)?.let { return it }
         for (name in ctx.lookupNames) {
             val token = global.variantBlocks[name]?.defaultAppToken
-            if (token != null && AppTokenResolver.isUsable(token, "variant(\"$name\") appToken", logger, reportedPlaceholderSources)) {
+            if (token != null && AppTokenResolver.isUsable(token, "variant(\"$name\") appToken", logger, placeholderReport)) {
                 if (debug) logger.warn("Bugsee: Using variant(\"$name\") appToken: ${AppTokenResolver.maskToken(token)}")
                 return token
             }
         }
-        return AppTokenResolver.resolveFromDefaultToken(global, logger, debug, reportedPlaceholderSources)
+        return AppTokenResolver.resolveFromDefaultToken(global, logger, debug, placeholderReport)
     }
 
     private fun fileToken(ctx: VariantContext, debug: Boolean): String? {
@@ -265,12 +265,12 @@ internal class SettingsResolver(
     private fun fileTokenEntry(ctx: VariantContext): Pair<String, String>? {
         for (name in ctx.lookupNames) {
             val token = file.variants[name]?.appToken
-            if (token != null && AppTokenResolver.isUsable(token, "$BUGSEE_PROPERTIES_FILENAME:variant.$name.$TOKEN_KEY", logger, reportedPlaceholderSources)) {
+            if (token != null && AppTokenResolver.isUsable(token, "$BUGSEE_PROPERTIES_FILENAME:variant.$name.$TOKEN_KEY", logger, placeholderReport)) {
                 return "variant.$name.$TOKEN_KEY" to token
             }
         }
         val root = file.rootAppToken
-        return if (root != null && AppTokenResolver.isUsable(root, "$BUGSEE_PROPERTIES_FILENAME:$TOKEN_KEY", logger, reportedPlaceholderSources)) TOKEN_KEY to root else null
+        return if (root != null && AppTokenResolver.isUsable(root, "$BUGSEE_PROPERTIES_FILENAME:$TOKEN_KEY", logger, placeholderReport)) TOKEN_KEY to root else null
     }
 
     /**

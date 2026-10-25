@@ -19,24 +19,31 @@ internal object AppTokenResolver {
      */
     internal const val PLACEHOLDER_TOKEN = "00000000-0000-4000-8000-000000000000"
 
+    /** Placeholder bookkeeping for one resolver: [sources] already reported (dedupe), [hits] rejections so far. */
+    internal class PlaceholderReport {
+        val sources = HashSet<String>()
+        var hits = 0
+    }
+
     /** True for [PLACEHOLDER_TOKEN], ignoring case and surrounding whitespace. */
     internal fun isPlaceholder(token: String?): Boolean =
         token != null && token.trim().equals(PLACEHOLDER_TOKEN, ignoreCase = true)
 
     /**
      * True when [token] is a usable app token: non-empty and not [PLACEHOLDER_TOKEN]. A placeholder
-     * is reported at info level ([source] names where it came from; once per source when [reported]
+     * is reported at info level ([source] names where it came from; once per source when [report]
      * is given) and rejected, so the caller moves on to the next source.
      */
     internal fun isUsable(
         token: String?,
         source: String,
         logger: Logger,
-        reported: MutableSet<String>? = null,
+        report: PlaceholderReport? = null,
     ): Boolean {
         if (token.isNullOrEmpty()) return false
         if (!isPlaceholder(token)) return true
-        if (reported == null || reported.add(source)) {
+        report?.let { it.hits++ }
+        if (report == null || report.sources.add(source)) {
             logger.info("Bugsee: Ignoring placeholder app token from $source; treating it as not configured, trying the next source.")
         }
         return false
@@ -84,18 +91,18 @@ internal object AppTokenResolver {
         variantName: String,
         logger: Logger,
         debug: Boolean,
-        reported: MutableSet<String>? = null,
+        report: PlaceholderReport? = null,
     ): String? {
         extension.appTokenByVariant?.let { resolver ->
             val token = resolver(variantName)
-            if (token != null && isUsable(token, "appTokenByVariant", logger, reported)) {
+            if (token != null && isUsable(token, "appTokenByVariant", logger, report)) {
                 if (debug) logger.warn("Bugsee: Using appTokenByVariant: ${maskToken(token)}")
                 return token
             }
         }
         extension.appTokenProvider?.let { provider ->
             val token = provider.getAppToken(variantName)
-            if (token != null && isUsable(token, "AppTokenProvider", logger, reported)) {
+            if (token != null && isUsable(token, "AppTokenProvider", logger, report)) {
                 if (debug) logger.warn("Bugsee: Using AppTokenProvider: ${maskToken(token)}")
                 return token
             }
@@ -108,10 +115,10 @@ internal object AppTokenResolver {
         extension: BugseePluginExtension,
         logger: Logger,
         debug: Boolean,
-        reported: MutableSet<String>? = null,
+        report: PlaceholderReport? = null,
     ): String? {
         extension.defaultAppToken?.let { token ->
-            if (isUsable(token, "defaultAppToken", logger, reported)) {
+            if (isUsable(token, "defaultAppToken", logger, report)) {
                 if (debug) logger.warn("Bugsee: Using defaultAppToken: ${maskToken(token)}")
                 return token
             }
