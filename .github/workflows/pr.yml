@@ -88,6 +88,13 @@ jobs:
           tar -xf "$dir/$name" -C "$dir" --strip-components=1
           "$dir/bugsee-cli" --version
           BUGSEE_CLI_BIN="$dir/bugsee-cli" ./gradlew :test --tests '*CliUploaderRealBinaryTest*'
+          # Every test in the class Assume-skips without the binary, and a skip is green:
+          # fail unless the class actually ran.
+          report=build/test-results/test/TEST-com.bugsee.android.gradle.upload.CliUploaderRealBinaryTest.xml
+          if ! grep -q 'skipped="0"' "$report" || grep -q 'tests="0"' "$report"; then
+            echo "real-binary tests were skipped or did not run" >&2
+            exit 1
+          fi
 
       # Only on failure, and kept briefly: the org's Actions artifact storage is
       # shared across every repo and capped, and a green run needs no reports.

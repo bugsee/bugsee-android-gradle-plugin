@@ -820,7 +820,14 @@ class CliUploaderRealBinaryTest {
 
     @Test
     fun `uploadElf accepts a directory of libraries and registers each under its build-id`() {
-        requireBinary()
+        val cliVersion = ProcessBuilder(requireBinary().absolutePath, "--version")
+            .redirectErrorStream(true).start().let { p ->
+                p.inputStream.bufferedReader().readText().also { p.waitFor() }
+            }.trim().substringAfterLast(' ')
+        assumeTrue(
+            "directory input needs bugsee-cli >= ${CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION}; got '$cliVersion'",
+            CliBinaryResolver.versionAtLeast(cliVersion, CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION),
+        )
         val tmp = Files.createTempDirectory("bugsee-upload-elf-dir").toFile()
         val server = MockBuildsServer(appToken = "tok")
         server.start()
