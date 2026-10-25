@@ -3,7 +3,13 @@ package com.bugsee.android.gradle
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.bugsee.android.gradle.config.BUGSEE_PROPERTIES_FILENAME
 import com.bugsee.android.gradle.config.PluginPropertiesApplier
+import com.bugsee.android.gradle.config.SettingDef
+import com.bugsee.android.gradle.config.SettingDefinitions
+import com.bugsee.android.gradle.config.SettingsFileParser
+import com.bugsee.android.gradle.config.SettingsResolver
+import com.bugsee.android.gradle.config.VariantContext
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
@@ -26,7 +32,6 @@ import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
 import org.gradle.api.artifacts.DependencySet
 import org.gradle.api.artifacts.ProjectDependency
-import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.build.event.BuildEventsListenerRegistry
 import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
@@ -46,6 +51,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     // resolve depends on the CONSUMER's Kotlin version — see ComposeKotlinCompatibility. A plugin
     // instance is created per project, so this reference is unambiguous.
     private var appliedProject: Project? = null
+
+    // Per-variant settings view (DSL `variant { }` blocks + `variant.*` keys in
+    // bugsee.properties). Built on first use — from `afterEvaluate`, `onVariants`,
+    // `withDependencies` or the Kotlin compiler-plugin gates, i.e. after the user's
+    // `bugsee { }` block has been evaluated, as SettingsResolver requires.
+    private var settingsResolver: SettingsResolver? = null
 
     // Injected by Gradle at plugin apply time — the service registry
     // we need to hook the BuildTimingService into the task-completion
@@ -96,9 +107,6 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project.configurations.configureEach { config ->
             if (config.name == "implementation") {
                 config.withDependencies { deps ->
-                    val isDebug = extension.debug.getOrElse(false)
-                    val inst = extension.instrumentation
-
                     // Skip auto-add when the project IS one of the Bugsee
                     // modules itself — these are the modules other apps
                     // would depend on, not consumers of them. Without this
@@ -123,6 +131,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                         return@withDependencies
                     }
 
+                    // Decided before variants exist: global-scope values (so
+                    // preferSettingsFile applies), or any scope for the module
+                    // auto-adds (see isAutoAddEnabled).
+                    val resolver = settingsResolver()
+                    val isDebug = resolver.globalValueOrNull(DEBUG) ?: false
+
                     // Auto-add the core Bugsee SDK if the consuming app has
                     // not declared one. Dynamic version range with the
                     // plugin's MIN_SDK_VERSION as a floor — the consumer
@@ -143,7 +157,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     val sdkVersion = declaredCoreSdkVersion(project)
                         ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
 
-                    if (extension.sdkAutoLoad.get() && !isCoreSdkPresent(project)) {
+                    if (resolver.globalValue(SDK_AUTO_LOAD) && !isCoreSdkPresent(project)) {
                         if (isDebug) {
                             project.logger.warn(
                                 "Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion"
@@ -159,14 +173,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     // Optional SDK modules driven by user opt-in via the
                     // `bugsee { ndk { enabled.set(true) }; feedback(true) }`
                     // DSL. Same already-declared check as the
-                    // auto-instrumented modules below.
-                    if (extension.ndk.enabled.get()) {
+                    // auto-instrumented modules below. The NDK runtime is added
+                    // when NDK is enabled globally or in any variant scope; the
+                    // per-variant symbol upload task stays exact.
+                    if (resolver.anyScopeValue(NDK_ENABLED) ?: false) {
                         autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug, sdkVersion)
                     }
-                    if (extension.leak.enabled.get()) {
+                    if (resolver.globalValue(LEAK_ENABLED)) {
                         autoAddModule(project, deps, "bugsee-android-leak", "leak", isDebug, sdkVersion)
                     }
-                    if (extension.feedback.get()) {
+                    if (resolver.globalValue(FEEDBACK)) {
                         autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug, sdkVersion)
                     }
 
@@ -177,22 +193,22 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     // `composeSecure` should still pull in the runtime that
                     // hosts those features.
                     val composeEnabled =
-                        isAutoAddEnabled(project, inst.compose, "compose") ||
-                                isAutoAddEnabled(project, inst.composeSecure, "composeSecure") ||
-                                isAutoAddEnabled(project, inst.composeInput, "composeInput")
+                        isAutoAddEnabled(project, resolver, INST_COMPOSE, "compose") ||
+                                isAutoAddEnabled(project, resolver, INST_COMPOSE_SECURE, "composeSecure") ||
+                                isAutoAddEnabled(project, resolver, INST_COMPOSE_INPUT, "composeInput")
                     if (hasComposeDependency(project) && composeEnabled) {
                         autoAddModule(project, deps, "bugsee-android-compose", "compose", isDebug, sdkVersion)
                     }
-                    if (hasOkHttpDependency(project) && isAutoAddEnabled(project, inst.okhttp, "okhttp")) {
+                    if (hasOkHttpDependency(project) && isAutoAddEnabled(project, resolver, INST_OKHTTP, "okhttp")) {
                         autoAddModule(project, deps, "bugsee-android-okhttp", "okhttp", isDebug, sdkVersion)
                     }
-                    if (hasKtorDependency(project, 2) && isAutoAddEnabled(project, inst.ktor, "ktor")) {
+                    if (hasKtorDependency(project, 2) && isAutoAddEnabled(project, resolver, INST_KTOR, "ktor")) {
                         autoAddModule(project, deps, "bugsee-android-ktor-2", "ktor-2", isDebug, sdkVersion)
                     }
-                    if (hasKtorDependency(project, 3) && isAutoAddEnabled(project, inst.ktor, "ktor")) {
+                    if (hasKtorDependency(project, 3) && isAutoAddEnabled(project, resolver, INST_KTOR, "ktor")) {
                         autoAddModule(project, deps, "bugsee-android-ktor-3", "ktor-3", isDebug, sdkVersion)
                     }
-                    if (hasCronetDependency(project) && isAutoAddEnabled(project, inst.cronet, "cronet")) {
+                    if (hasCronetDependency(project) && isAutoAddEnabled(project, resolver, INST_CRONET, "cronet")) {
                         autoAddModule(project, deps, "bugsee-android-cronet", "cronet", isDebug, sdkVersion)
                     }
                 }
@@ -200,7 +216,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
 
         project.afterEvaluate {
-            val isDebug = extension.debug.get()
+            val isDebug = settingsResolver().globalValue(DEBUG)
             if (isDebug) project.logger.warn("Bugsee: Plugin applied")
 
             // Verify android plugin is applied
@@ -217,12 +233,24 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return
         }
 
+        // After AGP has created the variants, flag per-variant names that matched nothing in ANY
+        // application module (bugsee.properties is shared by the whole build, so a name used by one
+        // app module is not a typo). Library modules produce no application variants and are skipped.
+        if (androidComponents is com.android.build.api.variant.ApplicationAndroidComponentsExtension) {
+            // Declared flavors and build types count even if `beforeVariants` disables every variant;
+            // recorded in afterEvaluate, which precedes every module's projectsEvaluated check.
+            project.afterEvaluate { recordDeclaredNames(project) }
+            project.gradle.projectsEvaluated {
+                settingsResolver().warnUnmatchedNames(knownVariantNames(project), project.path)
+            }
+        }
+
         androidComponents.onVariants { variant ->
-            val isDebug = extension.debug.get()
+            val globalDebug = settingsResolver().globalValue(DEBUG)
             val variantName = variant.name
             val capitalizedVariant = variantName.replaceFirstChar { it.uppercase() }
 
-            if (isDebug) project.logger.warn("Bugsee: Configuring variant $variantName")
+            if (globalDebug) project.logger.warn("Bugsee: Configuring variant $variantName")
 
             // Gate every plugin-side wiring on `variant is
             // ApplicationVariant`. The bugsee plugin's contract is
@@ -248,7 +276,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // plugin side-effect to `ApplicationVariant`, which is
             // also what the README has always documented.
             if (variant !is ApplicationVariant) {
-                if (isDebug) {
+                if (globalDebug) {
                     project.logger.warn(
                         "Bugsee: skipping plugin wiring for non-application variant " +
                             "$variantName (${variant.javaClass.simpleName}). " +
@@ -257,6 +285,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     )
                 }
                 return@onVariants
+            }
+
+            // This variant's resolved settings. Every variant-level read below goes
+            // through `effective`; it does not carry app tokens (see resolveCcSafeInputs).
+            val variantContext = variantContextOf(variant)
+            recordKnownVariantNames(project, variantContext)
+            val effective = settingsResolver().effectiveFor(variantContext)
+            val isDebug = effective.debug.get()
+            if (isDebug) {
+                val token = settingsResolver().appTokenFor(variantContext, debug = false)
+                project.logger.warn(variantResolvedMessage(variantName, token, effective.endpoint.get()))
             }
 
             // Resolved EARLY (before the manifest task) because the manifest task's
@@ -268,7 +307,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // `register<Name>Extension()` call — silently dead at runtime.
             val sourceManifest = project.file("src/main/AndroidManifest.xml")
             val configResolver = InstrumentationConfigResolver(
-                extension.instrumentation,
+                effective.instrumentation,
                 project,
                 sourceManifest.takeIf { it.exists() }
             )
@@ -288,7 +327,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // Pre-R8 manifest transform writes a deterministic *fallback*
             // BUILD_UUID into the manifest meta-data.
             val manifestTaskProvider = registerManifestTask(
-                project, variant, extension, capitalizedVariant,
+                project, variant, effective, capitalizedVariant,
                 instrumentationGloballyEnabled = instrumentationGloballyEnabled,
                 declaredSdkVersion = declaredSdkVersion,
             )
@@ -306,12 +345,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
             // --- Application variant specific tasks (upload mapping, NDK symbols, bundle) ---
             registerMappingUploadTask(
-                project, variant, extension, capitalizedVariant, resolveTaskProvider
+                project, variant, effective, capitalizedVariant, resolveTaskProvider
             )
 
-            if (extension.ndk.enabled.get()) {
+            if (effective.ndk.enabled.get()) {
                 registerNativeUploadTask(
-                    project, variant, extension, capitalizedVariant, resolveTaskProvider
+                    project, variant, effective, capitalizedVariant, resolveTaskProvider
                 )
             }
 
@@ -320,9 +359,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // that piggybacks on the same task — when both are
             // active, the task additionally requests a presigned
             // PUT URL and ships the artefact bytes.
-            if (shouldRegisterBuildInfoFor(project, variant, extension, isDebug)) {
+            if (shouldRegisterBuildInfoFor(project, variant, effective, isDebug)) {
                 registerBundleUploadTask(
-                    project, variant, extension, capitalizedVariant, resolveTaskProvider
+                    project, variant, effective, capitalizedVariant, resolveTaskProvider
                 )
             }
 
@@ -331,16 +370,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // before the manifest task, so provider-stripping and the
             // ExtensionsInit injection share one gate.)
             if (instrumentationGloballyEnabled) {
-                val extensionsInit = ExtensionsInitInstrumentation(extension, manifestTaskProvider)
+                val extensionsInit = ExtensionsInitInstrumentation(effective, manifestTaskProvider)
                 val extras = listOf<Instrumentation>(extensionsInit)
                 // Core-only instrumentations must also apply when the plugin
                 // is going to auto-add the core SDK: at this point that
                 // dependency is still a pending `withDependencies` addition and
                 // is therefore invisible to DependencyDetector's declared-deps scan.
-                val coreSdkAutoLoad = extension.sdkAutoLoad.get() && !isCoreSdkPresent(project)
+                val coreSdkAutoLoad = settingsResolver().globalValue(SDK_AUTO_LOAD) && !isCoreSdkPresent(project)
                 val registrar = InstrumentationRegistrar(
                     project, project.logger, isDebug, configResolver,
-                    extension.instrumentation.excludes.getOrElse(emptySet()),
+                    effective.instrumentation.excludes.getOrElse(emptySet()),
                     extras,
                     coreSdkAutoLoad,
                 )
@@ -355,6 +394,35 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
     }
+
+    /**
+     * The per-variant settings resolver, created on first call. Callers (`afterEvaluate`,
+     * `onVariants`, `withDependencies`, the Compose compiler-plugin gates) run after the
+     * user's `bugsee { }` block: the resolver probes which DSL properties were explicitly
+     * set, so it must not be built at apply time. The file is read through `providers.fileContents` (a configuration-cache
+     * input), as [PluginPropertiesApplier.applyTo] does.
+     */
+    private fun settingsResolver(): SettingsResolver = settingsResolver ?: run {
+        val project = checkNotNull(appliedProject) { "Bugsee plugin not applied" }
+        val extension = checkNotNull(pluginExtension) { "Bugsee plugin not applied" }
+        val root = project.rootProject
+        val text = root.providers
+            .fileContents(root.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME))
+            .asText.orNull
+        // PluginPropertiesApplier has already reported a malformed file; do not repeat it.
+        // The file is shared by every module, so its diagnostics are reported by the first project
+        // that reads it; later projects parse silently.
+        val warnedKey = "bugsee.settingsFileDiagnosticsReported"
+        val rootExtras = root.extensions.extraProperties
+        val parseLogger = if (rootExtras.has(warnedKey)) {
+            discardingLogger()
+        } else {
+            rootExtras.set(warnedKey, true)
+            project.logger
+        }
+        val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
+        SettingsResolver(extension, parsed, project.objects, project.logger)
+    }.also { settingsResolver = it }
 
     private fun registerManifestTask(
         project: Project,
@@ -682,11 +750,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     ): CcSafeUploadInputs {
         val isDebug = extension.debug.getOrElse(false)
 
-        val preResolvedToken: String? = AppTokenResolver.resolveFromExtension(
-            extension, variant.name, project.logger, isDebug,
-        ) ?: AppTokenResolver.resolveFromPropertiesFile(
-            project.rootProject.projectDir, project.logger, isDebug,
-        )
+        // [extension] is the variant's effective view, which carries no app tokens:
+        // the token chain (DSL, `variant { }` blocks, bugsee.properties) is the resolver's.
+        val preResolvedToken: String? = settingsResolver().appTokenFor(variantContextOf(variant), isDebug)
 
         val stringResFiles: List<File> = try {
             val android = project.extensions.findByName("android")
@@ -920,7 +986,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>): Boolean {
         val project = kotlinCompilation.target.project
-        val extension = pluginExtension ?: return false
+        if (pluginExtension == null) return false
         if (!hasComposeDependency(project)) {
             return false
         }
@@ -945,9 +1011,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // Apply the compiler plugin if EITHER subfeature is enabled. Each
         // subfeature is gated independently inside the compiler plugin via
         // its own SubpluginOption, so the user can keep one on while
-        // turning the other off.
-        val tagEnabled = isFeatureEnabled(extension.instrumentation.compose)
-        val secureEnabled = isFeatureEnabled(extension.instrumentation.composeSecure)
+        // turning the other off. Project-level: any scope that enables a
+        // subfeature keeps it on (see isCompilerFeatureEnabled).
+        val resolver = settingsResolver()
+        val tagEnabled = isCompilerFeatureEnabled(resolver, INST_COMPOSE)
+        val secureEnabled = isCompilerFeatureEnabled(resolver, INST_COMPOSE_SECURE)
         return tagEnabled || secureEnabled
     }
 
@@ -960,11 +1028,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // so this is safer than capturing the field reference at
             // applyToCompilation() entry (which could in principle race
             // with apply() on plugin reconfiguration).
-            val extension = pluginExtension
-            val tagEnabled = extension != null
-                    && isFeatureEnabled(extension.instrumentation.compose)
-            val secureEnabled = extension != null
-                    && isFeatureEnabled(extension.instrumentation.composeSecure)
+            val resolver = if (pluginExtension != null) settingsResolver() else null
+            val tagEnabled = resolver != null
+                    && isCompilerFeatureEnabled(resolver, INST_COMPOSE)
+            val secureEnabled = resolver != null
+                    && isCompilerFeatureEnabled(resolver, INST_COMPOSE_SECURE)
             listOf(
                 // Backward-compatible name: existing CLI option "enabled"
                 // continues to control tag injection.
@@ -1006,54 +1074,6 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 dep.group == "org.chromium.net"
             }
         }
-    }
-
-    /**
-     * Returns `true` if the feature is enabled (default: enabled when not explicitly set).
-     */
-    private fun isFeatureEnabled(property: Property<Boolean>): Boolean {
-        return !property.isPresent || property.get()
-    }
-
-    /**
-     * `withDependencies`-time variant of feature resolution used by the
-     * auto-add path. Consults the DSL property first (which
-     * [com.bugsee.android.gradle.config.PluginPropertiesApplier] populates
-     * via convention from `bugsee.properties` `plugin.instrumentation.*`
-     * keys), then falls back to the Gradle property
-     * `bugsee.instrumentation.<key>`, then defaults to `true`.
-     *
-     * Manifest meta-data is not consulted here — the variant manifest is
-     * not yet bound when `withDependencies` runs. Once a variant is bound,
-     * [com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver]
-     * provides the full DSL → Gradle property → manifest meta-data →
-     * default resolution chain.
-     *
-     * This unifies the auto-add gates (okhttp / compose / ktor / cronet)
-     * so a Gradle-property override like `-Pbugsee.instrumentation.ktor=false`
-     * is honoured at AAR-pull-in time, not only at bytecode-instrumentation
-     * time.
-     */
-    private fun isAutoAddEnabled(
-        project: Project,
-        dslProperty: Property<Boolean>,
-        key: String
-    ): Boolean {
-        if (dslProperty.isPresent) {
-            return dslProperty.get()
-        }
-        val gradleValue = project.findProperty("bugsee.instrumentation.$key")?.toString()
-        if (gradleValue != null) {
-            val parsed = gradleValue.toBooleanStrictOrNull()
-            if (parsed == null) {
-                project.logger.warn(
-                    "Bugsee: Invalid boolean value '$gradleValue' for Gradle property " +
-                            "'bugsee.instrumentation.$key', defaulting to true"
-                )
-            }
-            return parsed ?: true
-        }
-        return true
     }
 
     /**
@@ -1429,6 +1449,39 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project.plugins.withType(KotlinBasePlugin::class.java).firstOrNull()?.pluginVersion
     }.getOrNull()
 
+    private fun knownVariantNames(project: Project): MutableSet<String> {
+        val extras = project.rootProject.extensions.extraProperties
+        val key = "bugsee.knownVariantNames"
+        if (!extras.has(key)) extras.set(key, HashSet<String>())
+        @Suppress("UNCHECKED_CAST")
+        return extras.get(key) as MutableSet<String>
+    }
+
+    /** Names of every application variant, shared across modules. */
+    private fun recordKnownVariantNames(project: Project, ctx: VariantContext) {
+        knownVariantNames(project) += ctx.lookupNames
+    }
+
+    private fun recordDeclaredNames(project: Project) {
+        val names = knownVariantNames(project)
+        val dsl = project.extensions.findByType(com.android.build.api.dsl.CommonExtension::class.java)
+        dsl?.buildTypes?.mapTo(names) { it.name }
+        dsl?.productFlavors?.mapTo(names) { it.name }
+    }
+
+    /** A [org.gradle.api.logging.Logger] that drops every message. */
+    private fun discardingLogger(): org.gradle.api.logging.Logger =
+        java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java)
+        ) { _, method, _ ->
+            when (method.returnType) {
+                java.lang.Boolean.TYPE -> false
+                String::class.java -> "bugsee"
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
+
     private fun warnUnsupportedKotlinOnce(project: Project, version: String?) {
         val key = "bugsee.composeCompilerKotlinWarned"
         val root = project.gradle.rootProject.extensions.extraProperties
@@ -1445,6 +1498,81 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     companion object {
+
+        /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
+        internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
+            VariantContext(variant.name, variant.productFlavors.map { it.second }, variant.buildType)
+
+        /** The per-variant debug summary. [token] is masked; it is never printed in full. */
+        internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =
+            "Bugsee: variant $variantName resolved: " +
+                "token=${token?.let { AppTokenResolver.maskToken(it) } ?: "none"} endpoint=$endpoint"
+
+        /**
+         * `withDependencies`-time feature resolution used by the auto-add path, decided before
+         * variants exist. [SettingsResolver.anyScopeValue] first: the module is added when the
+         * global scope, any DSL `variant { }` block or any `variant.*` file entry enables [def]
+         * (a variant that disabled it may then carry an unused module; the bytecode transform
+         * stays per variant). With no scope setting it, falls back to the Gradle property
+         * `bugsee.instrumentation.<key>`, then defaults to `true`.
+         *
+         * Without per-variant input this equals the former rule: DSL value or root
+         * `plugin.instrumentation.*` file value (the property's convention), then the Gradle
+         * property, then `true`.
+         *
+         * Manifest meta-data is not consulted here — the variant manifest is
+         * not yet bound when `withDependencies` runs. Once a variant is bound,
+         * [com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver]
+         * provides the full DSL → Gradle property → manifest meta-data →
+         * default resolution chain.
+         *
+         * This unifies the auto-add gates (okhttp / compose / ktor / cronet)
+         * so a Gradle-property override like `-Pbugsee.instrumentation.ktor=false`
+         * is honoured at AAR-pull-in time, not only at bytecode-instrumentation
+         * time.
+         */
+        internal fun isAutoAddEnabled(
+            project: Project,
+            resolver: SettingsResolver,
+            def: SettingDef<Boolean>,
+            key: String
+        ): Boolean {
+            resolver.anyScopeValue(def)?.let { return it }
+            val gradleValue = project.findProperty("bugsee.instrumentation.$key")?.toString()
+            if (gradleValue != null) {
+                val parsed = gradleValue.toBooleanStrictOrNull()
+                if (parsed == null) {
+                    project.logger.warn(
+                        "Bugsee: Invalid boolean value '$gradleValue' for Gradle property " +
+                                "'bugsee.instrumentation.$key', defaulting to true"
+                    )
+                }
+                return parsed ?: true
+            }
+            return true
+        }
+
+        /**
+         * Project-level gate for a Compose compiler-plugin subfeature: on when any scope enables
+         * [def] (see [isAutoAddEnabled]), off when every scope that sets it disables it, and on
+         * (default) when nothing sets it. Without per-variant input this equals the former
+         * `!property.isPresent || property.get()`.
+         */
+        internal fun isCompilerFeatureEnabled(resolver: SettingsResolver, def: SettingDef<Boolean>): Boolean =
+            resolver.anyScopeValue(def) ?: true
+
+        // Settings read at project level (before variants exist).
+        private val DEBUG = SettingDefinitions.booleanByKey("debug")
+        private val SDK_AUTO_LOAD = SettingDefinitions.booleanByKey("sdkAutoLoad")
+        private val FEEDBACK = SettingDefinitions.booleanByKey("feedback")
+        private val LEAK_ENABLED = SettingDefinitions.booleanByKey("leak.enabled")
+        private val NDK_ENABLED = SettingDefinitions.booleanByKey("ndk.enabled")
+        private val INST_COMPOSE = SettingDefinitions.booleanByKey("instrumentation.compose")
+        private val INST_COMPOSE_SECURE = SettingDefinitions.booleanByKey("instrumentation.composeSecure")
+        private val INST_COMPOSE_INPUT = SettingDefinitions.booleanByKey("instrumentation.composeInput")
+        private val INST_OKHTTP = SettingDefinitions.booleanByKey("instrumentation.okhttp")
+        private val INST_KTOR = SettingDefinitions.booleanByKey("instrumentation.ktor")
+        private val INST_CRONET = SettingDefinitions.booleanByKey("instrumentation.cronet")
 
         private const val PLUGIN_NAME = "bugsee"
         // Maven group of all Bugsee artifacts. Centralised so dependency

@@ -36,7 +36,8 @@ import javax.inject.Inject
  * for the full key reference and precedence rules.
  */
 
-abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory) {
+@BugseeDsl
+abstract class BugseePluginExtension @Inject constructor(private val objects: ObjectFactory) : BugseeVariantSettings {
 
     /**
      * Bugsee API endpoint URL.
@@ -45,7 +46,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * Default: `https://api.bugsee.com`
      */
-    val endpoint: Property<String> = objects.property(String::class.java).convention("https://api.bugsee.com")
+    override val endpoint: Property<String> = objects.property(String::class.java).convention("https://api.bugsee.com")
 
     /**
      * Path to the `bugsee-cli` binary — optional override. When set and the
@@ -140,7 +141,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * Default: `false`
      */
-    val debug: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+    override val debug: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
      * NDK integration configuration block — gates the runtime
@@ -149,7 +150,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * Disabled by default; opt in for apps that ship native code.
      */
-    val ndk: BugseeNdkExtension = objects.newInstance(BugseeNdkExtension::class.java)
+    override val ndk: BugseeNdkExtension = objects.newInstance(BugseeNdkExtension::class.java)
 
     /**
      * Configure NDK integration via a DSL block.
@@ -163,7 +164,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    fun ndk(action: Action<BugseeNdkExtension>) {
+    override fun ndk(action: Action<BugseeNdkExtension>) {
         action.execute(ndk)
     }
 
@@ -238,7 +239,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * Disable via `buildInfo { enabled.set(false) }` to opt out
      * entirely (e.g. for firewalled CI).
      */
-    val buildInfo: BugseeBuildInfoExtension = objects.newInstance(BugseeBuildInfoExtension::class.java)
+    override val buildInfo: BugseeBuildInfoExtension = objects.newInstance(BugseeBuildInfoExtension::class.java)
 
     /**
      * Configure build-info via a DSL block.
@@ -253,7 +254,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    fun buildInfo(action: Action<BugseeBuildInfoExtension>) {
+    override fun buildInfo(action: Action<BugseeBuildInfoExtension>) {
         action.execute(buildInfo)
     }
 
@@ -264,7 +265,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * toggled independently, or the entire instrumentation pipeline can be
      * disabled via `instrumentation { enabled.set(false) }`.
      */
-    val instrumentation: BugseeInstrumentationExtension = objects.newInstance(BugseeInstrumentationExtension::class.java)
+    override val instrumentation: BugseeInstrumentationExtension = objects.newInstance(BugseeInstrumentationExtension::class.java)
 
     /**
      * Configure bytecode instrumentation via a DSL block.
@@ -278,7 +279,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    fun instrumentation(action: Action<BugseeInstrumentationExtension>) {
+    override fun instrumentation(action: Action<BugseeInstrumentationExtension>) {
         action.execute(instrumentation)
     }
 
@@ -307,7 +308,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    val optimizeExtensionsLoading: Property<Boolean> =
+    override val optimizeExtensionsLoading: Property<Boolean> =
         objects.property(Boolean::class.javaObjectType).convention(true)
 
     /** Default app token, used when no variant-specific token is provided. */
@@ -324,7 +325,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * @param token The app token from the Bugsee dashboard.
      */
-    fun appToken(token: String) {
+    override fun appToken(token: String) {
         defaultAppToken = token
     }
 
@@ -359,5 +360,40 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      */
     fun feedback(enabled: Boolean) {
         feedback.set(enabled)
+    }
+
+    /**
+     * When `true`, values from `bugsee.properties` win over DSL values for
+     * file-bound settings; when `false` (default), DSL values win. Not itself
+     * settable from the properties file.
+     *
+     * Default: `false`
+     */
+    val preferSettingsFile: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(false)
+
+    private val blocks = linkedMapOf<String, BugseePluginExtension>()
+
+    /** Per-variant override blocks declared via [variant], keyed by variant name. */
+    internal val variantBlocks: Map<String, BugseePluginExtension>
+        get() = blocks
+
+    /**
+     * Override a subset of settings for one build variant. The block is created
+     * on first use; repeated calls with the same name merge into it.
+     *
+     * ```kotlin
+     * bugsee {
+     *     variant("staging") {
+     *         endpoint.set("https://staging.example.com")
+     *     }
+     * }
+     * ```
+     *
+     * See [BugseeVariantSettings] for what is available inside the block.
+     */
+    fun variant(name: String, action: Action<BugseeVariantSettings>) {
+        val block = blocks.getOrPut(name) { objects.newInstance(BugseePluginExtension::class.java) }
+        action.execute(block)
     }
 }

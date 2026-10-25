@@ -69,6 +69,10 @@ Gradle's `Property.convention(…)` semantics — the properties layer is
 applied as a convention before your DSL block runs, and your `.set(…)`
 calls in the DSL supersede it.
 
+Per-variant values (`variant.<name>.*` keys and `variant("<name>") { }` blocks)
+follow the same precedence, and `bugsee { preferSettingsFile.set(true) }` flips
+it for the whole build. See [Per-variant settings](#per-variant-settings).
+
 ## `bugsee.properties`
 
 A single `bugsee.properties` file at the **root project** directory
@@ -80,6 +84,7 @@ distinct namespaces:
 |---|---|---|
 | (unprefixed) | App-token resolution | `app_token=YOUR_APP_TOKEN` |
 | `plugin.*` | Gradle plugin behavior | `plugin.debug=true` |
+| `variant.<name>.*` | Per-variant `app_token` / `plugin.*` | `variant.staging.app_token=STAGING_TOKEN` |
 
 The file is **optional**. Keys not present in the file fall through
 to the next source (DSL, then defaults).
@@ -254,9 +259,164 @@ note immediately below.
 >   so the CLI value flows through the highest-priority DSL slot.
 
 > **App token** — set via the unprefixed key `app_token=…`, not
-> `plugin.appToken`. The DSL provides additional richer forms
-> (closure, provider, per-variant resolver) that have no
+> `plugin.appToken`, or per variant via `variant.<name>.app_token=…`. The DSL
+> provides additional richer forms (closure, provider) that have no
 > properties-file equivalent.
+
+## Per-variant settings
+
+Most settings can differ per build variant, from `bugsee.properties` or from
+the DSL, with the same lookup order in both. The typical case is a `staging`
+flavor that uploads to its own Bugsee application.
+
+### Key syntax
+
+Prefix an existing key with `variant.<name>.`. Existing `app_token` and
+`plugin.*` keys are unchanged.
+
+```properties
+app_token=PROD_TOKEN
+plugin.endpoint=https://api.bugsee.com
+
+variant.staging.app_token=STAGING_TOKEN
+variant.staging.plugin.endpoint=https://staging.example.com
+variant.release.plugin.buildInfo.sizeCheck.enabled=true
+```
+
+`<name>` is a variant name, a product flavor name or a build type name,
+case-sensitive, exactly as AGP spells it (`stagingRelease`, `staging`,
+`release`). A name that matches no variant is ignored.
+
+### Lookup order
+
+For a variant, inside each source (file or DSL) the **first match wins**, with
+no merging:
+
+1. the variant name (`stagingRelease`)
+2. each product flavor, in AGP flavor-dimension order
+3. the build type
+4. the root / global value (`plugin.<key>` / `app_token`, or the DSL value
+   outside any `variant` block)
+
+This is the contract that wrappers (for example React Native) mirror for
+settings-file tokens. It describes only the file lookup, not the plugin's overall
+token precedence: when the DSL also supplies a token (and `preferSettingsFile`
+is off) the plugin uses the DSL token, so a wrapper that must target the same
+Bugsee application as the uploads has to use the effective token, or set
+`preferSettingsFile` so the file wins. To read the file token a wrapper looks up `variant.<variant>.app_token`, then
+`variant.<flavor>.app_token` for each flavor, then
+`variant.<buildType>.app_token`, then `app_token` in
+`<rootProject>/bugsee.properties`.
+
+### DSL form
+
+```kotlin
+bugsee {
+    endpoint.set("https://api.bugsee.com")   // global value and fallback
+    appToken("PROD_TOKEN")
+
+    variant("staging") {                      // variant, flavor or build type name
+        appToken("STAGING_TOKEN")
+        endpoint.set("https://staging.example.com")
+        ndk { enabled.set(true) }
+        buildInfo { sizeCheck { enabled.set(true) } }
+    }
+    variant("release") {
+        instrumentation { enabled.set(false) }
+    }
+}
+```
+
+Calling `variant("x")` twice merges into one block. A block exposes only the
+per-variant settings: `endpoint`, `debug`, `optimizeExtensionsLoading`, `ndk`,
+`buildInfo`, `instrumentation` and `appToken(String)`. In the Kotlin DSL, naming
+a global-only setting inside a block is a compile error. In Groovy there is no
+such check, and the setting does **not** reach the global value either: Gradle
+runs the closure against the block itself, which carries its own copy of every
+setting, so `variant("x") { feedback true }`, `leak { … }`, `appToken { … }`
+(closure form) or a nested `variant(…)` inside a block write that copy and are
+**silently ignored**. Set global-only settings outside any `variant` block.
+`instrumentation.excludes` is likewise ignored inside a variant block.
+
+### Per-variant vs global-only
+
+| Scope | Settings |
+|---|---|
+| Per variant | `app_token`; `endpoint`, `debug`, `optimizeExtensionsLoading`; `ndk.*`; `buildInfo.*`; `instrumentation.*` (every toggle and `startupTier`) |
+| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
+| Global, DSL only | `instrumentation.excludes` (no `plugin.*` file key) |
+
+A `variant.<name>.plugin.<key>` file key for a global-only setting is ignored
+with a warning. `instrumentation.excludes` is not a file key at all: a
+`plugin.instrumentation.excludes` or `variant.<name>.plugin.instrumentation.excludes`
+key is reported as unknown (at `--info`) and ignored.
+
+### Precedence
+
+A source is consulted as a whole (variant lookup, then its root/global value).
+By default:
+
+```text
+DSL (variant lookup, then global)  >  bugsee.properties (variant lookup, then root)  >  built-in default
+```
+
+So a DSL value for a setting, global or per variant, beats a
+`variant.*` file key for it. To use per-variant file values, leave that setting
+out of the DSL. With the DSL-only switch
+
+```kotlin
+bugsee { preferSettingsFile.set(true) }
+```
+
+the order for the whole build (root keys included) becomes
+`bugsee.properties (variant lookup, then root) > DSL (variant lookup, then global) > built-in default`.
+The default is `false`.
+
+When a `variant.<name>.*` file key is ignored because the DSL already set the
+value, the plugin warns once per key (default mode only):
+
+```text
+Bugsee: variant.staging.plugin.endpoint ignored: endpoint is set in the DSL (set preferSettingsFile to let the settings file win).
+```
+
+A root key (`plugin.<key>`, `app_token`) shadowed by the DSL is the long-standing
+precedence and does not warn.
+
+### App token chain
+
+Default order, first non-empty value wins:
+
+1. `appTokenByVariant { variantName -> … }` closure (`null`/empty falls through)
+2. `AppTokenProvider`
+3. DSL `variant { appToken(…) }` per the lookup order, then the global `defaultAppToken`
+4. `bugsee.properties`: `variant.*.app_token` per the lookup order, then root `app_token`
+5. manifest `com.bugsee.android.APP_TOKEN` meta-data (read at execution time)
+
+With `preferSettingsFile`, step 4 moves to the front.
+
+### Notes and limitations
+
+- **Dependency auto-add is decided before variants exist.** The NDK runtime and
+  the okhttp / compose / ktor / cronet modules are added when the feature is
+  enabled globally or in any variant scope (DSL block or `variant.*` key). A
+  variant that disabled the feature may carry an unused runtime module; its
+  upload task and bytecode transform stay exact.
+- **Compose limitation.** The Compose Kotlin compiler-plugin gate is
+  project-level and uses the same any-scope rule: if one variant enables
+  `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
+  including variants that disabled it.
+- **When values are fixed.** Values from `variant.*` file keys (and file root
+  values when `preferSettingsFile` ranks them above the DSL) are fixed when
+  variants are configured. Values resolved from the DSL stay live, so a late
+  `afterEvaluate { bugsee { endpoint.set(…) } }` still reaches the tasks when no
+  `variant.*` input outranks it.
+- `plugin.debug` per variant only affects that variant's logging; apply-time
+  reads use the global value.
+- With no `variant.*` key and no `variant { }` block, nothing changes, except
+  the new debug-only log line `Bugsee: variant <name> resolved: …` printed when
+  `plugin.debug` is true. In that case (and without `preferSettingsFile`) the
+  plugin reads the `bugsee { }` properties exactly as before: it does not
+  inspect or read them early.
 
 ## Type coercion
 
@@ -282,6 +442,15 @@ Gradle log level:
 | Empty string value (`plugin.endpoint=`) | `warn` | Likely a half-edited line; default holds. |
 | Unknown `plugin.*` key | `info` | Forward-compat — `--info` to surface typos. |
 | Successful apply | `warn`, only if `plugin.debug=true` | Echoes each applied key/value when verbose mode is on. |
+| Unknown `variant.*` key | `info` | Same as unknown `plugin.*` keys. |
+| `variant.<name>.*` key or `variant("<name>")` block matching no variant, flavor or build type | `warn` | Otherwise silently ignored, so a typo or wrong case falls back to the root/DSL token. |
+| `variant.<name>.plugin.<key>` for a global-only setting | `warn` | Ignored; use the root `plugin.<key>`. |
+| `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
+| Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |
+
+An empty root `app_token=` warns once, when the root token is actually consulted
+(not when a DSL token already won). An empty `variant.<name>.app_token=` warns
+when the file is parsed.
 
 ## Example
 

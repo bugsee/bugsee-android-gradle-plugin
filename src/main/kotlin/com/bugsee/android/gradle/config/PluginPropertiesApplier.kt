@@ -1,11 +1,8 @@
 package com.bugsee.android.gradle.config
 
 import com.bugsee.android.gradle.BugseePluginExtension
-import com.bugsee.android.gradle.StartupTier
-import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Project
 import org.gradle.api.logging.Logger
-import org.gradle.api.provider.Property
 
 /**
  * Applies `<rootProject>/bugsee.properties` `plugin.*` overrides to a
@@ -114,145 +111,17 @@ internal object PluginPropertiesApplier {
     // ── Binding registry ────────────────────────────────────────────
 
     /**
-     * A single key-to-property binding plus its type coercer.
-     *
-     * Maintained as an explicit list (not reflection-driven) so a
-     * future renamed property surfaces as a missing-binding at PR
-     * review time rather than a silently-dropped config value at
-     * user-runtime.
+     * Bindings are derived from [SettingDefinitions] (the single
+     * registry of file-settable keys). Each applies its parsed value as
+     * a Property *convention*, so DSL `.set(...)` still wins.
      */
     private class Binding(val key: String, val apply: (String) -> Unit)
 
-    private fun bindings(ext: BugseePluginExtension): List<Binding> = listOf(
-        // ── Root extension ──────────────────────────────────────────
-        stringBinding("endpoint", ext.endpoint),
-        stringBinding("cliPath", ext.cliPath),
-        stringBinding("cliVersion", ext.cliVersion),
-        boolBinding("cliAutoUpdate", ext.cliAutoUpdate),
-        enumBinding("uploader", ext.uploader, UploaderStrategy::class.java),
-        boolBinding("debug", ext.debug),
-        boolBinding("feedback", ext.feedback),
-        boolBinding("optimizeExtensionsLoading", ext.optimizeExtensionsLoading),
-        boolBinding("sdkAutoLoad", ext.sdkAutoLoad),
+    private fun bindings(ext: BugseePluginExtension): List<Binding> =
+        SettingDefinitions.all.map { def -> bind(def, ext) }
 
-        // ── ndk { … } ───────────────────────────────────────────────
-        boolBinding("ndk.enabled", ext.ndk.enabled),
-        boolBinding("ndk.forceDebugSymbolsUpload", ext.ndk.forceDebugSymbolsUpload),
-        boolBinding("ndk.useMergedNativeLibs", ext.ndk.useMergedNativeLibs),
+    private fun <T : Any> bind(def: SettingDef<T>, ext: BugseePluginExtension) =
+        Binding(def.key) { raw -> def.property(ext).convention(def.parse(raw)) }
 
-        // ── leak { … } ──────────────────────────────────────────────
-        boolBinding("leak.enabled", ext.leak.enabled),
-
-        // ── buildInfo { … } ─────────────────────────────────────────
-        boolBinding("buildInfo.enabled", ext.buildInfo.enabled),
-        boolBinding("buildInfo.allBuildTypes", ext.buildInfo.allBuildTypes),
-
-        // ── buildInfo.sizeAnalysis { … } ────────────────────────────
-        boolBinding("buildInfo.sizeAnalysis.enabled", ext.buildInfo.sizeAnalysis.enabled),
-        stringBinding("buildInfo.sizeAnalysis.buildConfiguration", ext.buildInfo.sizeAnalysis.buildConfiguration),
-        boolBinding("buildInfo.sizeAnalysis.chunkedUpload", ext.buildInfo.sizeAnalysis.chunkedUpload),
-
-        // ── buildInfo.sizeCheck { … } ───────────────────────────────
-        boolBinding("buildInfo.sizeCheck.enabled", ext.buildInfo.sizeCheck.enabled),
-        doubleBinding("buildInfo.sizeCheck.warningPercent", ext.buildInfo.sizeCheck.warningPercent),
-        doubleBinding("buildInfo.sizeCheck.failPercent", ext.buildInfo.sizeCheck.failPercent),
-        longBinding("buildInfo.sizeCheck.warningBytes", ext.buildInfo.sizeCheck.warningBytes),
-        longBinding("buildInfo.sizeCheck.failBytes", ext.buildInfo.sizeCheck.failBytes),
-
-        // ── buildInfo.dependencies { … } ────────────────────────────
-        boolBinding("buildInfo.dependencies.enabled", ext.buildInfo.dependencies.enabled),
-        stringBinding("buildInfo.dependencies.scope", ext.buildInfo.dependencies.scope),
-        boolBinding("buildInfo.dependencies.includeSelectedReason", ext.buildInfo.dependencies.includeSelectedReason),
-        intBinding("buildInfo.dependencies.maxCount", ext.buildInfo.dependencies.maxCount),
-
-        // ── buildInfo.timings { … } ─────────────────────────────────
-        boolBinding("buildInfo.timings.enabled", ext.buildInfo.timings.enabled),
-
-        // ── instrumentation { … } ───────────────────────────────────
-        boolBinding("instrumentation.enabled", ext.instrumentation.enabled),
-        boolBinding("instrumentation.okhttp", ext.instrumentation.okhttp),
-        boolBinding("instrumentation.httpEngine", ext.instrumentation.httpEngine),
-        boolBinding("instrumentation.log", ext.instrumentation.log),
-        boolBinding("instrumentation.thread", ext.instrumentation.thread),
-        boolBinding("instrumentation.mainThreadMisuse", ext.instrumentation.mainThreadMisuse),
-        boolBinding("instrumentation.operationDispatch", ext.instrumentation.operationDispatch),
-        boolBinding("instrumentation.compose", ext.instrumentation.compose),
-        boolBinding("instrumentation.composeSecure", ext.instrumentation.composeSecure),
-        boolBinding("instrumentation.composeInput", ext.instrumentation.composeInput),
-        boolBinding("instrumentation.ktor", ext.instrumentation.ktor),
-        boolBinding("instrumentation.cronet", ext.instrumentation.cronet),
-        enumBinding("instrumentation.startupTier", ext.instrumentation.startupTier, StartupTier::class.java),
-    )
-
-    // ── Type coercers ──────────────────────────────────────────────
-
-    private fun boolBinding(key: String, prop: Property<Boolean>) = Binding(key) { raw ->
-        val v = parseBooleanOrNull(raw) ?: throw IllegalArgumentException(
-            "expected one of true/false (also accepted: yes/no, on/off, 1/0)"
-        )
-        prop.convention(v)
-    }
-
-    private fun stringBinding(key: String, prop: Property<String>) = Binding(key) { raw ->
-        // Trim incidental surrounding whitespace; the value itself can
-        // contain spaces (e.g. an endpoint URL with a path).
-        val trimmed = raw.trim()
-        // Empty trimmed string is treated as user error (e.g. someone
-        // half-deleted a value during editing). Skip the apply and
-        // warn — the default holds, matching the numeric coercers'
-        // posture on malformed input. Without this, `convention("")`
-        // would silently produce a broken value (e.g. an empty
-        // endpoint URL) that fails downstream with a less-pointed
-        // error.
-        if (trimmed.isEmpty()) {
-            throw IllegalArgumentException(
-                "value is empty — leave the key out of bugsee.properties " +
-                    "to use the default"
-            )
-        }
-        prop.convention(trimmed)
-    }
-
-    private fun intBinding(key: String, prop: Property<Int>) = Binding(key) { raw ->
-        val v = raw.trim().toIntOrNull()
-            ?: throw IllegalArgumentException("expected integer")
-        prop.convention(v)
-    }
-
-    private fun longBinding(key: String, prop: Property<Long>) = Binding(key) { raw ->
-        val v = raw.trim().toLongOrNull()
-            ?: throw IllegalArgumentException("expected long integer")
-        prop.convention(v)
-    }
-
-    private fun doubleBinding(key: String, prop: Property<Double>) = Binding(key) { raw ->
-        val v = raw.trim().toDoubleOrNull()
-            ?: throw IllegalArgumentException("expected decimal number")
-        prop.convention(v)
-    }
-
-    private fun <E : Enum<E>> enumBinding(
-        key: String,
-        prop: Property<E>,
-        type: Class<E>,
-    ) = Binding(key) { raw ->
-        val trimmed = raw.trim()
-        val match = type.enumConstants.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
-            ?: throw IllegalArgumentException(
-                "expected one of ${type.enumConstants.joinToString { it.name }} (case-insensitive)"
-            )
-        prop.convention(match)
-    }
-
-    /**
-     * Lenient boolean parse: accepts the canonical `true`/`false` plus
-     * common aliases users might reach for in a properties file.
-     * Returns null when the value is neither, so callers can build a
-     * specific error message.
-     */
-    private fun parseBooleanOrNull(raw: String?): Boolean? = when (raw?.trim()?.lowercase()) {
-        "true", "yes", "on", "1" -> true
-        "false", "no", "off", "0" -> false
-        else -> null
-    }
+    private fun parseBooleanOrNull(raw: String?): Boolean? = SettingDefinitions.parseBooleanOrNull(raw)
 }
