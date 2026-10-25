@@ -503,3 +503,7 @@ bugsee {
 For the full set of DSL options, see KDocs on `BugseePluginExtension`
 and the sub-extension classes (`BugseeNdkExtension`,
 `BugseeBuildInfoExtension`, `BugseeInstrumentationExtension`, etc.).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -323,8 +323,8 @@ publishing {
 
                 licenses {
                     license {
-                        name.set("Proprietary")
-                        url.set("https://bugsee.com/tos/")
+                        name.set("MIT License")
+                        url.set("https://opensource.org/licenses/MIT")
                     }
                 }
                 developers {
@@ -361,8 +361,8 @@ publishing {
 
                     licenses {
                         license {
-                            name.set("Proprietary")
-                            url.set("https://bugsee.com/tos/")
+                            name.set("MIT License")
+                            url.set("https://opensource.org/licenses/MIT")
                         }
                     }
                     developers {
