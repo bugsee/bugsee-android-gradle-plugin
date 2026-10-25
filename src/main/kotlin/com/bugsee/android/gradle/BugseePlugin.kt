@@ -237,6 +237,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // application module (bugsee.properties is shared by the whole build, so a name used by one
         // app module is not a typo). Library modules produce no application variants and are skipped.
         if (androidComponents is com.android.build.api.variant.ApplicationAndroidComponentsExtension) {
+            // Declared flavors and build types count even if `beforeVariants` disables every variant;
+            // recorded in afterEvaluate, which precedes every module's projectsEvaluated check.
+            project.afterEvaluate { recordDeclaredNames(project) }
             project.gradle.projectsEvaluated {
                 settingsResolver().warnUnmatchedNames(knownVariantNames(project), project.path)
             }
@@ -1454,10 +1457,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         return extras.get(key) as MutableSet<String>
     }
 
-    /** Variant, flavor and build-type names of every application variant, shared across modules. */
+    /** Names of every application variant, shared across modules. */
     private fun recordKnownVariantNames(project: Project, ctx: VariantContext) {
+        knownVariantNames(project) += ctx.lookupNames
+    }
+
+    private fun recordDeclaredNames(project: Project) {
         val names = knownVariantNames(project)
-        names += ctx.lookupNames
         val dsl = project.extensions.findByType(com.android.build.api.dsl.CommonExtension::class.java)
         dsl?.buildTypes?.mapTo(names) { it.name }
         dsl?.productFlavors?.mapTo(names) { it.name }
