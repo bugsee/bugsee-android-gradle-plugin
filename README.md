@@ -29,6 +29,13 @@ A problem occurred configuring project ':app'.
 `ProjectDependencyCompat` fixes this in 4.0.3 by resolving the dependency's
 project reflectively (commit `2066da5`).
 
+### Flutter
+
+Flutter apps need no workaround. Flutter's Gradle plugin writes into AGP's
+merged-assets directory from `copyFlutterAssets<Variant>`; when that task exists
+the plugin makes `injectBugsee<Variant>BuildId` depend on it, so Gradle task
+validation passes. Apps without Flutter are unaffected.
+
 ### Verified combinations
 
 Each combination below was built with plugin **4.0.7** as a minified release
