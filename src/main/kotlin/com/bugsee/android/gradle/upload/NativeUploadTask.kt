@@ -141,6 +141,13 @@ abstract class NativeUploadTask : DefaultTask() {
     @get:Optional
     abstract val preResolvedAppToken: Property<String>
 
+    // Set at registration when a placeholder app token was ignored while resolving (absent otherwise,
+    // so inputs of ordinary builds are unchanged). With no real token the task then logs an info skip
+    // line instead of the missing-token warnings.
+    @get:Input
+    @get:Optional
+    abstract val placeholderTokenSeen: Property<Boolean>
+
     /**
      * `res/` source files for the `@string/foo`-fallback path inside
      * `AppTokenResolver.resolveFromManifest`. Wired at registration
@@ -189,16 +196,24 @@ abstract class NativeUploadTask : DefaultTask() {
 
         if (isDebug) logger.warn("Bugsee: Upload native symbols task for variant ${variantName.get()}")
 
+        var placeholderSeen = placeholderTokenSeen.getOrElse(false)
         val appToken = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
             ?: AppTokenResolver.resolveFromPropertiesFile(
-                rootProjectDirectory.get().asFile, logger, isDebug
+                rootProjectDirectory.get().asFile, logger, isDebug,
+                onPlaceholder = { placeholderSeen = true },
             )
             ?: AppTokenResolver.resolveFromManifest(
-                manifest, stringResourceFiles.files, logger, isDebug
+                manifest, stringResourceFiles.files, logger, isDebug,
+                warnIfMissing = !placeholderSeen,
+                onPlaceholder = { placeholderSeen = true },
             )
 
         if (appToken == null) {
-            logger.warn("Bugsee: Could not resolve appToken. Skipping native upload.")
+            if (placeholderSeen) {
+                AppTokenResolver.logPlaceholderSkip(logger, "native")
+            } else {
+                logger.warn("Bugsee: Could not resolve appToken. Skipping native upload.")
+            }
             return
         }
 

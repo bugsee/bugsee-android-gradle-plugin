@@ -122,6 +122,88 @@ class PlaceholderTokenTest {
         assertTrue(logger.infos.none { it.contains("placeholder") })
     }
 
+    @Test
+    fun preferSettingsFile_filePlaceholderFallsThroughToRealDslToken() {
+        val global = newExtension()
+        global.preferSettingsFile.set(true)
+        global.appToken("real-dsl-token")
+        assertEquals("real-dsl-token", token(global, "app_token=$placeholder\n"))
+    }
+
+    @Test
+    fun placeholderVariantKeyDoesNotTriggerShadowWarning() {
+        val global = newExtension()
+        global.appToken("real-dsl-token")
+        assertEquals("real-dsl-token", token(global, "variant.staging.app_token=$placeholder\n"))
+        assertTrue(logger.warnings.isEmpty(), "unexpected warnings: ${logger.warnings}")
+    }
+
+    @Test
+    fun mixedCaseAndWhitespacePlaceholderIsAbsent() {
+        val global = newExtension()
+        global.appToken("  ${placeholder.uppercase()}  ")
+        assertNull(token(global))
+        assertTrue(AppTokenResolver.isPlaceholder("\t$placeholder "))
+        assertTrue(!AppTokenResolver.isPlaceholder("${placeholder}0"))
+    }
+
+    @Test
+    fun legacyReaderPlaceholderFlagsAndFallsThroughToManifest() {
+        File(tmp.root, "bugsee.properties").writeText("app_token=$placeholder\n")
+        var seen = false
+        assertNull(AppTokenResolver.resolveFromPropertiesFile(tmp.root, logger, false) { seen = true })
+        assertTrue(seen)
+        assertEquals(
+            "real-manifest-token",
+            AppTokenResolver.resolveFromManifest(manifest("real-manifest-token"), emptyList(), logger, debug = false),
+        )
+    }
+
+    @Test
+    fun manifestPlaceholderFlagsCallback() {
+        var seen = false
+        AppTokenResolver.resolveFromManifest(manifest(placeholder), emptyList(), logger, false, onPlaceholder = { seen = true })
+        assertTrue(seen)
+        assertTrue(logger.warnings.isEmpty(), "unexpected warnings: ${logger.warnings}")
+    }
+
+    @Test
+    fun warnIfMissingFalseMutesOnlyTheMissingMetaDataWarning() {
+        val noMeta = File(tmp.root, "AndroidManifest.xml").apply {
+            writeText("""<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p"><application/></manifest>""")
+        }
+        assertNull(AppTokenResolver.resolveFromManifest(noMeta, emptyList(), logger, false, warnIfMissing = false))
+        assertTrue(logger.warnings.isEmpty(), "unexpected warnings: ${logger.warnings}")
+        assertNull(AppTokenResolver.resolveFromManifest(noMeta, emptyList(), logger, false))
+        assertEquals(1, logger.warnings.size)
+    }
+
+    @Test
+    fun sawPlaceholderTellsPlaceholderApartFromNothing() {
+        assertTrue(!resolver(newExtension()).sawPlaceholder(ctx))
+        assertTrue(resolver(newExtension(), "app_token=$placeholder\n").sawPlaceholder(ctx))
+        assertTrue(resolver(newExtension(), "variant.staging.app_token=$placeholder\n").sawPlaceholder(ctx))
+        assertTrue(resolver(newExtension().apply { appToken(placeholder) }).sawPlaceholder(ctx))
+        assertTrue(resolver(newExtension().apply { variant("release") { it.appToken(placeholder) } }).sawPlaceholder(ctx))
+        assertTrue(!resolver(newExtension(), "app_token=real\n").sawPlaceholder(ctx))
+    }
+
+    @Test
+    fun placeholderInfoIsReportedOncePerSource() {
+        val global = newExtension()
+        global.appToken(placeholder)
+        val r = resolver(global, "app_token=$placeholder\n")
+        repeat(3) { r.appTokenFor(ctx, debug = false) }
+        assertEquals(2, logger.infos.count { it.contains("placeholder") }, "infos: ${logger.infos}")
+    }
+
+    @Test
+    fun taskSkipMessageIsInfoNotWarn() {
+        AppTokenResolver.logPlaceholderSkip(logger, "mapping")
+        assertTrue(logger.warnings.isEmpty())
+        assertTrue(logger.infos.single().contains("skipping mapping upload"))
+    }
+
     private fun manifest(tokenValue: String): File = File(tmp.root, "AndroidManifest.xml").apply {
         writeText(
             """<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p">

@@ -169,7 +169,7 @@ execution-time manifest fallback); the full chain is `SettingsResolver.appTokenF
 5. `com.bugsee.android.APP_TOKEN` meta-data in manifest (supports `@string/` references)
 
 The placeholder token `00000000-0000-4000-8000-000000000000` (`AppTokenResolver.PLACEHOLDER_TOKEN`) counts as
-absent at every step via `AppTokenResolver.isUsable` (info log, falls through), so upload tasks skip like a missing token.
+absent at every step via `AppTokenResolver.isUsable` (info log, falls through), so upload tasks skip like a missing token. When only a placeholder was seen (`SettingsResolver.sawPlaceholder` / task input `placeholderTokenSeen`), the tasks log one info skip line instead of the missing-token warnings.
 
 Lookup order inside a source: variant name, each product flavor (AGP dimension order),
 build type, then the root/global value; first match wins. With `preferSettingsFile` step 4
