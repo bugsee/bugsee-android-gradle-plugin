@@ -47,8 +47,10 @@ class FlutterAssetsOrderingTest {
         project.tasks.register("unrelated") { otherRealized = true }
         val inject = project.tasks.register("injectBugseeDebugBuildId")
         FlutterAssetsOrdering.wire(project, inject, "Debug")
-        assertEquals(false, flutterRealized)
-        deps(project, "injectBugseeDebugBuildId")
-        assertEquals(false, otherRealized)
+        assertEquals("wiring alone must stay lazy", false, flutterRealized)
+        val resolved = deps(project, "injectBugseeDebugBuildId")
+        assertEquals(setOf("copyFlutterAssetsDebug"), resolved)
+        assertTrue("dependency resolution realizes the Flutter task", flutterRealized)
+        assertEquals("unrelated tasks must stay unrealized", false, otherRealized)
     }
 }
