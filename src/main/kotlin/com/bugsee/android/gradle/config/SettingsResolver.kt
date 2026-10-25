@@ -57,6 +57,7 @@ internal class SettingsResolver(
     private val warnedShadowKeys = HashSet<String>()
     private val warnedMalformedKeys = HashSet<String>()
     private var warnedIgnoredExcludes = false
+    private val seenLookupNames = HashSet<String>()
     private var warnedRootTokenEmpty = false
 
     /**
@@ -93,10 +94,35 @@ internal class SettingsResolver(
      */
     fun effectiveFor(ctx: VariantContext): BugseePluginExtension {
         warnIgnoredVariantExcludes()
+        seenLookupNames += ctx.lookupNames
         val effective = objects.newInstance(BugseePluginExtension::class.java)
         for (def in SettingDefinitions.all) copyInto(effective, def, ctx)
         effective.instrumentation.excludes.set(global.instrumentation.excludes)
         return effective
+    }
+
+    /**
+     * Warns once per declared name (a `variant.<name>.*` file key or a `variant("<name>") { }` block)
+     * that matches no variant, product flavor or build type: it would otherwise be ignored silently
+     * and the build would fall back to the root/DSL value (e.g. the production token). Call after
+     * variant configuration; [declaredElsewhere] adds names known from the Android DSL (flavors and
+     * build types), so variants disabled through `beforeVariants` do not cause false positives.
+     * Names are case-sensitive, and a multi-dimension combination such as `freeStaging` is not a
+     * lookup name (use the full variant name or a single flavor).
+     */
+    fun warnUnmatchedNames(declaredElsewhere: Set<String>) {
+        val declared = LinkedHashSet<String>().apply {
+            addAll(global.variantBlocks.keys)
+            addAll(file.variants.keys)
+        }
+        for (name in declared) {
+            if (name in seenLookupNames || name in declaredElsewhere) continue
+            logger.warn(
+                "Bugsee: variant \"$name\" in your Bugsee settings matches no variant, product flavor " +
+                    "or build type of this module; it is ignored. Names are case-sensitive, and a " +
+                    "multi-dimension flavor combination must be written as the full variant name."
+            )
+        }
     }
 
     /** `instrumentation.excludes` is global-only; say so once if a `variant { }` block sets it. */

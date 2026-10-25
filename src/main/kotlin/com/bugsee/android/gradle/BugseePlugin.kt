@@ -233,6 +233,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return
         }
 
+        // After AGP has created the variants, flag per-variant names that matched nothing.
+        project.gradle.projectsEvaluated {
+            val dsl = project.extensions.findByType(com.android.build.api.dsl.CommonExtension::class.java)
+            val names = HashSet<String>()
+            dsl?.buildTypes?.mapTo(names) { it.name }
+            dsl?.productFlavors?.mapTo(names) { it.name }
+            settingsResolver().warnUnmatchedNames(names)
+        }
+
         androidComponents.onVariants { variant ->
             val globalDebug = settingsResolver().globalValue(DEBUG)
             val variantName = variant.name

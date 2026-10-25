@@ -443,6 +443,7 @@ Gradle log level:
 | Unknown `plugin.*` key | `info` | Forward-compat — `--info` to surface typos. |
 | Successful apply | `warn`, only if `plugin.debug=true` | Echoes each applied key/value when verbose mode is on. |
 | Unknown `variant.*` key | `info` | Same as unknown `plugin.*` keys. |
+| `variant.<name>.*` key or `variant("<name>")` block matching no variant, flavor or build type | `warn` | Otherwise silently ignored, so a typo or wrong case falls back to the root/DSL token. |
 | `variant.<name>.plugin.<key>` for a global-only setting | `warn` | Ignored; use the root `plugin.<key>`. |
 | `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
 | Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |

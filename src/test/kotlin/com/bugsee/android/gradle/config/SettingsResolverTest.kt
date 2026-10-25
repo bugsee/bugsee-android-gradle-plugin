@@ -610,6 +610,19 @@ class SettingsResolverTest {
         kotlin.test.assertEquals(1, hits.size)
     }
 
+    @Test
+    fun unmatchedDeclaredNamesWarnOnce() {
+        val global = newExtension()
+        global.variant("stagign") { it.debug.set(true) }
+        val r = resolver(global, file(variants = mapOf("Release" to mapOf("app_token" to "t"), "staging" to mapOf("app_token" to "t"))))
+        r.effectiveFor(stagingRelease)
+        r.warnUnmatchedNames(setOf("debug"))
+        val msgs = logger.warnings.filter { it.contains("matches no variant") }
+        kotlin.test.assertEquals(2, msgs.size, msgs.toString())
+        kotlin.test.assertTrue(msgs.any { it.contains("\"stagign\"") })
+        kotlin.test.assertTrue(msgs.any { it.contains("\"Release\"") })
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────
 
     private fun newExtension(): BugseePluginExtension =
