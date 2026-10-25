@@ -58,17 +58,23 @@ jobs:
       - name: Pre-create the Android user cache
         run: mkdir -p ~/.android/cache
 
+      - name: Build and test
+        run: bash -xe ./scripts/build.sh --full
+
       # The real-binary CLI contract test (CliUploaderRealBinaryTest) only runs
       # when BUGSEE_CLI_BIN is set, so without this it is skipped everywhere and
       # drifts from the CLI unnoticed (issue #14). Fetch the CLI version the plugin
       # itself pins (CliBinaryResolver.DEFAULT_VERSION) from the same mirror and
-      # with the same SHA-256 sidecar check the plugin performs (a mismatch fails
-      # the step), then run just that test class with it. BUGSEE_CLI_BIN is scoped
-      # to this step: the later full build keeps its CLI-less behaviour.
+      # with a SHA-256 sidecar check matching the plugin's own verification (it
+      # guards against corruption, not tampering: the sidecar shares the tarball's
+      # origin), then run just that test class with it. BUGSEE_CLI_BIN is scoped
+      # to this step. It runs after the main build, and still on its failure, so neither
+      # masks the other's result.
       - name: Real-binary bugsee-cli contract test
+        if: success() || failure()
         run: |
           set -euo pipefail
-          version=$(sed -n 's/.*DEFAULT_VERSION: String = "\([0-9][0-9.]*\)".*/\1/p' \
+          version=$(sed -n 's/.*DEFAULT_VERSION: String = "\([^"]*\)".*/\1/p' \
             src/main/kotlin/com/bugsee/android/gradle/upload/CliBinaryResolver.kt)
           [ -n "$version" ] || { echo "could not read DEFAULT_VERSION" >&2; exit 1; }
           name=bugsee-cli-x86_64-unknown-linux-gnu.tar.xz
@@ -82,9 +88,6 @@ jobs:
           tar -xf "$dir/$name" -C "$dir" --strip-components=1
           "$dir/bugsee-cli" --version
           BUGSEE_CLI_BIN="$dir/bugsee-cli" ./gradlew :test --tests '*CliUploaderRealBinaryTest*'
-
-      - name: Build and test
-        run: bash -xe ./scripts/build.sh --full
 
       # Only on failure, and kept briefly: the org's Actions artifact storage is
       # shared across every repo and capped, and a green run needs no reports.

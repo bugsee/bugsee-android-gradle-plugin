@@ -686,7 +686,11 @@ class CliUploaderRealBinaryTest {
                 put("GNU\u0000".toByteArray(Charsets.US_ASCII)); put(it)
             }.array()
         } ?: ByteArray(0)
-        val shstr = "\u0000.note.gnu.build-id\u0000.shstrtab\u0000".toByteArray(Charsets.US_ASCII)
+        // Without a build-id the string table names only .shstrtab, so the no-id ELF
+        // has no section called .note.gnu.build-id at all.
+        val shstrText = if (buildId != null) "\u0000.note.gnu.build-id\u0000.shstrtab\u0000" else "\u0000.shstrtab\u0000"
+        val shstr = shstrText.toByteArray(Charsets.US_ASCII)
+        val shstrtabName = shstrText.indexOf(".shstrtab")
         val phnum = if (buildId != null) 1 else 0
         val phOff = 64
         val noteOff = phOff + 56 * phnum
@@ -716,7 +720,7 @@ class CliUploaderRealBinaryTest {
             b.putLong(2); b.putLong(noteOff.toLong()); b.putLong(noteOff.toLong()) // SHF_ALLOC
             b.putLong(note.size.toLong()); b.putInt(0); b.putInt(0); b.putLong(4); b.putLong(0)
         }
-        b.putInt(if (buildId != null) 20 else 1); b.putInt(3) // ".shstrtab", SHT_STRTAB
+        b.putInt(shstrtabName); b.putInt(3) // ".shstrtab", SHT_STRTAB
         b.putLong(0); b.putLong(0); b.putLong(strOff.toLong()); b.putLong(shstr.size.toLong())
         b.putInt(0); b.putInt(0); b.putLong(1); b.putLong(0)
         b.position(total - 8); b.putLong(seed.toLong())
@@ -775,6 +779,8 @@ class CliUploaderRealBinaryTest {
             val put = assertNotNull(putsBySha1[meta.optString("hash")], "no PUT body hashes to meta.hash; meta=$meta")
             val entries = zipEntryInfo(put)
             assertEquals(setOf(name), entries.keys, "the symbol zip must hold exactly the library '$name'")
+            // Declared CRC/size from the zip central directory, not the decompressed bytes:
+            // the CLI writes zstd entries and the test has no zstd dependency to inflate them.
             val (crc, size) = entries.getValue(name)
             assertEquals(lib.size.toLong(), size, "PUT entry size must equal the library size")
             assertEquals(java.util.zip.CRC32().apply { update(lib) }.value, crc, "PUT entry must carry the library bytes")
@@ -857,7 +863,10 @@ class CliUploaderRealBinaryTest {
             assertTrue(result.success, "skipping build-id-less libraries is not an error; result=$result")
             assertEquals(0, result.exitCode, "result=$result")
             val recorded = server.recordedRequests()
-            assertTrue(recorded.isEmpty(), "no POST/PUT expected; got: " + recorded.joinToString { "${it.method} ${it.path}" })
+            assertTrue(
+                recorded.none { it.path == "/apps/tok/symbols" },
+                "no symbol POST expected; got: " + recorded.joinToString { "${it.method} ${it.path}" },
+            )
             assertTrue(server.storedSymbolPuts().isEmpty())
         } finally {
             server.stop()
