@@ -233,13 +233,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return
         }
 
-        // After AGP has created the variants, flag per-variant names that matched nothing.
-        project.gradle.projectsEvaluated {
-            val dsl = project.extensions.findByType(com.android.build.api.dsl.CommonExtension::class.java)
-            val names = HashSet<String>()
-            dsl?.buildTypes?.mapTo(names) { it.name }
-            dsl?.productFlavors?.mapTo(names) { it.name }
-            settingsResolver().warnUnmatchedNames(names)
+        // After AGP has created the variants, flag per-variant names that matched nothing in ANY
+        // application module (bugsee.properties is shared by the whole build, so a name used by one
+        // app module is not a typo). Library modules produce no application variants and are skipped.
+        if (androidComponents is com.android.build.api.variant.ApplicationAndroidComponentsExtension) {
+            project.gradle.projectsEvaluated {
+                settingsResolver().warnUnmatchedNames(knownVariantNames(project), project.path)
+            }
         }
 
         androidComponents.onVariants { variant ->
@@ -287,6 +287,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // This variant's resolved settings. Every variant-level read below goes
             // through `effective`; it does not carry app tokens (see resolveCcSafeInputs).
             val variantContext = variantContextOf(variant)
+            recordKnownVariantNames(project, variantContext)
             val effective = settingsResolver().effectiveFor(variantContext)
             val isDebug = effective.debug.get()
             if (isDebug) {
@@ -1444,6 +1445,23 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun consumerKotlinVersion(project: Project): String? = runCatching {
         project.plugins.withType(KotlinBasePlugin::class.java).firstOrNull()?.pluginVersion
     }.getOrNull()
+
+    private fun knownVariantNames(project: Project): MutableSet<String> {
+        val extras = project.rootProject.extensions.extraProperties
+        val key = "bugsee.knownVariantNames"
+        if (!extras.has(key)) extras.set(key, HashSet<String>())
+        @Suppress("UNCHECKED_CAST")
+        return extras.get(key) as MutableSet<String>
+    }
+
+    /** Variant, flavor and build-type names of every application variant, shared across modules. */
+    private fun recordKnownVariantNames(project: Project, ctx: VariantContext) {
+        val names = knownVariantNames(project)
+        names += ctx.lookupNames
+        val dsl = project.extensions.findByType(com.android.build.api.dsl.CommonExtension::class.java)
+        dsl?.buildTypes?.mapTo(names) { it.name }
+        dsl?.productFlavors?.mapTo(names) { it.name }
+    }
 
     /** A [org.gradle.api.logging.Logger] that drops every message. */
     private fun discardingLogger(): org.gradle.api.logging.Logger =

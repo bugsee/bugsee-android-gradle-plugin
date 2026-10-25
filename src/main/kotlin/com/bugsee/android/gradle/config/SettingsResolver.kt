@@ -105,12 +105,13 @@ internal class SettingsResolver(
      * Warns once per declared name (a `variant.<name>.*` file key or a `variant("<name>") { }` block)
      * that matches no variant, product flavor or build type: it would otherwise be ignored silently
      * and the build would fall back to the root/DSL value (e.g. the production token). Call after
-     * variant configuration; [declaredElsewhere] adds names known from the Android DSL (flavors and
-     * build types), so variants disabled through `beforeVariants` do not cause false positives.
+     * variant configuration; [declaredElsewhere] adds names known from other modules and the Android DSL (flavors
+     * and build types), so variants disabled through `beforeVariants` and names used by another
+     * application module do not cause false positives.
      * Names are case-sensitive, and a multi-dimension combination such as `freeStaging` is not a
      * lookup name (use the full variant name or a single flavor).
      */
-    fun warnUnmatchedNames(declaredElsewhere: Set<String>) {
+    fun warnUnmatchedNames(declaredElsewhere: Set<String>, modulePath: String = "") {
         val declared = LinkedHashSet<String>().apply {
             addAll(global.variantBlocks.keys)
             addAll(file.variants.keys)
@@ -119,7 +120,7 @@ internal class SettingsResolver(
             if (name in seenLookupNames || name in declaredElsewhere) continue
             logger.warn(
                 "Bugsee: variant \"$name\" in your Bugsee settings matches no variant, product flavor " +
-                    "or build type of this module; it is ignored. Names are case-sensitive, and a " +
+                    "or build type of any application module (checked from $modulePath); it is ignored. Names are case-sensitive, and a " +
                     "multi-dimension flavor combination must be written as the full variant name."
             )
         }
