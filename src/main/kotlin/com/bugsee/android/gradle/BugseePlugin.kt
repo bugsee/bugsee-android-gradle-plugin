@@ -22,6 +22,7 @@ import com.bugsee.android.gradle.manifest.ExtensionStripGate
 import com.bugsee.android.gradle.manifest.BugseeAssetInjectionTask
 import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
+import com.bugsee.android.gradle.manifest.FlutterAssetsOrdering
 import com.bugsee.android.gradle.upload.AppTokenResolver
 import com.bugsee.android.gradle.upload.BuildTimingService
 import com.bugsee.android.gradle.upload.BundleUploadTask
@@ -580,6 +581,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 BugseeAssetInjectionTask::outputAssetsDir,
             )
             .toTransform(SingleArtifact.ASSETS)
+
+        // Flutter apps: Flutter's copyFlutter*Assets also writes the merged
+        // assets dir without AGP's knowledge (issue #33). No-op otherwise.
+        FlutterAssetsOrdering.wire(
+            project,
+            assetTaskProvider,
+            capitalizedVariant,
+            project.extensions.getByType(BugseePluginExtension::class.java).assetsDependsOn,
+        )
 
         return resolveTaskProvider
     }

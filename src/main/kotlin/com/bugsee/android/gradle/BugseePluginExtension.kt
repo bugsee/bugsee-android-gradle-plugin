@@ -3,6 +3,7 @@ package com.bugsee.android.gradle
 import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import javax.inject.Inject
 
@@ -228,6 +229,33 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * Default: `true`
      */
     val sdkAutoLoad: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
+     * Extra tasks the build-id asset task must run after, by task name.
+     *
+     * The task that injects `bugsee_build_id.properties` transforms AGP's merged assets
+     * directory. Any other task that writes into that directory without AGP knowing makes
+     * Gradle validation fail ("uses this output of task ... without declaring an explicit
+     * or implicit dependency"). Flutter's `copyFlutterAssets<Variant>` is handled
+     * automatically; use this for a renamed Flutter task or another plugin that writes there.
+     * `<Variant>` in a name is replaced by the capitalized variant name:
+     *
+     * ```kotlin
+     * bugsee { assetsDependsOn("copyFlutterAssets<Variant>") }
+     * ```
+     *
+     * Names are looked up lazily, so tasks registered later are found. Not available in
+     * `bugsee.properties`.
+     *
+     * Default: empty
+     */
+    val assetsDependsOn: ListProperty<String> =
+        objects.listProperty(String::class.java).convention(emptyList())
+
+    /** Add [taskNames] to [assetsDependsOn]; see there for the `<Variant>` placeholder. */
+    fun assetsDependsOn(vararg taskNames: String) {
+        assetsDependsOn.addAll(taskNames.toList())
+    }
 
     /**
      * Build-info configuration block. Always-on by default; registers

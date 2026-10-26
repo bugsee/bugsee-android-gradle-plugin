@@ -29,6 +29,29 @@ A problem occurred configuring project ':app'.
 `ProjectDependencyCompat` fixes this in 4.0.3 by resolving the dependency's
 project reflectively (commit `2066da5`).
 
+### Flutter
+
+Flutter apps need no workaround. Flutter's Gradle plugin writes into AGP's
+merged-assets directory from `copyFlutterAssets<Variant>`; when that task exists
+the plugin makes `injectBugsee<Variant>BuildId` depend on it, so Gradle task
+validation passes. Apps without Flutter are unaffected.
+
+If a Flutter release renames that task, the build fails with "uses this output of
+task ... without declaring an explicit or implicit dependency". The plugin warns
+when Flutter is applied but finds no `copyFlutterAssets<Variant>` task for any
+variant. Until the plugin catches up, name the task yourself. `<Variant>` is
+replaced by the capitalized variant name; the same setting orders the injection
+after any other plugin that writes the merged assets:
+
+```kotlin
+bugsee {
+    assetsDependsOn("flutterCopyAssets<Variant>")
+}
+```
+
+A name that matches no task is reported with a warning and ignored. The setting
+is DSL-only (not available in `bugsee.properties`).
+
 ### Verified combinations
 
 Each combination below was built with plugin **4.0.7** as a minified release
