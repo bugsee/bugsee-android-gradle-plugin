@@ -68,6 +68,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     abstract val listenerRegistry: BuildEventsListenerRegistry
 
     override fun apply(project: Project) {
+        // First thing: a readable failure on an unsupported AGP/Gradle (issue #60), before any
+        // other Gradle/AGP API is touched. AGP not yet applied: the AGP half is skipped.
+        MinimumVersions.checkProject(project)
+
         val extension = project.extensions.create(PLUGIN_NAME, BugseePluginExtension::class.java)
         pluginExtension = extension
         appliedProject = project
@@ -228,13 +232,6 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 )
             }
         }
-
-        // Fail early with a readable message on an unsupported AGP/Gradle (issue #60), before any
-        // AGP API is touched. AGP absent: skipped, handled by the warning below.
-        MinimumVersions.check(
-            if (project.extensions.findByName("android") != null) MinimumVersions.detectAgpVersion() else null,
-            project.gradle.gradleVersion
-        )
 
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {

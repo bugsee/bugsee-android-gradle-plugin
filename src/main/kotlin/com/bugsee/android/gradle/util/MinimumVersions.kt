@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.util
 
 import org.gradle.api.GradleException
+import org.gradle.api.Project
 
 /**
  * Enforces the documented minimum AGP and Gradle versions (see README) with a readable message,
@@ -48,12 +49,31 @@ internal object MinimumVersions {
     private fun numericParts(v: String): List<Int> =
         Regex("""^\d+(\.\d+)*""").find(v.trim())?.value?.split('.')?.map { it.toInt() } ?: emptyList()
 
-    /** AGP's own version constant, read reflectively so it works on every AGP; null if unavailable. */
-    fun detectAgpVersion(): String? = try {
-        Class.forName("com.android.Version").getField("ANDROID_GRADLE_PLUGIN_VERSION").get(null) as? String
-    } catch (_: ReflectiveOperationException) {
-        null
-    } catch (_: LinkageError) {
-        null
+    /** Runs [check] for [project]'s Gradle and (if the android extension is present) AGP. */
+    fun checkProject(project: Project) {
+        val android = project.extensions.findByName("android")
+        val agp = if (android != null) detectAgpVersion(android.javaClass.classLoader) else null
+        if (android != null && agp == null) {
+            project.logger.info("Bugsee: could not determine the AGP version; skipping the AGP minimum check")
+        }
+        check(agp, project.gradle.gradleVersion)
+    }
+
+    private val VERSION_CLASSES = listOf("com.android.Version", "com.android.builder.model.Version")
+
+    /**
+     * AGP's own version constant, read reflectively so it works on every AGP (current and legacy
+     * class location). [loader] should be AGP's classloader; null if unavailable.
+     */
+    fun detectAgpVersion(loader: ClassLoader? = MinimumVersions::class.java.classLoader): String? {
+        for (name in VERSION_CLASSES) {
+            try {
+                val v = Class.forName(name, true, loader).getField("ANDROID_GRADLE_PLUGIN_VERSION").get(null) as? String
+                if (v != null) return v
+            } catch (_: ReflectiveOperationException) {
+            } catch (_: LinkageError) {
+            }
+        }
+        return null
     }
 }
