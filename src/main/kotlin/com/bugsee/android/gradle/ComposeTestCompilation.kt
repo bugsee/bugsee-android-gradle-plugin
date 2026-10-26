@@ -12,7 +12,7 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  * compiles as a PRODUCTION `smokeTest` compilation. So the classification uses the compilation's
  * real shape, in this order:
  *  1. a `com.android.test` module is test code throughout, whatever its compilations are called;
- *  2. the names AGP reserves (`test`, `androidTest`, `unitTest`, `testFixtures`, and the same
+ *  2. the names AGP reserves (`test`, `androidTest`, `testFixtures`, and the same
  *     followed by an upper-case variant part: `testDebug`, `androidTestFreeDebug`, plus
  *     `...TestFixtures`) can never be a production variant, so they classify on name alone;
  *  3. on an ANDROID compilation the AGP-generated suffixes `UnitTest`, `AndroidTest` and
@@ -32,7 +32,7 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  */
 internal object ComposeTestCompilation {
 
-    private val RESERVED = Regex("^(test|androidTest|unitTest)(\\p{Lu}.*)?$")
+    private val RESERVED = Regex("^(test|androidTest)(\\p{Lu}.*)?$")
     private val RESERVED_FIXTURES = Regex("^(testFixtures|.*TestFixtures)$")
     private val ANDROID_GENERATED_SUFFIX =
         Regex("^.*(UnitTest|AndroidTest|ScreenshotTest)$")

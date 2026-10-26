@@ -25,7 +25,7 @@ class ComposeTestCompilationTest {
 
     @Test
     fun `reserved test names are tests with or without an association`() {
-        listOf("test", "androidTest", "unitTest", "testFixtures").forEach {
+        listOf("test", "androidTest", "testFixtures").forEach {
             assertTrue(isTest(it), it)
         }
         listOf("testDebug", "testFreeRelease", "androidTestDebug", "androidTestFreeDebug",
@@ -78,6 +78,14 @@ class ComposeTestCompilationTest {
                 assertFalse(isTest(it, associated = true, androidJvm = true), it)
                 assertFalse(isTest(it, associated = true, androidJvm = false), it)
             }
+    }
+
+    /** AGP does not reserve `unitTest`: a build type or flavor so named is a production variant. */
+    @Test
+    fun `a build type or flavor named unitTest is production`() {
+        listOf("unitTest", "unitTestDebug", "freeUnitTest").forEach {
+            assertFalse(isTest(it, associated = false, androidJvm = true, siblings = setOf("freeDebug")), it)
+        }
     }
 
     /** A build type called `smokeTest` is a production compilation; only association can tell. */
