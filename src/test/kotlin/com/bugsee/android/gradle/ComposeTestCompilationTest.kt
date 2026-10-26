@@ -16,8 +16,12 @@ import kotlin.test.assertTrue
 /** Which Kotlin compilations the Compose tag/secure compiler plugin must stay out of (#56). */
 class ComposeTestCompilationTest {
 
-    private fun isTest(name: String, associated: Boolean = false, androidJvm: Boolean = false) =
-        ComposeTestCompilation.isTest(name, androidJvm) { associated }
+    private fun isTest(
+        name: String,
+        associated: Boolean = false,
+        androidJvm: Boolean = false,
+        siblings: Set<String>? = null,
+    ) = ComposeTestCompilation.isTest(name, androidJvm, { siblings }) { associated }
 
     @Test
     fun `reserved test names are tests with or without an association`() {
@@ -52,6 +56,21 @@ class ComposeTestCompilationTest {
         assertFalse(isTest("debugUnitTest", associated = false, androidJvm = false))
     }
 
+    /**
+     * AGP accepts a build type called `deviceTest`; with a flavor it compiles as the PRODUCTION
+     * `freeDeviceTest`, which only the sibling check tells apart from a generated test compilation.
+     */
+    @Test
+    fun `a production variant ending in a generated suffix is not a test`() {
+        val siblings = setOf("freeDebug", "freeRelease", "freeDeviceTest", "freeDebugUnitTest")
+        assertFalse(isTest("freeDeviceTest", androidJvm = true, siblings = siblings))
+        assertFalse(isTest("freeScreenshotTest", androidJvm = true, siblings = setOf("freeScreenshotTest")))
+        // ...while the generated compilations next to real variants are still tests, with no association.
+        assertTrue(isTest("freeDebugUnitTest", androidJvm = true, siblings = siblings))
+        assertTrue(isTest("freeDeviceTestUnitTest", androidJvm = true, siblings = siblings))
+        assertTrue(isTest("androidHostTest", androidJvm = true, siblings = setOf("androidMain", "androidHostTest")))
+    }
+
     @Test
     fun `production variants stay applicable`() {
         listOf("debug", "release", "staging", "freeDebug", "paidRelease", "main",
@@ -76,19 +95,31 @@ class ComposeTestCompilationTest {
         project: Project,
         name: String,
         platform: KotlinPlatformType = KotlinPlatformType.androidJvm,
+        siblings: List<String>? = null,
         allAssociated: () -> Set<Any> = { emptySet() },
         associateWith: () -> List<Any> = { emptyList() },
     ): KotlinCompilation<*> {
         val target = Proxy.newProxyInstance(
             javaClass.classLoader, arrayOf(KotlinTarget::class.java)
         ) { _, m, _ ->
-            if (m.name == "getProject") project else throw UnsupportedOperationException(m.name)
+            when (m.name) {
+                "hashCode" -> System.identityHashCode(this)
+                "equals" -> false
+                "getProject" -> project
+                "getCompilations" -> project.container(KotlinCompilation::class.java) { stub(project, it, platform) }.also { c ->
+                    (siblings ?: throw UnsupportedOperationException(m.name)).forEach { c.create(it) }
+                }
+                else -> throw UnsupportedOperationException(m.name)
+            }
         } as KotlinTarget
         return Proxy.newProxyInstance(
             javaClass.classLoader, arrayOf(KotlinCompilation::class.java)
         ) { _, m, _ ->
             when (m.name) {
-                "getCompilationName" -> name
+                "hashCode" -> System.identityHashCode(name)
+                "equals" -> false
+                "toString" -> "stub($name)"
+                "getCompilationName", "getName" -> name
                 "getPlatformType" -> platform
                 "getTarget" -> target
                 "getAllAssociatedCompilations" -> allAssociated()
@@ -106,6 +137,13 @@ class ComposeTestCompilationTest {
         assertFalse(ComposeTestCompilation.isTest(stub(project, "debug")))
         assertFalse(ComposeTestCompilation.isTest(stub(project, "smokeTest")))
         assertTrue(ComposeTestCompilation.isTest(stub(project, "smokeTest", allAssociated = { setOf(Any()) })))
+    }
+
+    @Test
+    fun `stub compilations are checked against their sibling compilations`() {
+        val names = listOf("freeDebug", "freeDeviceTest", "freeDebugUnitTest")
+        assertFalse(ComposeTestCompilation.isTest(stub(project, "freeDeviceTest", siblings = names)))
+        assertTrue(ComposeTestCompilation.isTest(stub(project, "freeDebugUnitTest", siblings = names)))
     }
 
     @Test

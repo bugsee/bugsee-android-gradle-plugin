@@ -17,8 +17,12 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  *     `...TestFixtures`) can never be a production variant, so they classify on name alone;
  *  3. on an ANDROID compilation the AGP-generated suffixes `UnitTest`, `AndroidTest`,
  *     `ScreenshotTest`, `HostTest` and `DeviceTest` (`debugUnitTest`, `freeReleaseAndroidTest`,
- *     `androidHostTest`) also classify on name alone. They cannot lean on associations: AGP 9's
- *     built-in Kotlin reports NO associated compilations for them, even at execution time;
+ *     `androidHostTest`) classify by name, confirmed by a SIBLING compilation: the name minus the
+ *     suffix must be another compilation of the same target (`debug`, or `androidMain` for
+ *     `android` + `HostTest`). They cannot lean on associations: AGP 9's built-in Kotlin reports NO
+ *     associated compilations for them, even at execution time. The sibling check is what keeps a
+ *     production `freeDeviceTest` (flavor `free`, build type `deviceTest`, which AGP accepts) from
+ *     being read as a test; if the sibling list cannot be read the name alone decides;
  *  4. any other `...Test` name (`jvmTest`, `androidInstrumentedTest`, an `integrationTest`
  *     compilation) must be ASSOCIATED with another compilation (`associateWith`), which is how KMP
  *     attaches a test compilation to the one it tests. A production `smokeTest` build type has no
@@ -42,15 +46,39 @@ internal object ComposeTestCompilation {
             androidJvm = runCatching {
                 compilation.platformType == KotlinPlatformType.androidJvm
             }.getOrDefault(false),
+            siblings = { siblingNames(compilation) },
             associated = { hasAssociation(compilation) }
         )
     }
 
-    internal fun isTest(name: String, androidJvm: Boolean, associated: () -> Boolean): Boolean {
+    /**
+     * @param siblings names of the target's compilations, or null when they cannot be read.
+     */
+    internal fun isTest(
+        name: String,
+        androidJvm: Boolean,
+        siblings: () -> Set<String>? = { null },
+        associated: () -> Boolean
+    ): Boolean {
         if (name == KotlinCompilation.TEST_COMPILATION_NAME) return true
         if (RESERVED.matches(name) || RESERVED_FIXTURES.matches(name)) return true
-        if (androidJvm && ANDROID_GENERATED_SUFFIX.matches(name)) return true
+        if (androidJvm) {
+            val suffix = ANDROID_GENERATED_SUFFIX.matchEntire(name)?.groupValues?.get(1)
+            if (suffix != null) {
+                val known = siblings() ?: return true
+                val prefix = name.removeSuffix(suffix)
+                if (prefix.isNotEmpty() && (prefix in known || prefix + "Main" in known)) return true
+            }
+        }
         return TEST_SUFFIX.matches(name) && associated()
+    }
+
+    private fun siblingNames(compilation: KotlinCompilation<*>): Set<String>? = try {
+        compilation.target.compilations.map { it.compilationName }.toSet()
+    } catch (_: Exception) {
+        null
+    } catch (_: LinkageError) {
+        null
     }
 
     private fun isAndroidTestModule(compilation: KotlinCompilation<*>): Boolean = try {
