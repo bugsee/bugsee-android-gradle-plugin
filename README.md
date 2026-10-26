@@ -187,6 +187,7 @@ dotted-path form as the DSL field names.
 | Key | Type | Default |
 |---|---|---|
 | `plugin.ndk.enabled` | Boolean | `false` |
+| `plugin.ndk.allBuildTypes` | Boolean | `false` |
 | `plugin.ndk.forceDebugSymbolsUpload` | Boolean | `false` |
 | `plugin.ndk.useMergedNativeLibs` | Boolean | `true` |
 
@@ -199,6 +200,14 @@ Unchanged prebuilt libraries are deduplicated server-side. Set
 A library that an earlier release uploaded only as SYMBOL_TABLE (function names)
 is upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+); the server
 never replaces debug info with a poorer file, so no `forceDebugSymbolsUpload` is needed.
+
+The upload task is registered only for release-like (non-debuggable) variants, like
+`buildInfo`; set `plugin.ndk.allBuildTypes=true` to include debug variants. (The runtime
+crash handler is added for every variant regardless.) After a successful upload of the
+unstripped-libraries directory the plugin records a digest of the library names, sizes and
+contents in `<root>/.gradle/bugsee/native-symbol-cache.json` (keyed by token, variant and
+endpoint); a later build with identical libraries skips the CLI run. Failed uploads are not
+recorded and are retried; `forceDebugSymbolsUpload` bypasses the check.
 
 ### Leak detection
 

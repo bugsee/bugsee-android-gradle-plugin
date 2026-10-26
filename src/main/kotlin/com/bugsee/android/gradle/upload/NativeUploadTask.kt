@@ -269,6 +269,15 @@ abstract class NativeUploadTask : DefaultTask() {
         ) {
             val libsDir = findMergedNativeLibs(mergedNativeLibsDir.asFile.orNull)
             if (libsDir != null) {
+                // Cheap local "already uploaded" marker: a digest of the tree's file names, sizes
+                // and content. Only a successful CLI run records it, so a failed upload is retried;
+                // `force` bypasses the check (but still records on success).
+                val dirKey = nativeLibsCacheKey(appToken, variantName.get(), endpoint.get())
+                val dirDigest = nativeLibsDigest(libsDir)
+                if (!skipCache && SymbolHashCache.isCached(cacheFile, dirKey, dirDigest)) {
+                    if (isDebug) logger.warn("Bugsee: Native libraries unchanged (digest=$dirDigest). Skipping upload.")
+                    return
+                }
                 if (isDebug) logger.warn("Bugsee: Uploading unstripped native libraries from ${libsDir.path}")
                 val result = CliUploader.uploadElf(
                     execOps = execOps,
@@ -283,6 +292,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     debug = isDebug,
                     force = skipCache,
                 )
+                if (result.success) SymbolHashCache.put(cacheFile, dirKey, dirDigest)
                 // Success, or a substantive failure already logged (token / network /
                 // server: the zip path would hit the same error). Failures specific
                 // to the directory input continue to the AGP-produced sources:
@@ -468,6 +478,37 @@ abstract class NativeUploadTask : DefaultTask() {
 internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
     "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-force-v1"
 
+/**
+ * Key into [SymbolHashCache] for the unstripped-libraries directory upload. Unlike the
+ * zip key it also carries the endpoint: the digest says what was sent, not where, and a
+ * token can be used against several backends. The `elf-dir-v1` generation keeps these
+ * entries apart from the zip ones (a digest and a zip hash never compare).
+ */
+internal fun nativeLibsCacheKey(appToken: String, variantName: String, endpoint: String): String =
+    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-dir-v1:" +
+        HashUtils.sha1Hex(endpoint)
+
+/**
+ * Digest of the libraries the CLI would pick up under [dir] (`.so`, `.so.dbg`, `.so.sym`):
+ * relative path, size and SHA-1 content hash of each, in path order. Content, not mtime,
+ * so a rebuild producing identical libraries still hits the cache and any changed byte misses.
+ */
+internal fun nativeLibsDigest(dir: File): String {
+    val root = dir.toPath()
+    val lines = dir.walkTopDown()
+        .filter { it.isFile && isNativeLibraryName(it.name) }
+        .map { f ->
+            val rel = root.relativize(f.toPath()).joinToString("/")
+            "$rel\u0000${f.length()}\u0000${HashUtils.sha1Hex(f)}"
+        }
+        .sorted()
+        .toList()
+    return HashUtils.sha1Hex(lines.joinToString("\n"))
+}
+
+private fun isNativeLibraryName(name: String) =
+    name.endsWith(".so") || name.endsWith(".so.dbg") || name.endsWith(".so.sym")
+
 /** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
 internal fun containsFullDebugSymbols(zip: File): Boolean = try {
     ZipFile(zip).use { z -> z.entries().asSequence().any { it.name.endsWith(".so.dbg") } }
@@ -488,8 +529,6 @@ private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
  */
 internal fun findMergedNativeLibs(dir: File?): File? {
     if (dir == null || !dir.isDirectory) return null
-    val hasLibs = dir.walkTopDown().any { f ->
-        f.isFile && (f.name.endsWith(".so") || f.name.endsWith(".so.dbg") || f.name.endsWith(".so.sym"))
-    }
+    val hasLibs = dir.walkTopDown().any { f -> f.isFile && isNativeLibraryName(f.name) }
     return dir.takeIf { hasLibs }
 }

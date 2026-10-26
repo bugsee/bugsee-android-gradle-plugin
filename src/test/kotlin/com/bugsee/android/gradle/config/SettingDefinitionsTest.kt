@@ -15,7 +15,7 @@ class SettingDefinitionsTest {
     private val expectedKeys = listOf(
         "endpoint", "cliPath", "cliVersion", "cliAutoUpdate", "uploader", "debug",
         "feedback", "optimizeExtensionsLoading", "sdkAutoLoad",
-        "ndk.enabled", "ndk.forceDebugSymbolsUpload", "ndk.useMergedNativeLibs",
+        "ndk.enabled", "ndk.allBuildTypes", "ndk.forceDebugSymbolsUpload", "ndk.useMergedNativeLibs",
         "leak.enabled",
         "buildInfo.enabled", "buildInfo.allBuildTypes",
         "buildInfo.sizeAnalysis.enabled", "buildInfo.sizeAnalysis.buildConfiguration",

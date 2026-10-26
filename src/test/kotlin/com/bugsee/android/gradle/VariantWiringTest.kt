@@ -90,6 +90,31 @@ class VariantWiringTest {
     }
 
     @Test
+    fun nativeUploadSkipsDebuggableVariantsUnlessAllBuildTypes() {
+        val h = Harness("plugin.ndk.enabled=true\n")
+        h.runVariant("debug", buildType = "debug")
+        h.runVariant("release")
+        assertNull(h.nativeTask("Debug"), "debug variant: no native upload by default")
+        assertNotNull(h.nativeTask("Release"))
+    }
+
+    @Test
+    fun nativeUploadAllBuildTypesOptsDebugIn() {
+        val h = Harness("plugin.ndk.enabled=true\nplugin.ndk.allBuildTypes=true\n")
+        h.runVariant("debug", buildType = "debug")
+        assertNotNull(h.nativeTask("Debug"))
+    }
+
+    @Test
+    fun nativeUploadAllBuildTypesIsPerVariant() {
+        val h = Harness("plugin.ndk.enabled=true\nvariant.staging.plugin.ndk.allBuildTypes=true\n")
+        h.runVariant("stagingDebug", flavors = listOf("env" to "staging"), buildType = "debug")
+        h.runVariant("productionDebug", flavors = listOf("env" to "production"), buildType = "debug")
+        assertNotNull(h.nativeTask("StagingDebug"))
+        assertNull(h.nativeTask("ProductionDebug"))
+    }
+
+    @Test
     fun noVariantInput_taskInputsMatchGlobalExtension() {
         val h = Harness(
             "app_token=root-token\nplugin.ndk.enabled=true\nplugin.ndk.useMergedNativeLibs=false\n",

@@ -384,6 +384,7 @@ class PluginPropertiesApplierTest {
             "plugin.sdkAutoLoad=false",
             // ndk
             "plugin.ndk.enabled=true",
+            "plugin.ndk.allBuildTypes=true",
             "plugin.ndk.forceDebugSymbolsUpload=true",
             "plugin.ndk.useMergedNativeLibs=false",
             // leak
@@ -433,6 +434,7 @@ class PluginPropertiesApplierTest {
         assertEquals(false, ext.sdkAutoLoad.get())
         // ndk
         assertEquals(true, ext.ndk.enabled.get())
+        assertEquals(true, ext.ndk.allBuildTypes.get())
         assertEquals(true, ext.ndk.forceDebugSymbolsUpload.get())
         assertEquals(false, ext.ndk.useMergedNativeLibs.get())
         // leak
