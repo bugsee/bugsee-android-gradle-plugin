@@ -28,10 +28,10 @@ class ProxyEnvTest {
 
     @Test fun `nonProxyHosts converts to NO_PROXY`() {
         val out = proxyEnvFromSystemProperties(
-            mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|192.168.1.*|*suffix.example|foo*|*corp*|*|internal"),
+            mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|192.168.1.*|*suffix.example|foo*|*corp*|[fd00::5]|*|internal"),
             emptyMap(),
         )
-        assertEquals(mapOf("NO_PROXY" to "localhost,.corp.example,10.0.0.0/8,192.168.1.0/24,suffix.example,*,internal,localhost,127.0.0.0/8,::1,0.0.0.0,::"), out)
+        assertEquals(mapOf("NO_PROXY" to "localhost,.corp.example,10.0.0.0/8,192.168.1.0/24,suffix.example,fd00::5,*,internal,localhost,127.0.0.0/8,::1,0.0.0.0,::"), out)
     }
 
     @Test fun `variables already in the environment are not overridden`() {

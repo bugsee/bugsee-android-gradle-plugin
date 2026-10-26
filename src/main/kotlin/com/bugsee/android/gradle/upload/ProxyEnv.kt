@@ -82,6 +82,7 @@ private fun nonProxyEntryToNoProxy(p: String): String? = when {
         }
     }
     p.endsWith("*") -> null
+    p.length > 2 && p.startsWith("[") && p.endsWith("]") -> p.substring(1, p.length - 1)
     else -> p
 }
 
