@@ -368,6 +368,8 @@ class VariantWiringTest {
         assertTrue(BugseePlugin.isBugseeSdkGroup("com.bugsee.testfixture"))
         // A customer's `:library` / `:compose` module has its own group and must still warn.
         assertTrue(!BugseePlugin.isBugseeSdkGroup(""))
+        assertTrue(!BugseePlugin.isBugseeSdkGroup("com.bugseeapp"))
+        assertTrue(!BugseePlugin.isBugseeSdkGroup("com.bugsee-labs.app"))
         assertTrue(!BugseePlugin.isBugseeSdkGroup("com.customer.app"))
     }
 

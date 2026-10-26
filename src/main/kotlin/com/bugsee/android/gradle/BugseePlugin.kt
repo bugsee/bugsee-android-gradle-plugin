@@ -1921,7 +1921,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "cronet"
         )
 
-        /** True for Bugsee's own SDK subprojects (they publish under `com.bugsee`). */
-        internal fun isBugseeSdkGroup(group: String): Boolean = group.startsWith("com.bugsee")
+        /** True for Bugsee's own SDK subprojects: group `com.bugsee` or a `com.bugsee.` subgroup (not `com.bugseeapp`). */
+        internal fun isBugseeSdkGroup(group: String): Boolean = group == "com.bugsee" || group.startsWith("com.bugsee.")
     }
 }
