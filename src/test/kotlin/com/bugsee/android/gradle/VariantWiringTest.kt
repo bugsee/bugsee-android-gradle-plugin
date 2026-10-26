@@ -363,10 +363,12 @@ class VariantWiringTest {
     }
 
     @Test
-    fun bugseeInternalModulesAreExemptFromLibraryWarning() {
-        assertTrue(BugseePlugin.isBugseeInternalModule("library"))
-        assertTrue(BugseePlugin.isBugseeInternalModule("okhttp"))
-        assertTrue(!BugseePlugin.isBugseeInternalModule("lib"))
+    fun libraryWarningExemptionIsByBugseeGroupNotByModuleName() {
+        assertTrue(BugseePlugin.isBugseeSdkGroup("com.bugsee"))
+        assertTrue(BugseePlugin.isBugseeSdkGroup("com.bugsee.testfixture"))
+        // A customer's `:library` / `:compose` module has its own group and must still warn.
+        assertTrue(!BugseePlugin.isBugseeSdkGroup(""))
+        assertTrue(!BugseePlugin.isBugseeSdkGroup("com.customer.app"))
     }
 
     @Test

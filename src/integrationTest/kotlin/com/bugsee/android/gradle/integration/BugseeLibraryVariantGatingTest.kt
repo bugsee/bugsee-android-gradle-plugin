@@ -154,7 +154,7 @@ class BugseeLibraryVariantGatingTest {
         // variants, so a per-variant warning would print twice.
         val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-warn"))
 
-        val output = runTasks(fixture.projectDir, ":lib:tasks").output
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
 
         val expected = "apply the plugin to the application module (in a convention plugin"
         assertEquals(
@@ -169,12 +169,25 @@ class BugseeLibraryVariantGatingTest {
     fun library_module_warns_even_when_every_variant_is_disabled() {
         val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-warn-novariants"))
 
-        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureDisableAllVariants=true").output
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureDisableAllVariants=true", "-PbugseeFixtureGroup=com.customer.lib").output
 
         assertEquals(
             "expected exactly one library-module warning with all variants disabled. Output:\n$output",
             1,
             Regex(Regex.escape("Bugsee: :lib is a library module.")).findAll(output).count(),
+        )
+    }
+
+    @Test
+    fun bugsee_sdk_group_library_is_exempt_from_the_warning() {
+        // Default fixture group is com.bugsee.testfixture, i.e. one of Bugsee's own SDK modules.
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-sdk-group"))
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks").output
+
+        assertFalse(
+            "Bugsee SDK-group libraries must not get the warning. Output:\n$output",
+            output.contains("is a library module."),
         )
     }
 

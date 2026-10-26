@@ -6,7 +6,8 @@ plugins {
 
 // Mirror the root group so the auto-install short-circuit treats
 // this as a Bugsee internal.
-group = "com.bugsee.testfixture"
+// Tests of the library-module warning override it with a customer-like group.
+group = project.findProperty("bugseeFixtureGroup")?.toString() ?: "com.bugsee.testfixture"
 
 android {
     namespace = "com.example.libfixture"

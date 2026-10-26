@@ -291,12 +291,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // has debug + release) and independent of `onVariants`, so it also fires when `beforeVariants`
         // disables every variant. The plugin skips library variants below, so without it the misapplied
         // plugin is silent unless `debug=true`.
-        // Bugsee's own SDK modules (:library, :ndk, ...) are libraries on purpose; same name-only
-        // exemption as the auto-add guard above (`group` may not be set yet at apply() time).
-        if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension &&
-            !isBugseeInternalModule(project.name)
-        ) {
-            project.logger.warn(libraryModuleMessage(project.path, project == project.rootProject, project.name))
+        // Bugsee's own SDK modules are libraries on purpose and are exempt. Identified by group only, never
+        // by bare module name: `:library` / `:compose` / `:okhttp` are common names in customer builds.
+        // Evaluated in afterEvaluate because `group` is often assigned after the plugin is applied.
+        if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension) {
+            project.afterEvaluate {
+                if (!isBugseeSdkGroup(project.group?.toString().orEmpty())) {
+                    project.logger.warn(
+                        libraryModuleMessage(project.path, project == project.rootProject, project.name)
+                    )
+                }
+            }
         }
 
         androidComponents.onVariants { variant ->
@@ -1916,6 +1921,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "cronet"
         )
 
-        internal fun isBugseeInternalModule(name: String): Boolean = name in BUGSEE_INTERNAL_MODULE_NAMES
+        /** True for Bugsee's own SDK subprojects (they publish under `com.bugsee`). */
+        internal fun isBugseeSdkGroup(group: String): Boolean = group.startsWith("com.bugsee")
     }
 }
