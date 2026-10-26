@@ -378,7 +378,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 // is going to auto-add the core SDK: at this point that
                 // dependency is still a pending `withDependencies` addition and
                 // is therefore invisible to DependencyDetector's declared-deps scan.
-                val coreSdkAutoLoad = settingsResolver().globalValue(SDK_AUTO_LOAD) && !isCoreSdkPresent(project)
+                val sdkAutoLoadOn = settingsResolver().globalValue(SDK_AUTO_LOAD)
+                val coreSdkAutoLoad = sdkAutoLoadOn && !isCoreSdkPresent(project)
+                // With auto-load off nothing else supplies the SDK: if the module's own
+                // dependencies do not declare it, SDK-dependent instrumentation is skipped.
+                if (!sdkAutoLoadOn && !isCoreSdkPresent(project)) {
+                    warnIfProjectDependenciesNotInspected(
+                        project, "the core Bugsee SDK was not found (and sdkAutoLoad is off, so it is not added)"
+                    )
+                }
                 val registrar = InstrumentationRegistrar(
                     project, project.logger, isDebug, configResolver,
                     effective.instrumentation.excludes.getOrElse(emptySet()),
@@ -1361,13 +1369,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * Gradle's conflict resolver silently override the user's pin.
      */
     private fun isCoreSdkPresent(project: Project): Boolean {
-        val present = project.configurations.any { config ->
+        return project.configurations.any { config ->
             config.dependencies.any { dep ->
                 isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep)
             }
         }
-        if (!present) warnIfProjectDependenciesNotInspected(project, "the core Bugsee SDK was not found")
-        return present
     }
 
     private fun isCoreSdkExternal(dep: Dependency): Boolean {

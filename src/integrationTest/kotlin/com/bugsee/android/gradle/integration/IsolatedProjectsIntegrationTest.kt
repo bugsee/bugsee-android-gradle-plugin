@@ -57,7 +57,7 @@ class IsolatedProjectsIntegrationTest {
         // parseable report has problem entries. None found means the report format changed.
         assertTrue(
             "configuration-cache report has no problem entries; the parser below is out of date",
-            Regex("\"problem\":\\[").containsMatchIn(report!!.readText()),
+            Regex("\"problem\":\\[\\s*[^\\]\\s]").containsMatchIn(report!!.readText()),
         )
         val ownedByBugsee = Regex("com\\.bugsee\\.android\\.gradle'\"\\}\\],\"problem\":\\[(.*?)\\]")
             .findAll(report!!.readText())

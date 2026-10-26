@@ -72,10 +72,11 @@ Two behaviours differ when the mode is on; with it off nothing changes:
   With it, only the module's own dependencies are seen. If `com.bugsee:bugsee-android`
   is declared only in a library module (or the SDK itself is a source project
   dependency), the application module does not see it: instrumentations that need
-  the SDK are skipped, and the SDK may be auto-added a second time. The plugin logs
-  a warning once per module when this can be the cause. Declare
-  `com.bugsee:bugsee-android` directly in the application module, or set
-  `bugsee { sdkAutoLoad.set(false) }` and the per-feature switches.
+  the SDK are skipped when `sdkAutoLoad` is off, and with `sdkAutoLoad` on the SDK
+  may be auto-added a second time (Gradle's conflict resolution picks one version).
+  With `sdkAutoLoad` off the plugin logs a warning once per module when the SDK is
+  not found in the module itself. Declare `com.bugsee:bugsee-android` directly in
+  the application module.
 
 ### Verified combinations
 

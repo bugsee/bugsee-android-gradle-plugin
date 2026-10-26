@@ -78,9 +78,9 @@ internal fun warnIfProjectDependenciesNotInspected(project: Project, what: Strin
     if (!com.bugsee.android.gradle.BugseeBuildState.claim(project, "bugsee.isolatedProjectsSkip:${project.path}")) return
     project.logger.warn(
         "Bugsee: Isolated Projects is enabled, so the plugin does not inspect other modules, and " +
-            "$what in ${project.displayName} itself. If the Bugsee SDK is declared only in a module " +
-            "this one depends on (project(\":...\")), declare com.bugsee:bugsee-android directly in " +
-            "this module (or the instrumentation is skipped and the SDK may be added a second time). " +
+            "$what in ${project.displayName} itself, so SDK-dependent instrumentation is skipped. " +
+            "If the Bugsee SDK is declared only in a module this one depends on (project(\":...\")), " +
+            "declare com.bugsee:bugsee-android directly in this module. " +
             "See the README section on Isolated Projects."
     )
 }
