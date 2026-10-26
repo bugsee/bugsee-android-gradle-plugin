@@ -32,7 +32,17 @@ internal data class CliUploadResult(
      * touching customer code.
      */
     val fallbackReason: String?,
-)
+) {
+    /**
+     * Fallback gate for the build-registration path (`upload build`). Unlike
+     * symbol uploads (idempotent: duplicate 16004 is success), a second
+     * registration is not known to be safe, so a signal exit (> 128) — where the
+     * CLI DID run and may have already registered the build before being killed —
+     * must not trigger a retry. Every other fallback case is unchanged.
+     */
+    val shouldFallbackForBuildRegistration: Boolean
+        get() = shouldFallback && !CliUploader.killedBySignal(exitCode)
+}
 
 /**
  * Drives `bugsee-cli debug-files upload` invocations for the symbol types
@@ -597,6 +607,8 @@ internal object CliUploader {
      *
      * Visible for testing.
      */
+    internal fun killedBySignal(exitCode: Int): Boolean = exitCode > EXIT_SIGNAL_BASE
+
     internal fun fallbackReason(exitCode: Int): String = when {
         exitCode < 0 -> "exit-0x${Integer.toHexString(exitCode).uppercase()}-not-runnable"
         exitCode > EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"

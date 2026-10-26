@@ -668,6 +668,24 @@ class CliUploaderTest {
         assertEquals("exit-0xFFFFFFFF-not-runnable", CliUploader.fallbackReason(-1))
     }
 
+    @Test fun `signal exit falls back for symbols but not for build registration`() {
+        val r = runUploadMapping(FakeExec(cliExitValue = 137), executableCliStub())
+        assertTrue(r.shouldFallback, "symbols are idempotent: fall back")
+        assertFalse(r.shouldFallbackForBuildRegistration, "build registration state unknown: no second attempt")
+    }
+
+    @Test fun `not-runnable exits fall back for both symbols and build registration`() {
+        for (code in listOf(126, 127, 128, -1, -1073741819)) {
+            val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertTrue(r.shouldFallback, "exit $code symbols")
+            assertTrue(r.shouldFallbackForBuildRegistration, "exit $code build registration")
+        }
+        for (code in listOf(1, 2)) {
+            val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertTrue(r.shouldFallbackForBuildRegistration, "structural exit $code keeps build fallback")
+        }
+    }
+
     @Test fun `verifyAndExec maps exit 3 to no-fallback failure`() {
         val result = runUploadMapping(FakeExec(cliExitValue = 3), executableCliStub())
         assertFalse(result.success)
