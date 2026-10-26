@@ -84,7 +84,7 @@ class FlutterAssetsOrderingE2ETest {
     }
 
     @Test
-    fun unknown_assetsDependsOn_name_warns_and_a_valid_setup_is_quiet() {
+    fun unknown_assetsDependsOn_name_warns_and_a_valid_flutter_setup_is_quiet() {
         val bad = FixtureProject.materialize("app-startup-tracing", temp.newFolder("typo"))
         val badResult = bad.build(tier = "STANDARD", "-PbugseeFixtureAssetsDependsOn=typo<Variant>")
         assertTrue(
@@ -93,10 +93,24 @@ class FlutterAssetsOrderingE2ETest {
         )
 
         val ok = FixtureProject.materialize("app-startup-tracing", temp.newFolder("quiet"))
-        val okResult = ok.build(tier = "STANDARD", "-PbugseeFixtureFakeFlutter=true")
+        val okResult = ok.build(
+            tier = "STANDARD",
+            "-PbugseeFixtureFlutterPluginStandIn=true",
+            "-PbugseeFixtureFakeFlutter=true",
+        )
         assertTrue(
-            "no Flutter-ordering warning when the task exists",
+            "no Flutter-ordering warning when Flutter is applied and its task exists",
             !okResult.output.contains("assetsDependsOn"),
+        )
+    }
+
+    @Test
+    fun flutter_applied_without_its_copy_task_warns() {
+        val fixture = FixtureProject.materialize("app-startup-tracing", temp.newFolder("missing"))
+        val result = fixture.build(tier = "STANDARD", "-PbugseeFixtureFlutterPluginStandIn=true")
+        assertTrue(
+            "rename warning must appear when Flutter is applied but no copy task exists",
+            result.output.contains("no copyFlutterAssets<Variant> task was found"),
         )
     }
 }

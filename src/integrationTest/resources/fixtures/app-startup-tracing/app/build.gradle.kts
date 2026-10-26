@@ -143,6 +143,15 @@ bugsee {
     }
 }
 
+// Opt-in: applies a plugin class named `FlutterPlugin`, which is how the Bugsee plugin recognises
+// Flutter's Gradle plugin, so the "Flutter applied but its copy task is missing" warning can be exercised.
+if (project.findProperty("bugseeFixtureFlutterPluginStandIn")?.toString() == "true") {
+    class FlutterPlugin : Plugin<Project> {
+        override fun apply(target: Project) = Unit
+    }
+    apply<FlutterPlugin>()
+}
+
 // Opt-in: simulates Flutter's Gradle plugin, whose `copyFlutterAssets<Variant>`
 // task writes into AGP's merged-assets directory without AGP knowing
 // (issue #33). Off by default so other tests are unaffected.
