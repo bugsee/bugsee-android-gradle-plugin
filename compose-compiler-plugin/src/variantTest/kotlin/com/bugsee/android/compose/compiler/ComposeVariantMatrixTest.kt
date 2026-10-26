@@ -102,7 +102,12 @@ class ComposeVariantMatrixTest {
         }
     }
 
-    /** The variant that claims [kotlin]'s line, per the mapping in the README, or null for an unclaimed line. */
+    /**
+     * The variant that claims [kotlin]'s line, or null for an unclaimed line. This mirrors the
+     * plugin's own Kotlin-line -> artifact mapping,
+     * `ComposeKotlinCompatibility.artifactIdFor` (root project, `ComposeKotlinCompatibility.kt`);
+     * keep the two in step, since the module cannot depend on the root plugin.
+     */
     private fun variantForLine(kotlin: String): String? {
         val parts = kotlin.split(".", "-")
         val major = parts.getOrNull(0)?.toIntOrNull() ?: return null

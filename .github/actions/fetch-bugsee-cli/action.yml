@@ -1,0 +1,34 @@
+name: Fetch bugsee-cli
+description: >
+  Downloads the bugsee-cli release the plugin itself pins (CliBinaryResolver.DEFAULT_VERSION) from
+  the same mirror, verifies the SHA-256 sidecar the way the plugin does (guards against corruption,
+  not tampering: the sidecar shares the tarball's origin) and outputs the binary path, to be passed
+  to the tests as BUGSEE_CLI_BIN. Linux x86_64 only. The single place that knows the CLI version and
+  URL layout, so the jobs that need the binary cannot drift apart.
+
+outputs:
+  bin:
+    description: Absolute path of the extracted bugsee-cli binary.
+    value: ${{ steps.fetch.outputs.bin }}
+
+runs:
+  using: composite
+  steps:
+    - id: fetch
+      shell: bash
+      run: |
+        set -euo pipefail
+        version=$(sed -n 's/.*DEFAULT_VERSION: String = "\([^"]*\)".*/\1/p' \
+          src/main/kotlin/com/bugsee/android/gradle/upload/CliBinaryResolver.kt)
+        [ -n "$version" ] || { echo "could not read DEFAULT_VERSION" >&2; exit 1; }
+        name=bugsee-cli-x86_64-unknown-linux-gnu.tar.xz
+        dir="$RUNNER_TEMP/bugsee-cli"
+        mkdir -p "$dir"
+        base="https://download.bugsee.com/cli/v$version"
+        curl -fsSL --retry 3 -o "$dir/$name" "$base/$name"
+        curl -fsSL --retry 3 -o "$dir/$name.sha256" "$base/$name.sha256"
+        expected=$(cut -d' ' -f1 "$dir/$name.sha256")
+        echo "$expected  $dir/$name" | sha256sum -c -
+        tar -xf "$dir/$name" -C "$dir" --strip-components=1
+        "$dir/bugsee-cli" --version
+        echo "bin=$dir/bugsee-cli" >> "$GITHUB_OUTPUT"

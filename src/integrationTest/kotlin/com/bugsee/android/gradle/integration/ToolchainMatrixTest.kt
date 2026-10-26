@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.integration
 
 import com.bugsee.android.gradle.integration.harness.FixtureProject
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -36,16 +37,38 @@ class ToolchainMatrixTest {
         val agp = FixtureProject.agpVersion ?: DEFAULT_AGP
         assertTrue(
             "expected com.android.tools.build:gradle:$agp (resolved) in:\n$output",
-            output.contains("com.android.tools.build:gradle:$agp"),
+            resolvesTo(output, "com.android.tools.build:gradle", agp),
         )
         val kotlin = FixtureProject.kotlinVersion ?: DEFAULT_KOTLIN
         assertTrue(
-            "expected org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin in:\n$output",
-            output.contains("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin"),
+            "expected org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin (resolved) in:\n$output",
+            resolvesTo(output, "org.jetbrains.kotlin:kotlin-gradle-plugin", kotlin),
         )
     }
 
+    /**
+     * The matcher must be exact: `buildEnvironment` prints a request that was bumped by conflict
+     * resolution as `coord:2.2.0 -> 2.2.10`, which a substring match for `:2.2.0` would accept
+     * although the build ran on 2.2.10.
+     */
+    @Test
+    fun resolvesTo_requires_the_exact_resolved_version() {
+        val kgp = "org.jetbrains.kotlin:kotlin-gradle-plugin"
+        assertTrue(resolvesTo("+--- $kgp:2.2.0", kgp, "2.2.0"))
+        assertTrue(resolvesTo("\\--- $kgp:2.2.0 (*)", kgp, "2.2.0"))
+        assertFalse("bumped by conflict resolution", resolvesTo("+--- $kgp:2.2.0 -> 2.2.10", kgp, "2.2.0"))
+        assertFalse("prefix of a longer version", resolvesTo("+--- $kgp:2.2.0-RC", kgp, "2.2.0"))
+        assertFalse("prefix of a longer version", resolvesTo("+--- $kgp:2.2.10", kgp, "2.2.1"))
+        assertTrue("the version it was bumped TO", resolvesTo("+--- $kgp:2.2.10", kgp, "2.2.10"))
+    }
+
     private companion object {
+        /** True when some `buildEnvironment` line shows [coordinate] resolved at exactly [version]. */
+        fun resolvesTo(output: String, coordinate: String, version: String): Boolean {
+            val exact = Regex("""${Regex.escape("$coordinate:$version")}(?:\s+\([^)]*\))?\s*$""")
+            return output.lines().any { exact.containsMatchIn(it) }
+        }
+
         // The fixtures' declared defaults (the plugin's minimum supported AGP, the Kotlin it is built with).
         const val DEFAULT_AGP = "8.6.0"
         const val DEFAULT_KOTLIN = "2.1.0"

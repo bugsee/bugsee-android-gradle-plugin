@@ -280,7 +280,6 @@ val composeVariantMatrix by tasks.registering(Test::class) {
     // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
     // is no need to hash ~400 MB of compiler distributions on every up-to-date check.
     inputs.property("matrixKotlinVersions", matrixKotlinVersions)
-    inputs.property("extraMatrixKotlinVersions", extraMatrixKotlinVersions)
     val matrixClasspathFiles: Map<String, FileCollection> =
         matrixClasspaths.mapValues { (_, cfg) -> objects.fileCollection().from(cfg) }
 

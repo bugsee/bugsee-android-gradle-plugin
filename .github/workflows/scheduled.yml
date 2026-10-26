@@ -35,24 +35,34 @@ jobs:
         with:
           cache-provider: basic
 
-      # Newest STABLE release: maven-metadata's <release> also lists betas and RCs, so filter to
-      # plain x.y.z and take the highest.
-      - name: Resolve the newest stable Kotlin
+      # The newest STABLE patch of every Kotlin line the plugin claims (2.1 - 2.4: the checked-in
+      # matrix only pins specific patches, so a newer patch of a claimed line is new information),
+      # plus the newest stable release overall (which is how a not-yet-claimed 2.5 shows up).
+      # maven-metadata also lists betas and RCs, so only plain x.y.z is considered. A lookup that
+      # finds nothing for a line fails the job rather than silently testing less.
+      - name: Resolve the newest stable Kotlin patches
         id: kotlin
         run: |
           set -euo pipefail
-          version=$(curl -fsSL --retry 3 \
+          all=$(curl -fsSL --retry 3 \
             https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/maven-metadata.xml \
             | sed -n 's|.*<version>\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</version>.*|\1|p' \
-            | sort -V | tail -n 1)
-          [ -n "$version" ] || { echo "could not resolve the newest Kotlin release" >&2; exit 1; }
-          echo "Newest stable Kotlin: $version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+            | sort -V)
+          versions=$(echo "$all" | tail -n 1)
+          for line in 2.1 2.2 2.3 2.4; do
+            latest=$(echo "$all" | grep "^${line}\." | tail -n 1 || true)
+            [ -n "$latest" ] || { echo "no stable Kotlin $line.x found in the metadata" >&2; exit 1; }
+            versions="$versions"$'\n'"$latest"
+          done
+          [ -n "$(echo "$all" | tail -n 1)" ] || { echo "could not resolve the newest Kotlin release" >&2; exit 1; }
+          versions=$(echo "$versions" | sort -uV | paste -sd, -)
+          echo "Kotlin versions to check: $versions"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
 
       # Fails for a Kotlin line no variant claims (for example the first 2.5.x), which is the signal
       # to add a variant or widen one.
       - name: Compose variant matrix
-        run: ./gradlew :compose-compiler-plugin:composeVariantMatrix -Pbugsee.matrix.extraKotlin=${{ steps.kotlin.outputs.version }}
+        run: ./gradlew :compose-compiler-plugin:composeVariantMatrix -Pbugsee.matrix.extraKotlin=${{ steps.kotlin.outputs.versions }}
 
       - name: Upload test reports
         if: failure()

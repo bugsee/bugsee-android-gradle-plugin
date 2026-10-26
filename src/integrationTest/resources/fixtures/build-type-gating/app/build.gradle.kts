@@ -23,8 +23,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    // No `kotlinOptions { jvmTarget }`: it is a hard error from Kotlin 2.3, and KGP already targets
-    // the JDK 17 the daemon runs on, which is what compileOptions above asks for.
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
@@ -101,5 +99,13 @@ bugsee {
         endpoint.set(it)
         appToken("fixture-token-0123456789")
         uploader.set(com.bugsee.android.gradle.upload.UploaderStrategy.KOTLIN)
+    }
+}
+
+// Explicit, to match compileOptions above. The `kotlinOptions { jvmTarget }` it replaces is a hard
+// error from Kotlin 2.3; the `compilerOptions` DSL exists from Kotlin 2.0.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
