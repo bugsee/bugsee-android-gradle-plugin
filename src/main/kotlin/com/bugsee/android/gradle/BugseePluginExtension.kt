@@ -199,6 +199,7 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * When `true`, the plugin auto-adds `com.bugsee:bugsee-android-feedback` to the
      * consuming app's `implementation` configuration, enabling the in-app feedback /
      * report-submission UI. Skipped if the app already declares the artifact.
+     * Has no effect when [sdkAutoLoad] is `false` and you do not declare the module yourself.
      *
      * Default: `false`
      */
@@ -222,15 +223,19 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * the user-declared version always wins.
      *
      * Set to `false` to opt out of the auto-pull behaviour entirely: the plugin
-     * then adds NO Bugsee module on its own — neither the core SDK nor any
+     * then adds no Bugsee runtime module on its own, neither the core SDK nor any
      * extension (`bugsee-android-okhttp`, `-compose`, `-ktor-2/3`, `-cronet`,
-     * `-ndk`, `-leak`, `-feedback`). Every module you want must be declared
-     * explicitly. Instrumentation and the NDK/feedback/leak settings keep
-     * working on modules you declared yourself; they just no longer pull
-     * the module in. Also settable as `plugin.sdkAutoLoad` in bugsee.properties
-     * (global-only; the DSL wins unless `preferSettingsFile` is set). Useful when shipping the core SDK via a local classpath path or
-     * a locally-published artefact, where the dynamic version range
-     * would conflict with the user-managed declaration.
+     * `-ndk`, `-leak`, `-feedback`). Declare every module you want yourself.
+     * Because `ndk.enabled`, `leak.enabled` and `feedback` only existed to auto-add
+     * their module, they have no effect for a module you do not declare; the plugin
+     * warns about each such opt-in. Modules you declare keep working as before
+     * (instrumentation, NDK symbol upload). The Compose compiler plugin
+     * (`bugsee-compose-compiler-plugin`) is a compiler-side artifact and is still
+     * resolved when Compose is present; it must stay resolvable from a repository.
+     * Also settable as `plugin.sdkAutoLoad` in bugsee.properties (global-only; the
+     * DSL wins unless `preferSettingsFile` is set). Useful when shipping the core
+     * SDK via a local classpath path or a locally-published artefact, where the
+     * dynamic version range would conflict with the user-managed declaration.
      *
      * Default: `true`
      */

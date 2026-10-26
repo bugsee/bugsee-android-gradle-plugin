@@ -138,6 +138,20 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     val resolver = settingsResolver()
                     val isDebug = resolver.globalValueOrNull(DEBUG) ?: false
 
+                    // `sdkAutoLoad=false` opts out of ALL auto-add (core SDK and every
+                    // extension module): the user declares every Bugsee module
+                    // themselves. Resolved with the global-scope rule, so the DSL and
+                    // bugsee.properties (incl. preferSettingsFile) behave identically.
+                    if (!resolver.globalValue(SDK_AUTO_LOAD)) {
+                        inertOptInModules(project, resolver).forEach { (setting, artifact) ->
+                            project.logger.warn(sdkAutoLoadOffWarning(setting, artifact))
+                        }
+                        if (isDebug) {
+                            project.logger.warn("Bugsee: sdkAutoLoad=false - skipping all dependency auto-add")
+                        }
+                        return@withDependencies
+                    }
+
                     // Auto-add the core Bugsee SDK if the consuming app has
                     // not declared one. Dynamic version range with the
                     // plugin's MIN_SDK_VERSION as a floor — the consumer
@@ -145,10 +159,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     // without bumping the plugin. If the user has declared
                     // their own version on any configuration (`api`,
                     // `compileOnly`, variant configs, …), defer to it
-                    // rather than layering a dynamic dep on top. Opt-out
-                    // via `bugsee { sdkAutoLoad.set(false) }` for
-                    // builds that ship the core SDK via a manual classpath
-                    // path or a locally-published artefact.
+                    // rather than layering a dynamic dep on top.
                     // Version shared by EVERY auto-added Bugsee module — core
                     // AND extensions. Prefer the version the consumer already
                     // declared for the core SDK; otherwise the dynamic range
@@ -158,7 +169,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     val sdkVersion = declaredCoreSdkVersion(project)
                         ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
 
-                    if (resolver.globalValue(SDK_AUTO_LOAD) && !isCoreSdkPresent(project)) {
+                    if (!isCoreSdkPresent(project)) {
                         if (isDebug) {
                             project.logger.warn(
                                 "Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion"
@@ -1414,11 +1425,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * project dependencies (`:${projectName}`) to avoid duplicates. Scans
      * all configurations on the consuming project, not just `implementation`.
      *
-     * Every extension add funnels through here, so this is the single place
-     * where `sdkAutoLoad=false` (DSL or `plugin.sdkAutoLoad` in bugsee.properties,
-     * resolved by the same global-scope rule as the core SDK add) stops the
-     * auto-add of ALL modules, not just the core. Modules the user declared
-     * explicitly are never touched either way.
+     * Not reached when `sdkAutoLoad=false` (the withDependencies action returns first).
      */
     private fun autoAddModule(
         project: Project,
@@ -1428,17 +1435,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         isDebug: Boolean,
         sdkVersion: String
     ) {
-        if (!settingsResolver().globalValue(SDK_AUTO_LOAD)) return
-        val alreadyPresent = project.configurations.any { config ->
-            config.dependencies.any { dep ->
-                (dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
-                    (dep is ProjectDependency &&
-                        ProjectDependencyCompat.targetProject(project, dep)?.let {
-                            it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
-                        } == true)
-            }
-        }
-        if (!alreadyPresent) {
+        if (!isModuleDeclared(project, artifactName, projectName)) {
             // [sdkVersion] tracks the CORE SDK version, NOT the plugin version.
             // Extension AARs (bugsee-android-ndk, -okhttp, -feedback, …) are
             // published under the SDK's version line, so versioning them with
@@ -1523,6 +1520,38 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     companion object {
+        /** True when the user declared the Bugsee module (Maven coordinate or project dependency) anywhere. */
+        internal fun isModuleDeclared(project: Project, artifactName: String, projectName: String): Boolean =
+            project.configurations.any { config ->
+                config.dependencies.any { dep ->
+                    (dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
+                        (dep is ProjectDependency &&
+                            ProjectDependencyCompat.targetProject(project, dep)?.let {
+                                it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
+                            } == true)
+                }
+            }
+
+        /**
+         * Explicit opt-ins (`ndk.enabled`, `leak.enabled`, `feedback`) whose runtime module the plugin
+         * would normally auto-add but the user did not declare. Under `sdkAutoLoad=false` these switches
+         * are inert; returns (setting key, artifact) per such opt-in.
+         */
+        internal fun inertOptInModules(project: Project, resolver: SettingsResolver): List<Pair<String, String>> {
+            val ndk = resolver.anyScopeValue(NDK_ENABLED) ?: false
+            return listOf(
+                Triple("ndk.enabled", "bugsee-android-ndk", "ndk") to ndk,
+                Triple("leak.enabled", "bugsee-android-leak", "leak") to resolver.globalValue(LEAK_ENABLED),
+                Triple("feedback", "bugsee-android-feedback", "feedback") to resolver.globalValue(FEEDBACK),
+            )
+                .filter { (t, enabled) -> enabled && !isModuleDeclared(project, t.second, t.third) }
+                .map { (t, _) -> t.first to t.second }
+        }
+
+        internal fun sdkAutoLoadOffWarning(setting: String, artifact: String): String =
+            "Bugsee: $setting=true but sdkAutoLoad=false and $BUGSEE_GROUP:$artifact is not declared; " +
+                "declare it or the feature is inactive"
+
 
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =

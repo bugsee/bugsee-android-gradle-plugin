@@ -174,7 +174,9 @@ never replaces debug info with a poorer file, so no `forceDebugSymbolsUpload` is
 When `enabled`, the plugin automatically adds the `bugsee-android-leak`
 module dependency (memory/thread leak detection). If the app already
 declares the leak module explicitly, this is a no-op — mirroring the
-`ndk.enabled` behaviour.
+`ndk.enabled` behaviour. With `sdkAutoLoad=false` nothing is added, so
+`leak.enabled` (like `ndk.enabled` and `feedback`) only works if you declare
+the module yourself; the plugin warns otherwise.
 
 | Key | Type | Default |
 |---|---|---|
@@ -431,6 +433,14 @@ the upload tasks skip with a single info-level message instead of failing or war
   (`bugsee { sdkAutoLoad.set(false) }` or `plugin.sdkAutoLoad=false`) it adds
   none of them; declare every Bugsee module yourself. Modules you declared are
   never removed, and instrumentation of them is unaffected. Global-only setting.
+  `ndk.enabled`, `leak.enabled` and `feedback` only auto-add their module, so
+  they are inert for undeclared modules (a warning names each one); the NDK
+  symbol upload still runs. The Compose compiler plugin
+  (`bugsee-compose-compiler-plugin`) is still resolved when Compose is present
+  and must stay resolvable from a repository (offline / local-artifact setups
+  included). The decision is made when `implementation` is first resolved or
+  read, so a script that reads `implementation.incoming.dependencies` before
+  the `bugsee { }` block does not see the DSL value (tracked in #50).
 - **Dependency auto-add is decided before variants exist.** The NDK runtime and
   the okhttp / compose / ktor / cronet modules are added when the feature is
   enabled globally or in any variant scope (DSL block or `variant.*` key). A

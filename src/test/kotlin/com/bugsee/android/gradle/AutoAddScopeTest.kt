@@ -178,13 +178,39 @@ class AutoAddScopeTest {
 
     @Test
     fun sdkAutoLoadFalseKeepsExplicitlyDeclaredModules() {
-        val h = Harness(null, declareCore = false) { sdkAutoLoad.set(false) }
+        val h = Harness(null, declareCore = false) {
+            sdkAutoLoad.set(false)
+            ndk.enabled.set(true)
+        }
         h.declare("com.bugsee:bugsee-android:$SDK_VERSION")
         h.declare("com.bugsee:bugsee-android-okhttp:$SDK_VERSION")
         h.declare("com.squareup.okhttp3:okhttp:4.12.0")
         assertEquals(emptySet(), h.autoAdded())
         val names = h.project.configurations.getByName("implementation").dependencies.map { it.name }
         assertTrue("bugsee-android-okhttp" in names && "bugsee-android" in names)
+        assertFalse("bugsee-android-ndk" in names, "ndk.enabled must not auto-add under sdkAutoLoad=false")
+    }
+
+    @Test
+    fun inertOptInsAreReportedUnlessModuleDeclared() {
+        val h = Harness(null, declareCore = false) {
+            sdkAutoLoad.set(false)
+            ndk.enabled.set(true)
+            leak.enabled.set(true)
+            feedback.set(true)
+        }
+        h.declare("com.bugsee:bugsee-android-leak:$SDK_VERSION")
+        assertEquals(
+            listOf("ndk.enabled" to "bugsee-android-ndk", "feedback" to "bugsee-android-feedback"),
+            BugseePlugin.inertOptInModules(h.project, h.resolver()),
+        )
+        assertEquals(
+            "Bugsee: ndk.enabled=true but sdkAutoLoad=false and com.bugsee:bugsee-android-ndk is not declared; " +
+                "declare it or the feature is inactive",
+            BugseePlugin.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
+        )
+        val none = Harness(null)
+        assertEquals(emptyList(), BugseePlugin.inertOptInModules(none.project, none.resolver()))
     }
 
     @Test
