@@ -24,6 +24,7 @@ import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
 import com.bugsee.android.gradle.manifest.FlutterAssetsOrdering
 import com.bugsee.android.gradle.upload.AppTokenResolver
+import com.bugsee.android.gradle.util.MinimumVersions
 import com.bugsee.android.gradle.upload.BuildTimingService
 import com.bugsee.android.gradle.upload.BundleUploadTask
 import com.bugsee.android.gradle.upload.MappingUploadTask
@@ -227,6 +228,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 )
             }
         }
+
+        // Fail early with a readable message on an unsupported AGP/Gradle (issue #60), before any
+        // AGP API is touched. AGP absent: skipped, handled by the warning below.
+        MinimumVersions.check(
+            if (project.extensions.findByName("android") != null) MinimumVersions.detectAgpVersion() else null,
+            project.gradle.gradleVersion
+        )
 
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {
