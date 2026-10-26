@@ -382,7 +382,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 val coreSdkAutoLoad = sdkAutoLoadOn && !isCoreSdkPresent(project)
                 // With auto-load off nothing else supplies the SDK: if the module's own
                 // dependencies do not declare it, SDK-dependent instrumentation is skipped.
-                if (!sdkAutoLoadOn && !isCoreSdkPresent(project)) {
+                // Same predicate as the instrumentation gates (prefix match, unscoped); the mode
+                // is checked first so nothing extra runs when Isolated Projects is off.
+                if (!sdkAutoLoadOn && ProjectAccess.isIsolatedProjects(project) &&
+                    !DependencyDetector.hasBugseeDependency(project, "bugsee-android")
+                ) {
                     warnIfProjectDependenciesNotInspected(
                         project, "the core Bugsee SDK was not found (and sdkAutoLoad is off, so it is not added)"
                     )
