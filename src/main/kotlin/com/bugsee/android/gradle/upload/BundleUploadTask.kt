@@ -119,6 +119,13 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Optional
     abstract val preResolvedAppToken: Property<String>
 
+    // Set at registration when a placeholder app token was ignored while resolving (absent otherwise,
+    // so inputs of ordinary builds are unchanged). With no real token the task then logs an info skip
+    // line instead of the missing-token warnings.
+    @get:Input
+    @get:Optional
+    abstract val placeholderTokenSeen: Property<Boolean>
+
     // `res/` source files from the app's main source set — used by
     // `AppTokenResolver.resolveFromManifest` only when the manifest
     // meta-data tag resolves to an `@string/foo` reference. Wired
@@ -361,15 +368,22 @@ abstract class BundleUploadTask : DefaultTask() {
         // `preResolvedAppToken` at registration), manifest fallback
         // second. Never touches `project` at execution time.
         val preResolved = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
+        var placeholderSeen = placeholderTokenSeen.getOrElse(false)
         val appToken = preResolved
             ?: AppTokenResolver.resolveFromManifest(
                 manifestFile = manifest,
                 stringResourceFiles = stringResourceFiles,
                 logger = logger,
                 debug = isDebug,
+                warnIfMissing = !placeholderSeen,
+                onPlaceholder = { placeholderSeen = true },
             )
         if (appToken == null) {
-            logger.warn("Bugsee: Could not resolve appToken. Skipping bundle upload.")
+            if (placeholderSeen) {
+                AppTokenResolver.logPlaceholderSkip(logger, "build-info")
+            } else {
+                logger.warn("Bugsee: Could not resolve appToken. Skipping bundle upload.")
+            }
             return
         }
 

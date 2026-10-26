@@ -12,6 +12,48 @@ internal object AppTokenResolver {
     private const val APP_TOKEN_TAG = "com.bugsee.android.APP_TOKEN"
     private const val PROPERTIES_TOKEN_KEY = "app_token"
 
+    /**
+     * The all-zero token that templates and CI projects ship instead of a real one. It identifies
+     * no application, so every source treats it as absent: the chain falls through, and with no
+     * real token left the upload tasks skip.
+     */
+    internal const val PLACEHOLDER_TOKEN = "00000000-0000-4000-8000-000000000000"
+
+    /** Placeholder bookkeeping for one resolver: [sources] already reported (dedupe), [hits] rejections so far. */
+    internal class PlaceholderReport {
+        val sources = HashSet<String>()
+        var hits = 0
+    }
+
+    /** True for [PLACEHOLDER_TOKEN], ignoring case and surrounding whitespace. */
+    internal fun isPlaceholder(token: String?): Boolean =
+        token != null && token.trim().equals(PLACEHOLDER_TOKEN, ignoreCase = true)
+
+    /**
+     * True when [token] is a usable app token: non-empty and not [PLACEHOLDER_TOKEN]. A placeholder
+     * is reported at info level ([source] names where it came from; once per source when [report]
+     * is given) and rejected, so the caller moves on to the next source.
+     */
+    internal fun isUsable(
+        token: String?,
+        source: String,
+        logger: Logger,
+        report: PlaceholderReport? = null,
+    ): Boolean {
+        if (token.isNullOrEmpty()) return false
+        if (!isPlaceholder(token)) return true
+        report?.let { it.hits++ }
+        if (report == null || report.sources.add(source)) {
+            logger.info("Bugsee: Ignoring placeholder app token from $source; treating it as not configured, trying the next source.")
+        }
+        return false
+    }
+
+    /** The info line an upload task logs, instead of the missing-token warning, when a placeholder was ignored. */
+    internal fun logPlaceholderSkip(logger: Logger, what: String) {
+        logger.info("Bugsee: Placeholder app token configured; skipping $what upload.")
+    }
+
     internal fun maskToken(token: String): String {
         if (token.length <= 8) return "****"
         return "${token.take(4)}...${token.takeLast(4)}"
@@ -49,17 +91,18 @@ internal object AppTokenResolver {
         variantName: String,
         logger: Logger,
         debug: Boolean,
+        report: PlaceholderReport? = null,
     ): String? {
         extension.appTokenByVariant?.let { resolver ->
             val token = resolver(variantName)
-            if (!token.isNullOrEmpty()) {
+            if (token != null && isUsable(token, "appTokenByVariant", logger, report)) {
                 if (debug) logger.warn("Bugsee: Using appTokenByVariant: ${maskToken(token)}")
                 return token
             }
         }
         extension.appTokenProvider?.let { provider ->
             val token = provider.getAppToken(variantName)
-            if (!token.isNullOrEmpty()) {
+            if (token != null && isUsable(token, "AppTokenProvider", logger, report)) {
                 if (debug) logger.warn("Bugsee: Using AppTokenProvider: ${maskToken(token)}")
                 return token
             }
@@ -72,9 +115,10 @@ internal object AppTokenResolver {
         extension: BugseePluginExtension,
         logger: Logger,
         debug: Boolean,
+        report: PlaceholderReport? = null,
     ): String? {
         extension.defaultAppToken?.let { token ->
-            if (token.isNotEmpty()) {
+            if (isUsable(token, "defaultAppToken", logger, report)) {
                 if (debug) logger.warn("Bugsee: Using defaultAppToken: ${maskToken(token)}")
                 return token
             }
@@ -102,6 +146,7 @@ internal object AppTokenResolver {
         rootProjectDir: File,
         logger: Logger,
         debug: Boolean,
+        onPlaceholder: () -> Unit = {},
     ): String? {
         val file = File(rootProjectDir, BUGSEE_PROPERTIES_FILENAME)
         if (!file.isFile) return null
@@ -125,6 +170,8 @@ internal object AppTokenResolver {
             }
             return null
         }
+        if (isPlaceholder(token)) onPlaceholder()
+        if (!isUsable(token, "${file.name}:$PROPERTIES_TOKEN_KEY", logger)) return null
         if (debug) {
             logger.warn(
                 "Bugsee: Using ${file.name}:${PROPERTIES_TOKEN_KEY}: ${maskToken(token)}",
@@ -151,6 +198,8 @@ internal object AppTokenResolver {
         stringResourceFiles: Iterable<File>,
         logger: Logger,
         debug: Boolean,
+        warnIfMissing: Boolean = true,
+        onPlaceholder: () -> Unit = {},
     ): String? {
         if (manifestFile == null || !manifestFile.isFile) {
             logger.warn("Could not resolve app token from any source.")
@@ -161,15 +210,18 @@ internal object AppTokenResolver {
             .getMetaDataValue(manifestFile, APP_TOKEN_TAG)
 
         if (appToken.isNullOrEmpty()) {
-            logger.warn("Could not find '$APP_TOKEN_TAG' <meta-data> tag in your AndroidManifest.xml")
+            // Muted when a placeholder was already ignored upstream: the task logs one info skip line.
+            if (warnIfMissing) logger.warn("Could not find '$APP_TOKEN_TAG' <meta-data> tag in your AndroidManifest.xml")
             return null
         }
 
-        if (StringResourceResolver.isStringResource(appToken)) {
-            return StringResourceResolver.resolve(stringResourceFiles, appToken, logger, debug)
+        val resolved = if (StringResourceResolver.isStringResource(appToken)) {
+            StringResourceResolver.resolve(stringResourceFiles, appToken, logger, debug)
+        } else {
+            appToken
         }
-
-        return appToken
+        if (isPlaceholder(resolved)) onPlaceholder()
+        return resolved?.takeIf { isUsable(it, "manifest $APP_TOKEN_TAG", logger) }
     }
 
     /**

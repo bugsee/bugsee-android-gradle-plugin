@@ -634,6 +634,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // CC-safe inputs — see resolveCcSafeInputs / the task's
             // KDoc for the full rationale.
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(ccInputs.stringResFiles)
             task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
         }
@@ -696,6 +697,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // KDoc for the full rationale. `buildDirectory` is
             // task-private (per-project, not shared with other tasks).
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(ccInputs.stringResFiles)
             task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
             task.buildDirectory.set(project.layout.buildDirectory)
@@ -741,6 +743,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private data class CcSafeUploadInputs(
         val preResolvedToken: String?,
         val stringResFiles: List<File>,
+        // A placeholder token was ignored while resolving; the tasks then skip with an info line.
+        val placeholderSeen: Boolean = false,
     )
 
     private fun resolveCcSafeInputs(
@@ -752,7 +756,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         // [extension] is the variant's effective view, which carries no app tokens:
         // the token chain (DSL, `variant { }` blocks, bugsee.properties) is the resolver's.
-        val preResolvedToken: String? = settingsResolver().appTokenFor(variantContextOf(variant), isDebug)
+        val tokenCtx = variantContextOf(variant)
+        val preResolvedToken: String? = settingsResolver().appTokenFor(tokenCtx, isDebug)
+        val placeholderSeen = preResolvedToken == null && settingsResolver().sawPlaceholder(tokenCtx)
 
         val stringResFiles: List<File> = try {
             val android = project.extensions.findByName("android")
@@ -776,7 +782,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             emptyList()
         }
 
-        return CcSafeUploadInputs(preResolvedToken, stringResFiles)
+        return CcSafeUploadInputs(preResolvedToken, stringResFiles, placeholderSeen)
     }
 
     private fun registerBundleUploadTask(
@@ -840,6 +846,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.buildInfo.sizeAnalysis.chunkedUpload)
             task.requestArtifactUpload.set(extension.buildInfo.sizeAnalysis.enabled)
@@ -913,6 +920,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
             compileSdkValue?.let { task.buildSdkVersion.set(it) }
             preResolvedToken?.let { task.preResolvedAppToken.set(it) }
+            if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(stringResFiles)
             task.chunkedUpload.set(extension.buildInfo.sizeAnalysis.chunkedUpload)
             task.requestArtifactUpload.set(extension.buildInfo.sizeAnalysis.enabled)

@@ -143,6 +143,13 @@ abstract class MappingUploadTask : DefaultTask() {
     @get:Optional
     abstract val preResolvedAppToken: Property<String>
 
+    // Set at registration when a placeholder app token was ignored while resolving (absent otherwise,
+    // so inputs of ordinary builds are unchanged). With no real token the task then logs an info skip
+    // line instead of the missing-token warnings.
+    @get:Input
+    @get:Optional
+    abstract val placeholderTokenSeen: Property<Boolean>
+
     /**
      * `res/` source files from the app's main source set — used by
      * `AppTokenResolver.resolveFromManifest` when the manifest
@@ -194,16 +201,24 @@ abstract class MappingUploadTask : DefaultTask() {
         // already baked into `preResolvedAppToken`; the manifest
         // fallback runs here because the merged manifest only exists
         // at execution.
+        var placeholderSeen = placeholderTokenSeen.getOrElse(false)
         val appToken = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
             ?: AppTokenResolver.resolveFromPropertiesFile(
-                rootProjectDirectory.get().asFile, logger, isDebug
+                rootProjectDirectory.get().asFile, logger, isDebug,
+                onPlaceholder = { placeholderSeen = true },
             )
             ?: AppTokenResolver.resolveFromManifest(
-                manifest, stringResourceFiles.files, logger, isDebug
+                manifest, stringResourceFiles.files, logger, isDebug,
+                warnIfMissing = !placeholderSeen,
+                onPlaceholder = { placeholderSeen = true },
             )
 
         if (appToken == null) {
-            logger.warn("Bugsee: Could not resolve appToken. Skipping mapping upload.")
+            if (placeholderSeen) {
+                AppTokenResolver.logPlaceholderSkip(logger, "mapping")
+            } else {
+                logger.warn("Bugsee: Could not resolve appToken. Skipping mapping upload.")
+            }
             return
         }
 
