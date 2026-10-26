@@ -22,8 +22,8 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  *     associated compilations for them, even at execution time. The sibling check is what keeps a
  *     production `freeDeviceTest` (flavor `free`, build type `deviceTest`, which AGP accepts) from
  *     being read as a test; if the sibling list cannot be read the name alone decides;
- *  4. any other `...Test` name (`jvmTest`, `androidInstrumentedTest`, an `integrationTest`
- *     compilation) must be ASSOCIATED with another compilation (`associateWith`), which is how KMP
+ *  4. any other `...Test` name (in practice a custom compilation such as `integrationTest`; the
+ *     stock `test` compilation is caught by rule 2) must be ASSOCIATED with another compilation (`associateWith`), which is how KMP
  *     attaches a test compilation to the one it tests. A production `smokeTest` build type has no
  *     such association.
  *

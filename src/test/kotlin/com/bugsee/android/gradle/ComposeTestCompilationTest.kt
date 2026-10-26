@@ -37,7 +37,7 @@ class ComposeTestCompilationTest {
     @Test
     fun `associated test-suffixed compilations are tests`() {
         listOf("debugUnitTest", "releaseUnitTest", "freeDebugAndroidTest", "releaseAndroidTest",
-            "jvmTest", "androidUnitTest", "androidInstrumentedTest", "commonTest").forEach {
+            "integrationTest", "jvmIntegrationTest", "functionalTest").forEach {
             assertTrue(isTest(it, associated = true), it)
         }
     }
