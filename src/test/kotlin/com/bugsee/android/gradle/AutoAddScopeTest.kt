@@ -4,6 +4,7 @@ import com.bugsee.android.gradle.config.RecordingLogger
 import com.bugsee.android.gradle.config.SettingDefinitions
 import com.bugsee.android.gradle.config.SettingsFileParser
 import com.bugsee.android.gradle.config.SettingsResolver
+import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
 import org.gradle.api.provider.Property
@@ -142,12 +143,60 @@ class AutoAddScopeTest {
 
     @Test
     fun detectorsCountProductionConfigurations() {
-        for (conf in listOf("api", "runtimeOnly", "debugImplementation", "freeReleaseApi", "androidMainImplementation", "testingImplementation")) {
+        for (conf in listOf("api", "runtimeOnly", "debugImplementation", "freeReleaseApi", "androidMainImplementation", "stagingImplementation", "debugCompilationImplementation")) {
             val h = Harness(null)
             h.project.configurations.maybeCreate(conf)
             h.declareOn(conf, "com.squareup.okhttp3:okhttp:4.12.0")
             assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded(), conf)
         }
+    }
+
+    @Test
+    fun isProductionConfigurationClassifiesRealNames() {
+        val production = listOf(
+            "implementation", "api", "runtimeOnly", "debugImplementation", "releaseApi", "stagingImplementation",
+            "freeReleaseRuntimeOnly", "androidMainImplementation", "commonMainApi", "debugCompilationImplementation",
+        )
+        val other = listOf(
+            "releaseApiElements", "debugCompileOnlyApi", "debugRuntimeClasspath", "screenshotTestImplementation",
+            "androidUnitTestImplementation", "jvmTestCompilationImplementation", "compileOnly", "testImplementation",
+            "androidTestImplementation", "testFixturesImplementation", "lintChecks", "kapt", "debugAnnotationProcessor",
+        )
+        production.forEach { assertTrue(DependencyDetector.isProductionConfiguration(it), "$it is production") }
+        other.forEach { assertFalse(DependencyDetector.isProductionConfiguration(it), "$it is not production") }
+    }
+
+    /**
+     * KNOWN LIMITATION (documented in the README): the rule is name-based, so a flavor or build type
+     * whose name ends in a capitalised `Test` word (`latestTest`, `uiTest`) has its configurations
+     * (`latestTestImplementation`) classified as test configurations and its libraries are not
+     * detected. A name-only rule cannot tell it from `testImplementation`-style names; the fix is to
+     * use the variants' configuration hierarchy once variants exist (tracked with #50).
+     */
+    @Test
+    fun knownLimitationFlavorNameEndingInTestIsNotDetected() {
+        val h = Harness(null)
+        h.project.configurations.maybeCreate("latestTestImplementation")
+        h.declareOn("latestTestImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(emptySet(), h.autoAdded())
+    }
+
+    /**
+     * `hasComposeDependency` is the first gate of `isApplicable` (the Kotlin compiler plugin), so
+     * test-only Compose must not apply it. `isApplicable` itself cannot be driven end to end here:
+     * it also needs a real Kotlin Gradle plugin to report the consumer's Kotlin version, and
+     * returns false without one whatever the dependencies are.
+     */
+    @Test
+    fun composeGateOfCompilerPluginIgnoresTestOnlyCompose() {
+        val h = Harness(null)
+        h.project.configurations.maybeCreate("testImplementation")
+        h.declareOn("testImplementation", "androidx.compose.ui:ui:1.6.0")
+        val plugin = h.project.plugins.getPlugin(BugseePlugin::class.java)
+        assertFalse(plugin.hasComposeDependency(h.project), "test-only Compose")
+
+        h.declare("androidx.compose.ui:ui:1.6.0")
+        assertTrue(plugin.hasComposeDependency(h.project), "Compose in implementation")
     }
 
     @Test

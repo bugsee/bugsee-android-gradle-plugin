@@ -1068,7 +1068,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * Third-party library detectors must use this, not a raw scan of every
      * configuration: a library only in `testImplementation`, `compileOnly`, a
      * lint or kapt configuration never ships in the app, so it must not pull the
-     * matching Bugsee extension module into the production classpath.
+     * matching Bugsee extension module into the production classpath. Compose
+     * detection also gates [isApplicable] for the Kotlin compiler plugin, so
+     * Compose declared only in test / compileOnly configurations no longer
+     * applies it either.
      */
     private fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean {
         return project.configurations.any { config ->
@@ -1077,7 +1080,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
     }
 
-    private fun hasComposeDependency(project: Project): Boolean =
+    internal fun hasComposeDependency(project: Project): Boolean =
         anyProductionDependency(project) { dep -> dep.group?.startsWith("androidx.compose") == true }
 
     private fun hasOkHttpDependency(project: Project): Boolean =

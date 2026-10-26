@@ -429,6 +429,15 @@ the upload tasks skip with a single info-level message instead of failing or war
   enabled globally or in any variant scope (DSL block or `variant.*` key). A
   variant that disabled the feature may carry an unused runtime module; its
   upload task and bytecode transform stay exact.
+- **Library detection reads production configurations of the app module only.**
+  The OkHttp / Compose / Ktor / Cronet detectors look at `implementation`, `api`,
+  `runtimeOnly` and their build-type / flavor / source-set equivalents declared
+  directly in the app module; test, androidTest, testFixtures and compileOnly
+  configurations are ignored, and libraries declared in other project modules are
+  not followed. The match is by name, so a flavor or build type whose name ends in
+  a capitalised `Test` word (for example `latestTest`) is treated as a test
+  configuration and its libraries are not detected. Declare the Bugsee extension
+  module explicitly in those cases.
 - **Compose limitation.** The Compose Kotlin compiler-plugin gate is
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
