@@ -324,14 +324,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 // debug + release), so the misapplied plugin is not silent without `debug=true`.
                 if (variant is LibraryVariant && !warnedLibraryModule) {
                     warnedLibraryModule = true
-                    project.logger.warn(libraryModuleMessage(project.path))
+                    project.logger.warn(libraryModuleMessage(project.path, project.path == ":", project.name))
                 }
                 if (globalDebug) {
                     project.logger.warn(
                         "Bugsee: skipping plugin wiring for non-application variant " +
                             "$variantName (${variant.javaClass.simpleName}). " +
                             "The bugsee plugin only configures application modules; " +
-                            "see README on consuming the SDK in a library module."
+                            "see the README, \"Library modules\"."
                     )
                 }
                 return@onVariants
@@ -1773,10 +1773,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return method.invoke(target)
         }
 
-        /** Default-level warning for a library module that applies the plugin (which only wires application modules). */
-        internal fun libraryModuleMessage(projectPath: String): String =
-            "Bugsee: $projectPath is a library module. Bugsee configures application modules only; " +
-                "apply the plugin to the application module."
+        /**
+         * Default-level warning for a library module that applies the plugin. [isRoot] is true for a
+         * single-module build, whose path is just ":" and so is named by [name] instead.
+         */
+        internal fun libraryModuleMessage(projectPath: String, isRoot: Boolean, name: String): String =
+            "Bugsee: ${if (isRoot) "root project '$name'" else projectPath} is a library module. " +
+                "Bugsee registers upload tasks for application modules only; apply the plugin to the " +
+                "application module (in a convention plugin, apply it under " +
+                "pluginManager.withPlugin(\"com.android.application\")). See the README, \"Library modules\"."
 
         /** The per-variant debug summary. [token] is masked; it is never printed in full. */
         internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =

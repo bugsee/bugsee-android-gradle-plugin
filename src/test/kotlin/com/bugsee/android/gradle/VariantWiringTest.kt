@@ -363,6 +363,15 @@ class VariantWiringTest {
     }
 
     @Test
+    fun libraryModuleMessage_namesModuleAndRootProject() {
+        val sub = BugseePlugin.libraryModuleMessage(":feature:lib", false, "lib")
+        assertTrue(sub.startsWith("Bugsee: :feature:lib is a library module. "), sub)
+        val root = BugseePlugin.libraryModuleMessage(":", true, "mylib")
+        assertTrue(root.startsWith("Bugsee: root project 'mylib' is a library module. "), root)
+        assertTrue(root.contains("pluginManager.withPlugin(\"com.android.application\")"), root)
+    }
+
+    @Test
     fun debugSummaryLine_formatAndMasking() {
         assertEquals(
             "Bugsee: variant stagingRelease resolved: token=${AppTokenResolver.maskToken("secret-token-value")} " +

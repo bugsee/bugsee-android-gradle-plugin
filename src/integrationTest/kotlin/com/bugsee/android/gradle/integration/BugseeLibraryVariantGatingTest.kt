@@ -156,7 +156,7 @@ class BugseeLibraryVariantGatingTest {
 
         val output = runTasks(fixture.projectDir, ":lib:tasks").output
 
-        val expected = "Bugsee configures application modules only; apply the plugin to the application module."
+        val expected = "apply the plugin to the application module (in a convention plugin"
         assertEquals(
             "expected exactly one library-module warning. Output:\n$output",
             1,
@@ -173,7 +173,7 @@ class BugseeLibraryVariantGatingTest {
 
         assertFalse(
             "application modules must not get the library-module warning. Output:\n$output",
-            output.contains("Bugsee configures application modules only"),
+            output.contains("Bugsee registers upload tasks for application modules only"),
         )
     }
 
