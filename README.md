@@ -433,6 +433,14 @@ the upload tasks skip with a single info-level message instead of failing or war
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
   including variants that disabled it.
+- **Compose and test code.** The Compose compiler plugin is not applied to test
+  compilations (`*UnitTest`, `*AndroidTest`, `*ScreenshotTest`, `testFixtures`,
+  KMP `*Test` compilations associated with a main one, and every compilation of a
+  `com.android.test` module), so tag wraps never add semantics nodes to the
+  composables in your tests. To check: `kotlinCompilerPluginClasspath<Compilation>`
+  (e.g. `kotlinCompilerPluginClasspathDebugUnitTest`) has no
+  `bugsee-compose-compiler-plugin` dependency. A build type or flavor that merely
+  contains "Test" in its name (`smokeTest`) is production and stays instrumented.
 - **When values are fixed.** Values from `variant.*` file keys (and file root
   values when `preferSettingsFile` ranks them above the DSL) are fixed when
   variants are configured. Values resolved from the DSL stay live, so a late

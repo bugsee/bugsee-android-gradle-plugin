@@ -1,17 +1,23 @@
 package com.bugsee.android.gradle
 
+import com.android.build.api.variant.AndroidComponentsExtension
+import org.gradle.api.Plugin
+import org.gradle.api.Project
+import org.gradle.testfixtures.ProjectBuilder
+import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
+import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
+import org.jetbrains.kotlin.gradle.plugin.KotlinTarget
 import java.lang.reflect.Proxy
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
 
 /** Which Kotlin compilations the Compose tag/secure compiler plugin must stay out of (#56). */
 class ComposeTestCompilationTest {
 
-    private fun isTest(name: String, associated: Boolean = false) =
-        ComposeTestCompilation.isTest(name) { associated }
+    private fun isTest(name: String, associated: Boolean = false, androidJvm: Boolean = false) =
+        ComposeTestCompilation.isTest(name, androidJvm) { associated }
 
     @Test
     fun `reserved test names are tests with or without an association`() {
@@ -32,41 +38,144 @@ class ComposeTestCompilationTest {
         }
     }
 
+    /**
+     * AGP 9's built-in Kotlin reports NO associated compilations for its test compilations (even at
+     * execution time), so on an Android compilation the generated suffixes must stand on the name.
+     */
+    @Test
+    fun `android generated test suffixes are tests without any association`() {
+        listOf("debugUnitTest", "freeReleaseUnitTest", "debugAndroidTest", "freeDebugAndroidTest",
+            "debugScreenshotTest", "androidHostTest", "androidDeviceTest").forEach {
+            assertTrue(isTest(it, associated = false, androidJvm = true), it)
+        }
+        // Off Android the same names are not trusted without an association.
+        assertFalse(isTest("debugUnitTest", associated = false, androidJvm = false))
+    }
+
     @Test
     fun `production variants stay applicable`() {
         listOf("debug", "release", "staging", "freeDebug", "paidRelease", "main",
             "androidMain", "commonMain", "jvm", "latestTestRelease", "testimonialDebug")
-            .forEach { assertFalse(isTest(it, associated = true), it) }
+            .forEach {
+                assertFalse(isTest(it, associated = true, androidJvm = true), it)
+                assertFalse(isTest(it, associated = true, androidJvm = false), it)
+            }
     }
 
     /** A build type called `smokeTest` is a production compilation; only association can tell. */
     @Test
     fun `a build type merely ending in Test is production unless associated`() {
-        assertFalse(isTest("smokeTest", associated = false))
-        assertFalse(isTest("freeSmokeTest", associated = false))
-        assertEquals(true, isTest("smokeTest", associated = true))
+        assertFalse(isTest("smokeTest", associated = false, androidJvm = true))
+        assertFalse(isTest("freeSmokeTest", associated = false, androidJvm = true))
+        assertTrue(isTest("smokeTest", associated = true))
     }
 
-    private fun compilation(name: String, associated: () -> Set<Any>): KotlinCompilation<*> =
-        Proxy.newProxyInstance(
+    // --- against KotlinCompilation stubs (dynamic proxies: the real ones need the full KGP) ---
+
+    private fun stub(
+        project: Project,
+        name: String,
+        platform: KotlinPlatformType = KotlinPlatformType.androidJvm,
+        allAssociated: () -> Set<Any> = { emptySet() },
+        associateWith: () -> List<Any> = { emptyList() },
+    ): KotlinCompilation<*> {
+        val target = Proxy.newProxyInstance(
+            javaClass.classLoader, arrayOf(KotlinTarget::class.java)
+        ) { _, m, _ ->
+            if (m.name == "getProject") project else throw UnsupportedOperationException(m.name)
+        } as KotlinTarget
+        return Proxy.newProxyInstance(
             javaClass.classLoader, arrayOf(KotlinCompilation::class.java)
         ) { _, m, _ ->
             when (m.name) {
                 "getCompilationName" -> name
-                "getAllAssociatedCompilations" -> associated()
+                "getPlatformType" -> platform
+                "getTarget" -> target
+                "getAllAssociatedCompilations" -> allAssociated()
+                "getAssociateWith" -> associateWith()
                 else -> throw UnsupportedOperationException(m.name)
             }
         } as KotlinCompilation<*>
+    }
+
+    private val project: Project = ProjectBuilder.builder().build()
 
     @Test
-    fun `real compilation objects are classified by name and association`() {
-        assertTrue(ComposeTestCompilation.isTest(compilation("debugUnitTest") { setOf(Any()) }))
-        assertFalse(ComposeTestCompilation.isTest(compilation("debug") { emptySet() }))
-        assertFalse(ComposeTestCompilation.isTest(compilation("smokeTest") { emptySet() }))
+    fun `stub compilations are classified by name, platform and association`() {
+        assertTrue(ComposeTestCompilation.isTest(stub(project, "debugUnitTest")))
+        assertFalse(ComposeTestCompilation.isTest(stub(project, "debug")))
+        assertFalse(ComposeTestCompilation.isTest(stub(project, "smokeTest")))
+        assertTrue(ComposeTestCompilation.isTest(stub(project, "smokeTest", allAssociated = { setOf(Any()) })))
     }
 
     @Test
     fun `a failing association lookup is treated as not associated`() {
-        assertFalse(ComposeTestCompilation.isTest(compilation("smokeTest") { error("boom") }))
+        assertFalse(ComposeTestCompilation.isTest(stub(project, "smokeTest", allAssociated = { error("boom") })))
+    }
+
+    /** KGP before 1.9.20 has no `allAssociatedCompilations`; the call then fails with a LinkageError. */
+    @Test
+    fun `old KGP without allAssociatedCompilations falls back to associateWith`() {
+        val old = stub(
+            project, "jvmTest", platform = KotlinPlatformType.jvm,
+            allAssociated = { throw NoSuchMethodError("getAllAssociatedCompilations") },
+            associateWith = { listOf(Any()) },
+        )
+        assertTrue(ComposeTestCompilation.isTest(old))
+        val oldProduction = stub(
+            project, "smokeTest",
+            allAssociated = { throw NoSuchMethodError("getAllAssociatedCompilations") },
+        )
+        assertFalse(ComposeTestCompilation.isTest(oldProduction))
+    }
+
+    // --- BugseePlugin.isApplicable itself ---
+
+    class FakeKotlinPlugin : KotlinBasePlugin {
+        override val pluginVersion: String = "2.1.0"
+        override fun apply(target: Project) {}
+    }
+
+    private fun appliedPlugin(): Pair<Project, BugseePlugin> {
+        val p = ProjectBuilder.builder().build()
+        p.configurations.create("implementation")
+        p.dependencies.add("implementation", "androidx.compose.ui:ui:1.7.0")
+        p.plugins.apply(FakeKotlinPlugin::class.java)
+        @Suppress("UNCHECKED_CAST")
+        p.extensions.add(
+            AndroidComponentsExtension::class.java as Class<Any>,
+            "androidComponents",
+            Proxy.newProxyInstance(
+                AndroidComponentsExtension::class.java.classLoader,
+                arrayOf(AndroidComponentsExtension::class.java)
+            ) { _, m, _ ->
+                when {
+                    m.name == "hashCode" -> 1
+                    m.name == "equals" -> false
+                    m.returnType.isInterface -> Proxy.newProxyInstance(
+                        m.returnType.classLoader, arrayOf(m.returnType)
+                    ) { _, _, _ -> null }
+                    else -> null
+                }
+            }
+        )
+        p.plugins.apply(BugseePlugin::class.java)
+        return p to p.plugins.getPlugin(BugseePlugin::class.java)
+    }
+
+    @Test
+    fun `isApplicable keeps production compilations and skips test ones`() {
+        val (p, plugin) = appliedPlugin()
+        listOf("debug", "release", "freeDebug", "staging", "smokeTest").forEach {
+            assertTrue(plugin.isApplicable(stub(p, it)), "$it must stay applicable")
+        }
+        listOf("debugUnitTest", "releaseAndroidTest", "debugScreenshotTest", "test", "debugTestFixtures")
+            .forEach { assertFalse(plugin.isApplicable(stub(p, it)), "$it must not be applicable") }
+    }
+
+    @Test
+    fun `isApplicable skips an association-less AGP 9 unit test compilation`() {
+        val (p, plugin) = appliedPlugin()
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", allAssociated = { emptySet() })))
     }
 }
