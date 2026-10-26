@@ -7,6 +7,7 @@ secrets and the release gate follow the same conventions as
 | Workflow | Trigger | Environment | `RELEASE` | What it does |
 |---|---|---|---|---|
 | `pr.yml` | PR → `main` / `release` | — | `false` | `scripts/build.sh --full` — unit + TestKit integration tests + Compose variant matrix |
+| `codeql.yml` | PR / push `main`, `release`; weekly | — | — | CodeQL advanced setup: `java-kotlin` (manual `gradlew assemble -x test`), `actions`, `c-cpp`. Replaces the default setup, which must be turned off |
 | `deploy-staging.yml` | push to `main` | `staging` | `false` | `build.sh` + `deploy.sh` — `<version>-SNAPSHOT` to the Central snapshot repository, unsigned |
 | `deploy-production.yml` | manual dispatch | `production` | `true` | `build.sh --full` + `deploy.sh` — signed release into a closed Central staging deployment |
 | `claude.yml` | `@claude` mention | — | — | Claude answers on the issue or PR |

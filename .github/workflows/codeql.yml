@@ -1,0 +1,77 @@
+name: CodeQL
+
+# Advanced setup, replacing GitHub's default setup. The default setup's
+# java-kotlin autobuild failed (`:compose-compiler-plugin:compileKotlin`) and
+# left the repository with a permanent "CodeQL exited with errors" banner, so
+# Kotlin is built explicitly here with the same JDK and Gradle setup as pr.yml.
+# Turn the default setup off (Settings -> Code security) once this is on main,
+# otherwise both run and upload duplicate analyses.
+on:
+  pull_request:
+    branches: [main, release]
+  push:
+    branches: [main, release]
+  schedule:
+    - cron: "17 5 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: manual
+          - language: actions
+            build-mode: none
+          # Only the native-merged-libs integration-test fixture.
+          - language: c-cpp
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # JDK 11 for `jvmToolchain(11)` (not auto-provisioned), 17 as JAVA_HOME
+      # to run Gradle, as in pr.yml.
+      - uses: actions/setup-java@v6
+        if: matrix.language == 'java-kotlin'
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v6
+        if: matrix.language == 'java-kotlin'
+        with:
+          cache-provider: basic
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Compile the plugin only: the tests and the fixture apps' AGP builds are
+      # not part of the scanned code and are covered by pr.yml.
+      - name: Build plugin
+        if: matrix.language == 'java-kotlin'
+        run: ./gradlew --no-daemon assemble -x test
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
