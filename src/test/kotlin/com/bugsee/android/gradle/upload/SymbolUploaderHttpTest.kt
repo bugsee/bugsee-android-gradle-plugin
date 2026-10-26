@@ -117,7 +117,7 @@ class SymbolUploaderHttpTest {
         endpoint = endpoint,
         logger = logger,
         debug = false,
-        retryBackoffMs = 0,
+        retryPolicy = SymbolUploader.RetryPolicy(backoffMs = 0),
     )
 
     @Test fun `502 then 502 then 200 on the POST succeeds after three requests`() {
@@ -185,6 +185,59 @@ class SymbolUploaderHttpTest {
         val line = logger.warnMessages.lastOrNull { it.contains("Bugsee upload failed") }
         assertNotNull(line, "must warn; got: ${logger.warnMessages}")
         assertFalse(logger.warnMessages.any { it.contains(appToken) }, "token must not be logged; got: ${logger.warnMessages}")
+    }
+
+    @Test fun `every PUT retry sends an identical body`() {
+        server.scriptPutStatuses(503, 503)
+        assertTrue(upload(), "warns: ${logger.warnMessages}")
+        assertEquals(3, server.putBodyHashes.size)
+        assertEquals(1, server.putBodyHashes.toSet().size, "PUT bodies differ: ${server.putBodyHashes}")
+    }
+
+    @Test fun `Retry-After on a 503 replaces the default backoff, capped`() {
+        server.retryAfterHeader = "100"
+        server.scriptPostStatuses(503)
+        val started = System.nanoTime()
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = server.baseUrl,
+            logger = logger, debug = false,
+            retryPolicy = SymbolUploader.RetryPolicy(backoffMs = 0, retryAfterCapMs = 300),
+        )
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        assertTrue(ok)
+        assertEquals(2, server.postCallCount())
+        assertTrue(elapsedMs in 250..5_000, "must wait the capped Retry-After (~300ms), waited ${elapsedMs}ms")
+    }
+
+    @Test fun `retries stop when the time budget would be exceeded`() {
+        server.setPostStatus(503)
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = server.baseUrl,
+            logger = logger, debug = false,
+            retryPolicy = SymbolUploader.RetryPolicy(backoffMs = 1_000, budgetMs = 500),
+        )
+        assertFalse(ok)
+        assertEquals(1, server.postCallCount(), "no retry may start when its wait alone exceeds the budget")
+    }
+
+    @Test fun `a malformed presigned URL does not leak its signature into the warning`() {
+        server.setPostBody("""{"endpoint":"http://127.0.0.1:1/bad path?X-Amz-Signature=SECRETSIG"}""")
+        assertFalse(upload())
+        assertFalse(logger.warnMessages.any { it.contains("SECRETSIG") }, "got: ${logger.warnMessages}")
+        assertTrue(logger.warnMessages.any { it.contains("Bugsee upload failed") }, "must still warn; got: ${logger.warnMessages}")
+    }
+
+    @Test fun `an interrupted thread rethrows instead of swallowing the failure`() {
+        val dead = java.net.ServerSocket(0).use { it.localPort }
+        Thread.currentThread().interrupt()
+        try {
+            val thrown = runCatching { upload("http://127.0.0.1:$dead") }.exceptionOrNull()
+            assertTrue(thrown is java.io.IOException, "must propagate the I/O failure; got: $thrown")
+            assertTrue(Thread.currentThread().isInterrupted, "interrupt status must be preserved")
+            assertEquals(0, logger.warnMessages.count { it.contains("retrying") }, "must not retry when cancelled")
+        } finally {
+            Thread.interrupted()
+        }
     }
 
     // ── POST-metadata status handling ────────────────────────────────
@@ -698,6 +751,8 @@ internal class MockSymbolServer(private val appToken: String) {
     fun setPutBody(body: String) { putBody = body }
     fun putCallCount(): Int = putAttempts.get()
 
+    val putBodyHashes: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+    @Volatile var retryAfterHeader: String? = null
     private val postAttempts = AtomicInteger(0)
     private val postScript = ConcurrentLinkedQueue<Int>()
     private val putScript = ConcurrentLinkedQueue<Int>()
@@ -738,6 +793,7 @@ internal class MockSymbolServer(private val appToken: String) {
         }.toString()
         val bytes = body.toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.add("Content-Type", "application/json")
+        retryAfterHeader?.let { exchange.responseHeaders.add("Retry-After", it) }
         exchange.sendResponseHeaders(scripted ?: postStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
         if (bytes.isNotEmpty()) {
             exchange.responseBody.use { it.write(bytes) }
@@ -750,6 +806,7 @@ internal class MockSymbolServer(private val appToken: String) {
         // Drain the body.
         val bos = ByteArrayOutputStream()
         exchange.requestBody.use { it.copyTo(bos) }
+        putBodyHashes.add(java.security.MessageDigest.getInstance("SHA-256").digest(bos.toByteArray()).joinToString("") { "%02x".format(it) })
         val bytes = putBody.toByteArray(Charsets.UTF_8)
         exchange.sendResponseHeaders(scripted ?: putStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
         if (bytes.isNotEmpty()) {

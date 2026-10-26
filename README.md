@@ -480,6 +480,10 @@ An empty root `app_token=` warns once, when the root token is actually consulted
 (not when a DSL token already won). An empty `variant.<name>.app_token=` warns
 when the file is parsed.
 
+Symbol (mapping and native) upload failures never fail the build: with the Kotlin uploader an
+unreachable endpoint, a timeout or a server error is a `warn` naming the variant, after up to 3
+attempts for transient errors (I/O errors, 429, 5xx; a read timeout is not retried).
+
 ## Example
 
 ```properties
