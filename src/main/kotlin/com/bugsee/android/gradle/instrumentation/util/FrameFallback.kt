@@ -230,7 +230,13 @@ internal class FrameFallbackContext private constructor(
                 "it deliberately, exclude the class: `bugsee { instrumentation { excludes.add(\"$dotted\") } }`" +
                 "$alternative. Note that an exclude disables ALL Bugsee instrumentation for what it matches."
             val sink = reportSink
-            if (sink != null) sink(message) else LOGGER.warn(message)
+            if (sink != null) {
+                sink(message)
+            } else {
+                LOGGER.warn(message)
+                // The stack trace is what makes a plugin defect reportable; keep the warning short.
+                LOGGER.info("Bugsee: cause of the fallback for $dotted.$methodName$descriptor", cause)
+            }
         }
 
         /**

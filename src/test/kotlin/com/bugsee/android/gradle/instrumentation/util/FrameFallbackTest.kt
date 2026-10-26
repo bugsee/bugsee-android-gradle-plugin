@@ -216,9 +216,12 @@ class FrameFallbackTest {
         try {
             opDispatchWithFallback(cw.toByteArray(), "fixtures.Jsr")
             fail("expected the build to still fail")
-        } catch (e: RuntimeException) {
-            // AGP's own retry signal is re-thrown bare (never swallowed, never reported).
-            assertTrue(reports.isEmpty() || !reports[0].contains("fixtures.Jsr"))
+        } catch (e: InstrumentationException) {
+            // Version 51 is not AGP's retry signal, so the failure is attributed (and the
+            // fallback was attempted first, hence the report).
+            assertTrue(e.message!!, e.message!!.contains("fixtures.Jsr.m()V"))
+            assertEquals(1, reports.size)
+            assertTrue(reports[0], reports[0].contains("fixtures.Jsr.m()V"))
         }
     }
 
