@@ -31,7 +31,7 @@ internal object SymbolUploader {
     private const val RETRY_AFTER_CAP_MS = 10_000L
     private const val MAX_RETRY_AFTER_SECONDS = 3_600L
     private const val RETRY_BUDGET_MS = 180_000L
-    private val QUERY_IN_MESSAGE = Regex("\\?\\S*")
+    private val QUERY_IN_MESSAGE = Regex("\\?[^\\r\\n]*")
 
     /**
      * Two-stage upload:

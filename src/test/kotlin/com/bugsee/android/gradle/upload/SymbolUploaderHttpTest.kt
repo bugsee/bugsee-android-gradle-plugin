@@ -239,6 +239,27 @@ class SymbolUploaderHttpTest {
         assertFalse(all.any { it.contains("SECRETSIG") || it.contains(appToken) }, "leak; got: $all")
     }
 
+    @Test fun `a malformed endpoint without a query shows only the masked token`() {
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = "http://127.0.0.1:1/bad path",
+            logger = logger, debug = false,
+        )
+        assertFalse(ok)
+        val all = logger.warnMessages + logger.infoMessages
+        assertFalse(all.any { it.contains(appToken) }, "full token leaked; got: $all")
+        assertTrue(all.any { it.contains("test…oken") }, "masked token expected; got: $all")
+    }
+
+    @Test fun `a signature after whitespace inside the query is redacted too`() {
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = "http://127.0.0.1:1/p?a=b c X-Amz-Signature=SECRETSIG",
+            logger = logger, debug = false,
+        )
+        assertFalse(ok)
+        val all = logger.warnMessages + logger.infoMessages
+        assertFalse(all.any { it.contains("SECRETSIG") }, "got: $all")
+    }
+
     @Test fun `an interrupted thread rethrows instead of swallowing the failure`() {
         val dead = java.net.ServerSocket(0).use { it.localPort }
         Thread.currentThread().interrupt()
