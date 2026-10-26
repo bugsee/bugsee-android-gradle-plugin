@@ -67,10 +67,15 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
 
       # Compile the plugin only: the tests and the fixture apps' AGP builds are
-      # not part of the scanned code and are covered by pr.yml.
+      # not part of the scanned code and are covered by pr.yml. The CodeQL tracer
+      # adds heap pressure: the default Kotlin daemon heap ran out of memory in
+      # :compose-compiler-plugin:compileKotlin ("GC overhead limit exceeded").
       - name: Build plugin
         if: matrix.language == 'java-kotlin'
-        run: ./gradlew --no-daemon assemble -x test
+        run: >
+          ./gradlew --no-daemon assemble -x test
+          -Dorg.gradle.jvmargs=-Xmx3g
+          -Pkotlin.daemon.jvmargs=-Xmx3g
 
       - uses: github/codeql-action/analyze@v4
         with:
