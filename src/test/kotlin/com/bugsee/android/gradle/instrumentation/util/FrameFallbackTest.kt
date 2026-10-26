@@ -260,6 +260,49 @@ class FrameFallbackTest {
         assertTrue(reports[0], reports[0].contains("excludes.add(\"a.b\")"))
     }
 
+    /**
+     * Regression (review): near the 64KB limit ASM sizes `ldc`/`ldc_w` by constant-pool index. A
+     * trial writer with a FRESH pool shrinks the 100 original `ldc_w` to `ldc`, so it measures the
+     * method 100 bytes smaller than the real writer does, passes, and the real writer then throws.
+     * The trial must be seeded from the same reader as the real writer.
+     */
+    @Test
+    fun `op-dispatch - too-large detection uses the real constant pool (ldc_w sizing)`() {
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "a/b/h", null, "java/lang/Object", null)
+        // Filler: pushes the pool past 256 entries so later constants need ldc_w.
+        val f = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "f", "()V", null, null)
+        f.visitCode()
+        repeat(300) { f.visitLdcInsn("filler$it"); f.visitInsn(Opcodes.POP) }
+        f.visitInsn(Opcodes.RETURN)
+        f.visitMaxs(0, 0)
+        f.visitEnd()
+        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "a", "(Ljava/net/URL;)V", null, null)
+        mv.visitCode()
+        repeat(100) { mv.visitLdcInsn("hi$it"); mv.visitInsn(Opcodes.POP) }   // 100 x (ldc_w + pop) = 400 bytes
+        repeat(65524 - 400) { mv.visitInsn(Opcodes.NOP) }
+        mv.visitVarInsn(Opcodes.ALOAD, 0)
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/net/URL", "openStream", "()Ljava/io/InputStream;", false)
+        mv.visitInsn(Opcodes.POP)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        val original = cw.toByteArray()
+
+        try {
+            opDispatchPlain(original, "a.b.h")
+            fail("baseline: expected MethodTooLargeException")
+        } catch (expected: org.objectweb.asm.MethodTooLargeException) {
+        }
+
+        val out = opDispatchWithFallback(original, "a.b.h")
+
+        assertFalse(String(out, Charsets.ISO_8859_1).contains("com/bugsee"))
+        assertEquals(signature(insns(original, "a")), signature(insns(out, "a")))
+        assertEquals(1, reports.size)
+    }
+
     @Test
     fun `startup lane - a kind-candidate method whose wrapped form cannot be written falls back to the original`() {
         val src = """

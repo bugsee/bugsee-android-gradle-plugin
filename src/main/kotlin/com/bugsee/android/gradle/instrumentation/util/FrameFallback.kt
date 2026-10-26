@@ -52,8 +52,10 @@ import java.lang.reflect.Method
  *    once more. A method whose ORIGINAL form already defeats frame computation therefore still
  *    fails with the attributed [InstrumentationException]: the stream-through "copy" fast path
  *    is only available to a method a lane declined before buffering it.
+ *  - The trial proves only THIS lane's output. A method within a few bytes of 65,535 can still
+ *    overflow if a later lane in the chain adds code after the trial passed.
  *  - `ClassTooLargeException` (constant pool beyond 65,535 entries) still fails the build: the
- *    trial writer starts with a fresh pool, so it cannot see the real one filling up.
+ *    trial writer's pool is a copy taken at trial time, so it cannot see the real one filling up.
  *  - Version-50 classes with `JSR/RET`: AGP retries the whole class with `COMPUTE_MAXS` iff it
  *    sees the bare `IllegalArgumentException("JSR/RET are not supported with computeFrames
  *    option")`. That exception is therefore never wrapped or swallowed here ([JSR_RET_MESSAGE]),
@@ -70,6 +72,7 @@ internal class FrameFallbackContext private constructor(
     private val hierarchy: ClassWriter,
     private val hierarchyLookup: Method?,
     private val computeFlags: Int,
+    private val sourceReader: ClassReader?,
 ) {
 
     /** True when [t] is the exception AGP keys its `COMPUTE_MAXS` retry on, for a version-50 class. */
@@ -81,7 +84,11 @@ internal class FrameFallbackContext private constructor(
      * which the real writer would throw for it.
      */
     fun trial(method: MethodNode) {
-        val scratch = TrialWriter(hierarchy, hierarchyLookup, computeFlags)
+        val scratch = if (sourceReader != null) {
+            TrialWriter(sourceReader, hierarchy, hierarchyLookup, computeFlags)
+        } else {
+            TrialWriter(hierarchy, hierarchyLookup, computeFlags)
+        }
         scratch.visit(
             classVersion,
             Opcodes.ACC_PUBLIC or Opcodes.ACC_SUPER,
@@ -95,11 +102,26 @@ internal class FrameFallbackContext private constructor(
         scratch.toByteArray()
     }
 
-    private class TrialWriter(
-        private val real: ClassWriter,
-        private val lookup: Method?,
-        flags: Int,
-    ) : ClassWriter(flags) {
+    /**
+     * Seeded from the SAME reader the real writer was built from (when known), so original
+     * constants keep their pool indices. That matters near the 64KB limit: ASM sizes `ldc` (2
+     * bytes) vs `ldc_w` (3 bytes) by pool index, so a fresh pool would mis-measure the method and
+     * let `MethodTooLargeException` slip past the trial (or revert a method that would fit).
+     */
+    private class TrialWriter : ClassWriter {
+        private val real: ClassWriter
+        private val lookup: Method?
+
+        constructor(source: ClassReader, real: ClassWriter, lookup: Method?, flags: Int) : super(source, flags) {
+            this.real = real
+            this.lookup = lookup
+        }
+
+        constructor(real: ClassWriter, lookup: Method?, flags: Int) : super(flags) {
+            this.real = real
+            this.lookup = lookup
+        }
+
         override fun getCommonSuperClass(type1: String, type2: String): String {
             if (lookup == null) return "java/lang/Object"
             try {
@@ -130,7 +152,7 @@ internal class FrameFallbackContext private constructor(
                 val reader: ClassReader? = MinifiedClassSkip.findClassReader(chain)
                 // Offset 6 is the major version; with minor 0 that equals ASM's V* constant.
                 val version = reader?.readShort(6)?.toInt() ?: Opcodes.V11
-                FrameFallbackContext(ownerInternalName, version, writer, findLookup(writer), computeFlagsOf(writer, version))
+                FrameFallbackContext(ownerInternalName, version, writer, findLookup(writer), computeFlagsOf(writer, version), reader)
             }
         } catch (t: Throwable) {
             null
