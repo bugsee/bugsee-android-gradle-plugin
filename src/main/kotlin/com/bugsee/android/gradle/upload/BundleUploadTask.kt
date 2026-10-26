@@ -691,7 +691,7 @@ abstract class BundleUploadTask : DefaultTask() {
                         uploadHandled = result.success || !result.shouldFallbackForBuildRegistration
                         if (!result.success && result.shouldFallback && uploadHandled) {
                             logger.warn(
-                                "Bugsee: bugsee-cli was killed (exit ${result.exitCode}) during build " +
+                                "Bugsee: bugsee-cli was killed or crashed (exit ${result.exitCode}) during build " +
                                     "registration; registration state is unknown, so the native " +
                                     "uploader is NOT attempted to avoid a duplicate registration.",
                             )

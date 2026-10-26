@@ -41,7 +41,7 @@ internal data class CliUploadResult(
      * must not trigger a retry. Every other fallback case is unchanged.
      */
     val shouldFallbackForBuildRegistration: Boolean
-        get() = shouldFallback && !CliUploader.killedBySignal(exitCode)
+        get() = shouldFallback && !CliUploader.ranAndDied(exitCode)
 }
 
 /**
@@ -600,15 +600,21 @@ internal object CliUploader {
         exitCode < 0 || exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode >= EXIT_SIGNAL_BASE
 
     /**
+     * Whether the CLI DID start and then died: a POSIX signal exit (> 128, signal
+     * `exit - 128`) or a Windows NT status crash/kill (< -1, e.g. 0xC0000005). Plugin-
+     * synthesized -1 (binary missing / not executable / exec failed) is NOT included.
+     * Used to avoid a second build registration, whose state is unknown.
+     */
+    internal fun ranAndDied(exitCode: Int): Boolean = exitCode > EXIT_SIGNAL_BASE || exitCode < -1
+
+    /**
      * `X-Bugsee-Uploader` fallback reason for a fallback [exitCode]: `exit-1` /
-     * `exit-2` (structural), `exit-<n>-not-runnable` (126, 127), `exit-<n>-signal-<sig>`
-     * (>= 128), or `exit-0x<HEX>-not-runnable` for negative codes (unsigned hex avoids
+     * `exit-2` (structural), `exit-<n>-not-runnable` (126, 127, 128), `exit-<n>-signal-<sig>`
+     * (> 128), or `exit-0x<HEX>-not-runnable` for negative codes (unsigned hex avoids
      * a double hyphen).
      *
      * Visible for testing.
      */
-    internal fun killedBySignal(exitCode: Int): Boolean = exitCode > EXIT_SIGNAL_BASE
-
     internal fun fallbackReason(exitCode: Int): String = when {
         exitCode < 0 -> "exit-0x${Integer.toHexString(exitCode).uppercase()}-not-runnable"
         exitCode > EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"

@@ -674,8 +674,14 @@ class CliUploaderTest {
         assertFalse(r.shouldFallbackForBuildRegistration, "build registration state unknown: no second attempt")
     }
 
+    @Test fun `windows crash status falls back for symbols but not for build registration`() {
+        val r = runUploadMapping(FakeExec(cliExitValue = -1073741819), executableCliStub())
+        assertTrue(r.shouldFallback)
+        assertFalse(r.shouldFallbackForBuildRegistration)
+    }
+
     @Test fun `not-runnable exits fall back for both symbols and build registration`() {
-        for (code in listOf(126, 127, 128, -1, -1073741819)) {
+        for (code in listOf(126, 127, 128, -1)) {
             val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
             assertTrue(r.shouldFallback, "exit $code symbols")
             assertTrue(r.shouldFallbackForBuildRegistration, "exit $code build registration")
