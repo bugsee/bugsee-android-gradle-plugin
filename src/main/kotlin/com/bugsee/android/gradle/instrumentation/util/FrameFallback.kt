@@ -52,6 +52,8 @@ import java.lang.reflect.Method
  *    once more. A method whose ORIGINAL form already defeats frame computation therefore still
  *    fails with the attributed [InstrumentationException]: the stream-through "copy" fast path
  *    is only available to a method a lane declined before buffering it.
+ *  - The trial pool is padded to the real pool's size (see `padPoolToRealSize`) so `ldc`/`ldc_w`
+ *    sizing errs only on the conservative side.
  *  - The trial proves only THIS lane's output. A method within a few bytes of 65,535 can still
  *    overflow if a later lane in the chain adds code after the trial passed.
  *  - `ClassTooLargeException` (constant pool beyond 65,535 entries) still fails the build: the
@@ -89,6 +91,7 @@ internal class FrameFallbackContext private constructor(
         } else {
             TrialWriter(hierarchy, hierarchyLookup, computeFlags)
         }
+        padPoolToRealSize(scratch)
         scratch.visit(
             classVersion,
             Opcodes.ACC_PUBLIC or Opcodes.ACC_SUPER,
@@ -100,6 +103,27 @@ internal class FrameFallbackContext private constructor(
         method.accept(scratch)
         scratch.visitEnd()
         scratch.toByteArray()
+    }
+
+    /**
+     * The real writer's pool also holds what the lane added to EARLIER methods; the trial's copy
+     * of the input pool does not. A constant the lane adds now would get a lower index in the trial
+     * than in the real writer, so the trial could size an `ldc` 1 byte smaller (2 vs 3) and let
+     * `MethodTooLargeException` through. Padding the trial pool up to the real pool's current size
+     * puts new constants at an index >= the real one: the only residual error is conservative (a
+     * constant the real pool already holds low may be counted as `ldc_w`: a spurious revert at the
+     * boundary, never a missed failure). Fail-open: if the sizes cannot be read, no padding.
+     */
+    private fun padPoolToRealSize(scratch: ClassWriter) {
+        val target = poolCount(hierarchy) ?: return
+        var n = poolCount(scratch) ?: return
+        var i = 0
+        // Each distinct UTF-8 constant adds exactly one entry.
+        while (n < target && i < MAX_PAD) {
+            scratch.newUTF8("\u0000bugsee.trial.pad.$i")
+            n++
+            i++
+        }
     }
 
     /**
@@ -171,6 +195,16 @@ internal class FrameFallbackContext private constructor(
             } catch (t: Throwable) {
                 return if ((version and 0xFFFF) < Opcodes.V1_6) ClassWriter.COMPUTE_MAXS else ClassWriter.COMPUTE_FRAMES
             }
+        }
+
+        private const val MAX_PAD = 70_000
+
+        private fun poolCount(writer: ClassWriter): Int? = try {
+            val table = ClassWriter::class.java.getDeclaredField("symbolTable")
+                .apply { isAccessible = true }.get(writer)
+            table.javaClass.getDeclaredField("constantPoolCount").apply { isAccessible = true }.getInt(table)
+        } catch (t: Throwable) {
+            null
         }
 
         const val JSR_RET_MESSAGE = "JSR/RET are not supported with computeFrames option"

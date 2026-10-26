@@ -303,6 +303,50 @@ class FrameFallbackTest {
         assertEquals(1, reports.size)
     }
 
+    /**
+     * Regression (review P3): the real pool also holds what the lane added to EARLIER methods. When
+     * that crosses 256, a constant the lane adds later costs `ldc_w` (3 bytes) in the real writer but
+     * `ldc` (2) in a trial whose pool is only the INPUT pool. Needs an input pool just below 256, an
+     * earlier instrumented method, and a near-limit method after it.
+     */
+    @Test
+    fun `op-dispatch - too-large detection accounts for constants added to earlier methods`() {
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "a/b/k", null, "java/lang/Object", null)
+        val f = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "f", "()V", null, null)
+        f.visitCode()
+        repeat(110) { f.visitLdcInsn("filler$it"); f.visitInsn(Opcodes.POP) }
+        f.visitInsn(Opcodes.RETURN)
+        f.visitMaxs(0, 0)
+        f.visitEnd()
+        // Earlier method the lane instruments: adds pool entries (dispatcher class + refs + strings).
+        val b = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "b", "(Lokhttp3/Call;)V", null, null)
+        b.visitCode()
+        b.visitVarInsn(Opcodes.ALOAD, 0)
+        b.visitMethodInsn(Opcodes.INVOKEINTERFACE, "okhttp3/Call", "execute", "()Lokhttp3/Response;", true)
+        b.visitInsn(Opcodes.POP)
+        b.visitInsn(Opcodes.RETURN)
+        b.visitMaxs(0, 0)
+        b.visitEnd()
+        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "a", "(Ljava/net/URL;)V", null, null)
+        mv.visitCode()
+        repeat(65505) { mv.visitInsn(Opcodes.NOP) }
+        mv.visitVarInsn(Opcodes.ALOAD, 0)
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/net/URL", "openStream", "()Ljava/io/InputStream;", false)
+        mv.visitInsn(Opcodes.POP)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        val original = cw.toByteArray()
+
+        val out = opDispatchWithFallback(original, "a.b.k")
+
+        assertEquals(signature(insns(original, "a")), signature(insns(out, "a")))
+        // The sibling stayed instrumented.
+        assertTrue(String(out, Charsets.ISO_8859_1).contains("BugseeOperationDispatcher"))
+    }
+
     @Test
     fun `startup lane - a kind-candidate method whose wrapped form cannot be written falls back to the original`() {
         val src = """
