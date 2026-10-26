@@ -156,14 +156,21 @@ class BuildTimingServiceTest {
         // re-registered and would double-count every task event.
         assertEquals(1, fakeRegistry.onTaskCompletionCallCount)
 
-        // The flag itself must be set on the root project's
-        // extra-properties — the persistence mechanism the second
-        // call observes. Flag name is duplicated as a string literal
-        // here to avoid loading BugseePlugin (see above).
+        // The flag itself must be claimed on the shared build service —
+        // the persistence mechanism the second call observes (not the
+        // root project's extra-properties: reading those from a
+        // subproject is an Isolated Projects violation). Flag name is
+        // duplicated as a string literal here to avoid loading
+        // BugseePlugin (see above).
         val flagKey = "bugseeBuildTimingListenerRegistered"
-        val rootExtra = root.extensions.extraProperties
-        assertTrue("flag must be set after first call", rootExtra.has(flagKey))
-        assertEquals(true, rootExtra.get(flagKey))
+        assertTrue(
+            "flag must be set after first call",
+            !com.bugsee.android.gradle.BugseeBuildState.of(sub1).claim(flagKey)
+        )
+        assertTrue(
+            "root project extras must stay untouched",
+            !root.extensions.extraProperties.has(flagKey)
+        )
     }
 
 

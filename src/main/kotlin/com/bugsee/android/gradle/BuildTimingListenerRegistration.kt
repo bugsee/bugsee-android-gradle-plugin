@@ -6,7 +6,7 @@ import org.gradle.api.provider.Provider
 import org.gradle.build.event.BuildEventsListenerRegistry
 
 /**
- * Single-flight flag set on the root project's extra-properties the
+ * Single-flight key claimed on the shared [BugseeBuildState] service the
  * FIRST time the plugin's `apply()` runs in a given Gradle invocation.
  * Subsequent `apply()` calls (from other subprojects applying the
  * plugin) see the flag and skip re-registering the task-completion
@@ -35,8 +35,9 @@ internal const val BUILD_TIMING_LISTENER_FLAG_KEY: String =
  * meta-build, where the plugin is applied to several library modules
  * simultaneously).
  *
- * Marks the Gradle invocation with a single-flight flag on the ROOT
- * project's extra-properties the FIRST call sets, so any later
+ * Marks the Gradle invocation with a single-flight claim on the build-wide
+ * [BugseeBuildState] service (not the root project's extra properties, which
+ * Isolated Projects forbids reading from a subproject); the FIRST call wins, so any later
  * subproject `apply()` observes the flag and skips re-registering the
  * listener (while still wiring through the same shared service).
  *
@@ -50,9 +51,7 @@ internal fun registerBuildTimingListenerOnce(
     listenerRegistry: BuildEventsListenerRegistry,
     timingService: Provider<BuildTimingService>,
 ) {
-    val rootExt = project.gradle.rootProject.extensions.extraProperties
-    if (!rootExt.has(BUILD_TIMING_LISTENER_FLAG_KEY)) {
-        rootExt.set(BUILD_TIMING_LISTENER_FLAG_KEY, true)
+    if (BugseeBuildState.of(project).claim(BUILD_TIMING_LISTENER_FLAG_KEY)) {
         listenerRegistry.onTaskCompletion(timingService)
     }
 }

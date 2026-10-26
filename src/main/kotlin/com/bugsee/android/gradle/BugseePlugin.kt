@@ -406,20 +406,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun settingsResolver(): SettingsResolver = settingsResolver ?: run {
         val project = checkNotNull(appliedProject) { "Bugsee plugin not applied" }
         val extension = checkNotNull(pluginExtension) { "Bugsee plugin not applied" }
-        val root = project.rootProject
-        val text = root.providers
-            .fileContents(root.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME))
+        val text = project.providers
+            .fileContents(ProjectAccess.rootFile(project, BUGSEE_PROPERTIES_FILENAME))
             .asText.orNull
         // PluginPropertiesApplier has already reported a malformed file; do not repeat it.
         // The file is shared by every module, so its diagnostics are reported by the first project
         // that reads it; later projects parse silently.
         val warnedKey = "bugsee.settingsFileDiagnosticsReported"
-        val rootExtras = root.extensions.extraProperties
-        val parseLogger = if (rootExtras.has(warnedKey)) {
-            discardingLogger()
-        } else {
-            rootExtras.set(warnedKey, true)
+        val parseLogger = if (BugseeBuildState.of(project).claim(warnedKey)) {
             project.logger
+        } else {
+            discardingLogger()
         }
         val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
         SettingsResolver(extension, parsed, project.objects, project.logger)
@@ -646,7 +643,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(ccInputs.stringResFiles)
-            task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
+            task.rootProjectDirectory.fileValue(project.rootDir)
         }
 
         // Finalize after assemble and bundle tasks
@@ -709,7 +706,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(ccInputs.stringResFiles)
-            task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
+            task.rootProjectDirectory.fileValue(project.rootDir)
             task.buildDirectory.set(project.layout.buildDirectory)
 
             // Ensure native debug metadata is extracted before upload.
@@ -1468,11 +1465,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }.getOrNull()
 
     private fun knownVariantNames(project: Project): MutableSet<String> {
-        val extras = project.rootProject.extensions.extraProperties
-        val key = "bugsee.knownVariantNames"
-        if (!extras.has(key)) extras.set(key, HashSet<String>())
-        @Suppress("UNCHECKED_CAST")
-        return extras.get(key) as MutableSet<String>
+        return BugseeBuildState.of(project).knownVariantNames()
     }
 
     /** Names of every application variant, shared across modules. */
@@ -1502,9 +1495,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     private fun warnUnsupportedKotlinOnce(project: Project, version: String?) {
         val key = "bugsee.composeCompilerKotlinWarned"
-        val root = project.gradle.rootProject.extensions.extraProperties
-        if (root.has(key)) return
-        root.set(key, true)
+        if (!BugseeBuildState.of(project).claim(key)) return
         project.logger.warn(
             "Bugsee gradle plugin: Compose instrumentation is disabled because the project " +
                 "uses Kotlin ${version ?: "(undetermined)"}, which this plugin's Compose " +
@@ -1556,7 +1547,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             key: String
         ): Boolean {
             resolver.anyScopeValue(def)?.let { return it }
-            val gradleValue = project.findProperty("bugsee.instrumentation.$key")?.toString()
+            val gradleValue = ProjectAccess.gradleProperty(project, "bugsee.instrumentation.$key")
             if (gradleValue != null) {
                 val parsed = gradleValue.toBooleanStrictOrNull()
                 if (parsed == null) {

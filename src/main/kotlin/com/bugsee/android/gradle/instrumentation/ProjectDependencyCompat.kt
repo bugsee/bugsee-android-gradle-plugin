@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation
 
+import com.bugsee.android.gradle.ProjectAccess
 import org.gradle.api.Project
 import org.gradle.api.artifacts.ProjectDependency
 
@@ -17,10 +18,8 @@ import org.gradle.api.artifacts.ProjectDependency
  *    compiles against an older `gradleApi()`, so it cannot be referenced statically without
  *    raising the floor and dropping the older Gradle versions we still support.
  *
- * Preferring `getPath()` also moves us toward Isolated Projects: the path is a plain string that
- * needs no access to another project's mutable model. Resolving it back to a [Project] still
- * does, so this narrows the incompatibility rather than removing it — the eventual fix is to
- * stop needing the other project at all and read the dependency graph via resolution APIs.
+ * Resolving a path back to a [Project] needs another project's mutable model, which Isolated
+ * Projects forbids, so that mode short-circuits to `null` (see [targetProject]).
  *
  * Both lookups are cached: this runs inside a loop over every dependency of every configuration.
  */
@@ -39,9 +38,15 @@ internal object ProjectDependencyCompat {
     /**
      * The project [dep] points at, or `null` if it cannot be resolved on this Gradle version.
      *
+     * Always `null` under Isolated Projects: another project's model (its configurations, its
+     * `GROUP` property, `evaluationDependsOn`) is off limits there. Callers treat `null` as "not
+     * detected", so detection then covers only the module being configured - an SDK declared by a
+     * sibling module, or an SDK source project dependency, is not seen.
+     *
      * @param from the project whose graph is being walked; used to resolve the dependency path
      */
     fun targetProject(from: Project, dep: ProjectDependency): Project? {
+        if (ProjectAccess.isIsolatedProjects(from)) return null
         getPathMethod?.let { method ->
             val path = runCatching { method.invoke(dep) as? String }.getOrNull()
             if (path != null) {
