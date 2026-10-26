@@ -217,11 +217,10 @@ class FrameFallbackTest {
             opDispatchWithFallback(cw.toByteArray(), "fixtures.Jsr")
             fail("expected the build to still fail")
         } catch (e: InstrumentationException) {
-            // Version 51 is not AGP's retry signal, so the failure is attributed (and the
-            // fallback was attempted first, hence the report).
+            // Version 51 is not AGP's retry signal, so the failure is attributed. The lane left
+            // the method unchanged, so no trial ran and no fallback was attempted: no report.
             assertTrue(e.message!!, e.message!!.contains("fixtures.Jsr.m()V"))
-            assertEquals(1, reports.size)
-            assertTrue(reports[0], reports[0].contains("fixtures.Jsr.m()V"))
+            assertTrue(reports.toString(), reports.isEmpty())
         }
     }
 
