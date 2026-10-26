@@ -232,6 +232,11 @@ internal object CliBinaryResolver {
                 )
                 maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
             }
+        } catch (e: InterruptedException) {
+            // Build cancellation is not a download failure: do not fall back
+            // to the Kotlin uploader on a cancelled thread.
+            Thread.currentThread().interrupt()
+            throw e
         } catch (e: Throwable) {
             logger.warn(
                 "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
@@ -301,7 +306,11 @@ internal object CliBinaryResolver {
         // throw OverlappingFileLockException.
         if (jvmLock.isHeldByCurrentThread) return body()
         // Interruptible so queued tasks respond to build cancellation.
-        jvmLock.lockInterruptibly()
+        try {
+            jvmLock.lockInterruptibly()
+        } catch (e: InterruptedException) {
+            throw interrupted(e)
+        }
         try {
             val raf = try {
                 RandomAccessFile(lockFile, "rw")
@@ -337,7 +346,11 @@ internal object CliBinaryResolver {
                             "plugin copy or build in this JVM.",
                     )
                 }
-                Thread.sleep(OVERLAP_RETRY_MS)
+                try {
+                    Thread.sleep(OVERLAP_RETRY_MS)
+                } catch (ie: InterruptedException) {
+                    throw interrupted(ie)
+                }
             } catch (e: FileLockInterruptionException) {
                 throw interrupted(e)
             } catch (e: ClosedByInterruptException) {

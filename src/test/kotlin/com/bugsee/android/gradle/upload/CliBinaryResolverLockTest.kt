@@ -167,6 +167,42 @@ class CliBinaryResolverLockTest {
         }
     }
 
+    @Test(timeout = 10_000) fun `resolve propagates an interrupt on a cold cache and keeps the flag`() {
+        val home = tmp.newFolder("guh")
+        val triple = CliBinaryResolver.detectHostTriple() ?: return
+        val lockFile = File(home, "caches/bugsee-cli/9.9.9/$triple.lock")
+        lockFile.parentFile.mkdirs()
+        val raf = RandomAccessFile(lockFile, "rw")
+        val foreign = raf.channel.lock()
+        val execOps = java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.process.ExecOperations::class.java.classLoader,
+            arrayOf(org.gradle.process.ExecOperations::class.java),
+        ) { _, _, _ -> throw AssertionError("exec must not run") } as org.gradle.process.ExecOperations
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        val flag = java.util.concurrent.atomic.AtomicReference<Boolean>()
+        val returned = java.util.concurrent.atomic.AtomicReference<Any?>("unset")
+        val t = Thread {
+            try {
+                returned.set(CliBinaryResolver.resolve("9.9.9", null, execOps, home, logger, false, false))
+            } catch (e: Throwable) {
+                failure.set(e)
+                flag.set(Thread.currentThread().isInterrupted)
+            }
+        }
+        try {
+            t.start()
+            Thread.sleep(200)
+            t.interrupt()
+            t.join(5_000)
+            assertFalse(t.isAlive)
+            assertTrue(failure.get() is InterruptedException, "got ${failure.get()} / ${returned.get()}")
+            assertTrue(flag.get() == true, "interrupt flag must be restored")
+        } finally {
+            foreign.release()
+            raf.close()
+        }
+    }
+
     // ── downloadAndExtract: atomic install + concurrency (issue #44) ─────
 
     private val logger = Logging.getLogger("CliBinaryResolverLockTest")
