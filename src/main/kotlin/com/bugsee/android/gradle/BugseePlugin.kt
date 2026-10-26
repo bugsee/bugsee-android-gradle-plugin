@@ -555,9 +555,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // and orders the task graph accordingly — no manual
         // `dependsOn(:minifyXxxWithR8)`, which would be fragile across
         // AGP versions and configurations like DexGuard.
-        variant.artifacts.use(resolveTaskProvider)
-            .wiredWith(BugseeBuildIdResolveTask::mappingFile)
-            .toListenTo(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+        //
+        // Only registered for minified variants: with no R8 producer AGP
+        // prints "... will never be invoked" on every build (#53), and the
+        // task's `mappingFile` is optional, so it simply stays unset and the
+        // fallback derivation applies.
+        if (isMinifyEnabled(variant)) {
+            variant.artifacts.use(resolveTaskProvider)
+                .wiredWith(BugseeBuildIdResolveTask::mappingFile)
+                .toListenTo(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+        }
 
         // Asset injection task — copies AGP's merged assets, drops
         // our build-id file in. The `resolvedBuildIdFile` input creates
@@ -593,6 +600,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         return resolveTaskProvider
     }
+
+    /** Unknown variant kinds keep the listener (previous behavior). */
+    private fun isMinifyEnabled(variant: com.android.build.api.variant.Variant): Boolean =
+        (variant as? com.android.build.api.variant.CanMinifyCode)?.isMinifyEnabled ?: true
 
     private fun registerMappingUploadTask(
         project: Project,

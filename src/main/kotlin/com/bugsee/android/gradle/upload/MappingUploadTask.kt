@@ -196,6 +196,17 @@ abstract class MappingUploadTask : DefaultTask() {
 
         if (isDebug) logger.warn("Bugsee: Upload mapping task for variant ${variantName.get()}")
 
+        // Nothing to upload (non-minified variant, no R8 mapping): bail out before
+        // token/versionCode resolution so those checks cannot warn about an
+        // upload that could never happen (#53).
+        val mapping = mappingFile.orNull?.asFile
+        if (mapping == null || !mapping.exists()) {
+            if (isDebug) {
+                logger.warn("Bugsee: Mapping file does not exist for variant ${variantName.get()}. Skipping upload.")
+            }
+            return
+        }
+
         // App-token resolution chain — mirrors BundleUploadTask. The
         // registration-time work (extension + properties-file) is
         // already baked into `preResolvedAppToken`; the manifest
@@ -217,7 +228,7 @@ abstract class MappingUploadTask : DefaultTask() {
             if (placeholderSeen) {
                 AppTokenResolver.logPlaceholderSkip(logger, "mapping")
             } else {
-                logger.warn("Bugsee: Could not resolve appToken. Skipping mapping upload.")
+                logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping mapping upload.")
             }
             return
         }
@@ -229,7 +240,7 @@ abstract class MappingUploadTask : DefaultTask() {
         // the runtime UUID in every minified release build.
         val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
         if (buildUUID.isEmpty()) {
-            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping mapping upload.")
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty for variant ${variantName.get()}. Skipping mapping upload.")
             return
         }
 
@@ -237,14 +248,10 @@ abstract class MappingUploadTask : DefaultTask() {
         val versionName = ManifestModifier.getVersionName(manifest)
         val versionCode = ManifestModifier.getVersionCode(manifest)
         if (versionCode == null) {
-            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml")
-            return
-        }
-
-        // Get the mapping file
-        val mapping = mappingFile.orNull?.asFile
-        if (mapping == null || !mapping.exists()) {
-            if (isDebug) logger.warn("Bugsee: Mapping file does not exist. Skipping upload.")
+            logger.warn(
+                "Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml " +
+                    "for variant ${variantName.get()}. Skipping mapping upload."
+            )
             return
         }
 
