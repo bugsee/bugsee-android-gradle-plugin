@@ -25,12 +25,20 @@ class ComposeTestCompilationTest {
 
     @Test
     fun `reserved test names are tests with or without an association`() {
-        listOf("test", "androidTest", "testFixtures").forEach {
+        listOf("test", "testFixtures").forEach {
             assertTrue(isTest(it), it)
         }
-        listOf("testDebug", "testFreeRelease", "androidTestDebug", "androidTestFreeDebug",
+        listOf("androidTest", "testDebug", "testFreeRelease", "androidTestDebug", "androidTestFreeDebug",
             "debugTestFixtures", "releaseTestFixtures").forEach {
-            assertTrue(isTest(it), it)
+            assertTrue(isTest(it, androidJvm = true), it)
+        }
+    }
+
+    /** Off Android the prefix names belong to the build author: a custom `testFeature` is production. */
+    @Test
+    fun `custom non-android compilations that merely start with test are production`() {
+        listOf("testFeature", "testApp", "androidTestHelpers").forEach {
+            assertFalse(isTest(it, androidJvm = false), it)
         }
     }
 

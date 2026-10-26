@@ -12,9 +12,11 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  * compiles as a PRODUCTION `smokeTest` compilation. So the classification uses the compilation's
  * real shape, in this order:
  *  1. a `com.android.test` module is test code throughout, whatever its compilations are called;
- *  2. the names AGP reserves (`test`, `androidTest`, `testFixtures`, and the same
- *     followed by an upper-case variant part: `testDebug`, `androidTestFreeDebug`, plus
- *     `...TestFixtures`) can never be a production variant, so they classify on name alone;
+ *  2. the stock `test` and `testFixtures` compilations are tests on every target; on an ANDROID
+ *     compilation the names AGP reserves (`androidTest`, the same followed by an upper-case variant
+ *     part: `testDebug`, `androidTestFreeDebug`, plus `...TestFixtures`) can never be a production
+ *     variant, so they classify on name alone. Off Android they do not: a custom JVM compilation
+ *     such as `testFeature` is the build author's own and may be production;
  *  3. on an ANDROID compilation the AGP-generated suffixes `UnitTest`, `AndroidTest` and
  *     `ScreenshotTest` (`debugUnitTest`, `freeReleaseAndroidTest`, `debugScreenshotTest`) classify
  *     by name, confirmed by a SIBLING compilation: the name minus the suffix must be another
@@ -33,7 +35,7 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
 internal object ComposeTestCompilation {
 
     private val RESERVED = Regex("^(test|androidTest)(\\p{Lu}.*)?$")
-    private val RESERVED_FIXTURES = Regex("^(testFixtures|.*TestFixtures)$")
+    private val RESERVED_FIXTURES = Regex("^.*TestFixtures$")
     private val ANDROID_GENERATED_SUFFIX =
         Regex("^.*(UnitTest|AndroidTest|ScreenshotTest)$")
     private val TEST_SUFFIX = Regex("^.*Test$")
@@ -59,9 +61,9 @@ internal object ComposeTestCompilation {
         siblings: () -> Set<String>? = { null },
         associated: () -> Boolean
     ): Boolean {
-        if (name == KotlinCompilation.TEST_COMPILATION_NAME) return true
-        if (RESERVED.matches(name) || RESERVED_FIXTURES.matches(name)) return true
+        if (name == KotlinCompilation.TEST_COMPILATION_NAME || name == "testFixtures") return true
         if (androidJvm) {
+            if (RESERVED.matches(name) || RESERVED_FIXTURES.matches(name)) return true
             val suffix = ANDROID_GENERATED_SUFFIX.matchEntire(name)?.groupValues?.get(1)
             if (suffix != null) {
                 val known = siblings() ?: return true
