@@ -584,7 +584,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         // Flutter apps: Flutter's copyFlutter*Assets also writes the merged
         // assets dir without AGP's knowledge (issue #33). No-op otherwise.
-        FlutterAssetsOrdering.wire(project, assetTaskProvider, capitalizedVariant)
+        FlutterAssetsOrdering.wire(
+            project,
+            assetTaskProvider,
+            capitalizedVariant,
+            project.extensions.getByType(BugseePluginExtension::class.java).assetsDependsOn,
+        )
 
         return resolveTaskProvider
     }

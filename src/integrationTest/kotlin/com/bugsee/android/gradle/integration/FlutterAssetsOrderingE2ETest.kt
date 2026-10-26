@@ -48,4 +48,55 @@ class FlutterAssetsOrderingE2ETest {
             assertTrue("Flutter's asset must be in the APK", zip.getEntry("assets/flutter_marker.txt") != null)
         }
     }
+
+    @Test
+    fun renamed_flutter_task_is_ordered_through_assetsDependsOn() {
+        val fixture = FixtureProject.materialize("app-startup-tracing", temp.newFolder("renamed"))
+
+        val result = fixture.build(
+            tier = "STANDARD",
+            "-PbugseeFixtureFakeFlutter=true",
+            "-PbugseeFixtureFakeFlutterTaskName=flutterCopyAssetsDebug",
+            "-PbugseeFixtureAssetsDependsOn=flutterCopyAssets<Variant>",
+        )
+
+        assertTrue(
+            "inject task must run after the renamed copy",
+            result.output.indexOf(":app:flutterCopyAssetsDebug") in 0 until
+                result.output.indexOf(":app:injectBugseeDebugBuildId"),
+        )
+    }
+
+    @Test
+    fun renamed_flutter_task_without_the_setting_still_fails_validation() {
+        val fixture = FixtureProject.materialize("app-startup-tracing", temp.newFolder("renamed-unset"))
+
+        val result = fixture.buildAndFail(
+            tier = "STANDARD",
+            "-PbugseeFixtureFakeFlutter=true",
+            "-PbugseeFixtureFakeFlutterTaskName=flutterCopyAssetsDebug",
+        )
+
+        assertTrue(
+            "documents why the setting exists",
+            result.output.contains("without declaring an explicit or implicit dependency"),
+        )
+    }
+
+    @Test
+    fun unknown_assetsDependsOn_name_warns_and_a_valid_setup_is_quiet() {
+        val bad = FixtureProject.materialize("app-startup-tracing", temp.newFolder("typo"))
+        val badResult = bad.build(tier = "STANDARD", "-PbugseeFixtureAssetsDependsOn=typo<Variant>")
+        assertTrue(
+            "unmatched name must be reported",
+            badResult.output.contains("assetsDependsOn(\"typo<Variant>\") } matches no task"),
+        )
+
+        val ok = FixtureProject.materialize("app-startup-tracing", temp.newFolder("quiet"))
+        val okResult = ok.build(tier = "STANDARD", "-PbugseeFixtureFakeFlutter=true")
+        assertTrue(
+            "no Flutter-ordering warning when the task exists",
+            !okResult.output.contains("assetsDependsOn"),
+        )
+    }
 }

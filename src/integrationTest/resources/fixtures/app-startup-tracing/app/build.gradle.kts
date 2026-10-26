@@ -129,6 +129,9 @@ bugsee {
         }
     }
 
+    // `-PbugseeFixtureAssetsDependsOn=<name>` exercises the opt-in `assetsDependsOn` setting.
+    project.findProperty("bugseeFixtureAssetsDependsOn")?.toString()?.let { assetsDependsOn(it) }
+
     // Optional opt-out for the extension-stripping path. Defaults to
     // the plugin's default (`true`) when the property is absent. Used
     // by the manifest-stripping integration test to exercise BOTH
@@ -148,7 +151,10 @@ if (project.findProperty("bugseeFixtureFakeFlutter")?.toString() == "true") {
     val flutterSrc = layout.projectDirectory.file("fake-flutter/flutter_marker.txt")
     // Mirrors Flutter: the copy depends on mergeAssets and writes into its
     // output dir; processResources depends on the copy.
-    val copyFlutter = tasks.register<Copy>("copyFlutterAssetsDebug") {
+    // `-PbugseeFixtureFakeFlutterTaskName=<name>` simulates a renamed Flutter task.
+    val flutterTaskName = project.findProperty("bugseeFixtureFakeFlutterTaskName")?.toString()
+        ?: "copyFlutterAssetsDebug"
+    val copyFlutter = tasks.register<Copy>(flutterTaskName) {
         from(flutterSrc)
         into(mergedAssets)
         dependsOn("mergeDebugAssets")
