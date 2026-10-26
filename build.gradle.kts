@@ -228,6 +228,9 @@ val launcher17Provider = javaToolchains.launcherFor {
 // `KotlinCompilerPluginSupportPlugin` when Gradle's plugin verifier
 // resolves Bugsee plugin class references.
 
+// Where the pre-built plugin is published for fixtures on a non-default Gradle (see the publishing block).
+val integrationTestPluginRepoDir = layout.buildDirectory.dir("integrationTest/plugin-repo")
+
 tasks.register<Test>("integrationTest") {
     description = "TestKit-driven build-time integration tests for the Bugsee Android Gradle plugin."
     group = "verification"
@@ -251,6 +254,24 @@ tasks.register<Test>("integrationTest") {
         "bugsee.testkit.javaHome",
         launcher17Provider.get().metadata.installationPath.asFile.absolutePath
     )
+    // Toolchain matrix for the fixture builds. Each is optional: unset keeps the default
+    // (Gradle 8.7 from the wrapper's lane, AGP 8.6.0, Kotlin 2.1.0 — the declared minimums).
+    //   -Pbugsee.it.gradleVersion=9.4.1   Gradle that runs the fixture (GradleRunner.withGradleVersion)
+    //   -Pbugsee.it.agpVersion=8.13.2     com.android.* plugin version in the fixtures
+    //   -Pbugsee.it.kotlinVersion=2.3.20  org.jetbrains.kotlin.android version in the fixtures
+    // They are task inputs, so changing one re-runs the suite instead of reusing UP-TO-DATE.
+    // A non-default Gradle cannot compile this plugin as an included build (our Kotlin 2.1 compiler
+    // chokes on the newest Gradle APIs), so those legs resolve the pre-built plugin from a local repo.
+    if (providers.gradleProperty("bugsee.it.gradleVersion").orNull?.isNotBlank() == true) {
+        dependsOn("publishAllPublicationsToIntegrationTestPluginRepository")
+        systemProperty("bugsee.testkit.pluginRepo", integrationTestPluginRepoDir.get().asFile.absolutePath)
+        systemProperty("bugsee.testkit.pluginVersion", version.toString())
+    }
+    for (key in listOf("gradleVersion", "agpVersion", "kotlinVersion")) {
+        val value = providers.gradleProperty("bugsee.it.$key").orNull?.takeIf { it.isNotBlank() }
+        inputs.property("bugsee.it.$key", value ?: "default")
+        if (value != null) systemProperty("bugsee.testkit.$key", value)
+    }
     // Real bugsee-cli (>= 0.8.0) for the native-upload e2e tests; they skip when unset.
     System.getenv("BUGSEE_CLI_BIN")?.let {
         environment("BUGSEE_CLI_BIN", it)
@@ -371,6 +392,24 @@ publishing {
         artifact(dokkaJavadocJar)
         configurePom()
     }
+}
+
+// Local Maven repo the integrationTest fixtures resolve the plugin from when the matrix asks for a
+// specific Gradle (see `bugsee.it.gradleVersion` on the integrationTest task). Wiped before every
+// publish so a stale SNAPSHOT build can never be picked up.
+publishing {
+    repositories {
+        maven {
+            name = "IntegrationTestPlugin"
+            url = uri(integrationTestPluginRepoDir)
+        }
+    }
+}
+val cleanIntegrationTestPluginRepo by tasks.registering(Delete::class) {
+    delete(integrationTestPluginRepoDir)
+}
+tasks.withType<PublishToMavenRepository>().configureEach {
+    if (name.endsWith("ToIntegrationTestPluginRepository")) dependsOn(cleanIntegrationTestPluginRepo)
 }
 
 nexusPublishing {

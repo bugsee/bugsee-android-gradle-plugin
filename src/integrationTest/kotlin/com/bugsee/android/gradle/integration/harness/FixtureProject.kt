@@ -51,11 +51,7 @@ internal class FixtureProject private constructor(
         // sources the Bugsee plugin via pluginManagement.includeBuild(...)
         // so it ends up in the buildscript classloader alongside AGP and the
         // Kotlin Gradle Plugin API, avoiding cross-classloader NoClassDef.
-        val runner = GradleRunner.create()
-            .withProjectDir(projectDir)
-            .withArguments(args)
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
+        val runner = runner(projectDir).withArguments(args)
 
         return runner.build()
     }
@@ -81,11 +77,7 @@ internal class FixtureProject private constructor(
             if (tier != null) add("-PbugseeStartupTier=$tier")
             addAll(extraArgs)
         }
-        val runner = GradleRunner.create()
-            .withProjectDir(projectDir)
-            .withArguments(args)
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
+        val runner = runner(projectDir).withArguments(args)
         return runner.build()
     }
 
@@ -150,7 +142,7 @@ internal class FixtureProject private constructor(
         // Prefer transform outputs that match the variant AND carry
         // the BUILD_UUID marker (post-transform).
         val markered = candidates.filter { f ->
-            f.path.lowercase().contains("/$variantLower/") &&
+            f.invariantPath().lowercase().contains("/$variantLower/") &&
                 f.readText().contains("com.bugsee.android.BUILD_UUID")
         }
         if (markered.isNotEmpty()) return markered.first().readText()
@@ -159,7 +151,7 @@ internal class FixtureProject private constructor(
         // (pre-transform — the transform didn't run, or wrote
         // somewhere we don't search).
         val variantTagged = candidates.firstOrNull { f ->
-            f.path.lowercase().contains("/$variantLower/")
+            f.invariantPath().lowercase().contains("/$variantLower/")
         }
         if (variantTagged != null) return variantTagged.readText()
 
@@ -206,11 +198,7 @@ internal class FixtureProject private constructor(
         // sources the Bugsee plugin via pluginManagement.includeBuild(...)
         // so it ends up in the buildscript classloader alongside AGP and the
         // Kotlin Gradle Plugin API, avoiding cross-classloader NoClassDef.
-        val runner = GradleRunner.create()
-            .withProjectDir(projectDir)
-            .withArguments(args)
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
+        val runner = runner(projectDir).withArguments(args)
 
         return runner.buildAndFail()
     }
@@ -235,11 +223,7 @@ internal class FixtureProject private constructor(
             add("--stacktrace")
             addAll(extraArgs)
         }
-        val runner = GradleRunner.create()
-            .withProjectDir(projectDir)
-            .withArguments(args)
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
+        val runner = runner(projectDir).withArguments(args)
         return try {
             true to runner.build().output
         } catch (e: org.gradle.testkit.runner.UnexpectedBuildFailure) {
@@ -252,7 +236,63 @@ internal class FixtureProject private constructor(
         return InstrumentedBytecodeIndex.walk(projectDir)
     }
 
+    /** The path with `/` separators, so substring checks like `/debug/` also hold on Windows. */
+    private fun File.invariantPath(): String = path.replace(File.separatorChar, '/')
+
     companion object {
+
+        /** Toolchain overrides from the `integrationTest` task (`-Pbugsee.it.*`); null = the default. */
+        val gradleVersion: String? get() = System.getProperty("bugsee.testkit.gradleVersion")
+        val agpVersion: String? get() = System.getProperty("bugsee.testkit.agpVersion")
+        val kotlinVersion: String? get() = System.getProperty("bugsee.testkit.kotlinVersion")
+
+        /**
+         * A [GradleRunner] for a materialized fixture: project dir, TestKit environment, forwarded
+         * output, and - when `-Pbugsee.it.gradleVersion` is set - that Gradle distribution instead of
+         * the one the tests run on. Every fixture build goes through here so the matrix applies to all.
+         */
+        fun runner(projectDir: File): GradleRunner {
+            val runner = GradleRunner.create()
+                .withProjectDir(projectDir)
+                .withEnvironment(testKitEnvironment())
+                .forwardOutput()
+            gradleVersion?.let { runner.withGradleVersion(it) }
+            return runner
+        }
+
+        // `id("com.android.application") version "8.6.0"` / `id("org.jetbrains.kotlin.android") version "2.1.0"`
+        private val AGP_PLUGIN = Regex("""(id\("com\.android\.[a-z]+"\)\s+version\s+")[^"]+(")""")
+        private val KOTLIN_PLUGIN = Regex("""(id\("org\.jetbrains\.kotlin\.android"\)\s+version\s+")[^"]+(")""")
+
+        /**
+         * Pins the fixture's AGP / Kotlin plugin versions to the matrix values. Fails loudly when a
+         * fixture has no such declaration, so a reworded fixture cannot silently run the default.
+         */
+        private fun applyToolchainVersions(rootBuildScript: File) {
+            val agp = agpVersion
+            val kotlin = kotlinVersion
+            if ((agp == null && kotlin == null) || !rootBuildScript.isFile) return
+            var text = rootBuildScript.readText()
+            if (agp != null) {
+                check(AGP_PLUGIN.containsMatchIn(text)) { "no com.android.* plugin version in $rootBuildScript" }
+                text = AGP_PLUGIN.replace(text) { it.groupValues[1] + agp + it.groupValues[2] }
+            }
+            if (kotlin != null) {
+                check(KOTLIN_PLUGIN.containsMatchIn(text)) { "no kotlin.android plugin version in $rootBuildScript" }
+                text = KOTLIN_PLUGIN.replace(text) { it.groupValues[1] + kotlin + it.groupValues[2] }
+            }
+            rootBuildScript.writeText(text)
+        }
+
+        /**
+         * AGP 9 compiles Kotlin itself and rejects `org.jetbrains.kotlin.android`; the fixtures keep
+         * applying it, which AGP 9.x still allows through these two temporary opt-outs (removed in
+         * AGP 10). They only exist to let one fixture set cover AGP 8 and 9.
+         */
+        private fun agp9Compat(): List<String> =
+            if ((agpVersion?.substringBefore('.')?.toIntOrNull() ?: 0) >= 9)
+                listOf("android.builtInKotlin=false", "android.newDsl=false")
+            else emptyList()
 
         /**
          * Materializes the fixture at `fixtures/<name>` into [targetDir].
@@ -267,6 +307,7 @@ internal class FixtureProject private constructor(
                 .resolve("src/integrationTest/resources/fixtures/$name")
             require(source.isDirectory) { "fixture not found: $source" }
             copyTree(source.toPath(), targetDir.toPath())
+            applyToolchainVersions(File(targetDir, "build.gradle.kts"))
 
             // Append `org.gradle.java.home=<jdk17>` to gradle.properties so
             // AGP (which mandates JDK 17 since AGP 8.0) can run, regardless
@@ -288,6 +329,12 @@ internal class FixtureProject private constructor(
                     }
                 }
                 if (!saw) appendLine(javaHomeLine)
+                agp9Compat().forEach { appendLine(it) }
+                // Pre-built plugin instead of the included build (see the fixtures' settings.gradle.kts).
+                System.getProperty("bugsee.testkit.pluginRepo")?.let {
+                    appendLine("bugseePluginRepo=" + it.replace("\\", "\\\\"))
+                    appendLine("bugseePluginVersion=" + requireSystemProperty("bugsee.testkit.pluginVersion"))
+                }
             }
             props.writeText(rewritten)
 
@@ -321,7 +368,10 @@ internal class FixtureProject private constructor(
          * Android SDK.
          */
         private fun testKitEnvironment(): Map<String, String> {
+            // `withEnvironment` REPLACES the daemon's environment. On Windows a daemon without
+            // SystemRoot / USERPROFILE / TEMP cannot start, so inherit the whole environment there.
             val env = HashMap<String, String>()
+            if (System.getProperty("os.name").orEmpty().startsWith("Windows")) env.putAll(System.getenv())
             env["JAVA_HOME"] = requireSystemProperty("bugsee.testkit.javaHome")
             // AGP requires either ANDROID_HOME (or ANDROID_SDK_ROOT) or a
             // `sdk.dir` line in `local.properties`. Forward whichever the

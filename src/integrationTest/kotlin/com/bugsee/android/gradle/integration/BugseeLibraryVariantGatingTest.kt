@@ -1,7 +1,6 @@
 package com.bugsee.android.gradle.integration
 
 import com.bugsee.android.gradle.integration.harness.FixtureProject
-import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,16 +112,13 @@ class BugseeLibraryVariantGatingTest {
         val sharedDir = temp.newFolder("lib-gating-tasks")
         val fixture = FixtureProject.materialize("library-variant-gating", sharedDir)
 
-        val result = GradleRunner.create()
-            .withProjectDir(fixture.projectDir)
+        val result = FixtureProject.runner(fixture.projectDir)
             .withArguments(
                 ":lib:tasks", "--all",
                 "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
                 "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
                 "--stacktrace",
             )
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
             .build()
 
         val output = result.output
@@ -250,16 +246,13 @@ class BugseeLibraryVariantGatingTest {
         // Pure helper — assembles the library AAR. Doesn't go through
         // FixtureProject.build() because that hardcodes
         // `:app:assembleDebug` (which doesn't exist in this fixture).
-        return GradleRunner.create()
-            .withProjectDir(projectDir)
+        return FixtureProject.runner(projectDir)
             .withArguments(
                 ":lib:assembleDebug",
                 "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
                 "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
                 "--stacktrace",
             )
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
             .build()
     }
 
@@ -278,23 +271,5 @@ class BugseeLibraryVariantGatingTest {
     private fun requireSystemProperty(key: String): String {
         return System.getProperty(key)
             ?: error("missing system property $key — is the integrationTest task wired to forward it?")
-    }
-
-    private fun testKitEnvironment(): Map<String, String> {
-        // Same shape as FixtureProject's private helper — duplicated
-        // here because that one is package-private to the
-        // harness module and this test wants the buildTasks side
-        // door without going through FixtureProject.build's
-        // hardcoded `:app:assembleDebug`.
-        val env = HashMap<String, String>()
-        env["JAVA_HOME"] = requireSystemProperty("bugsee.testkit.javaHome")
-        val androidHome = System.getenv("ANDROID_HOME")
-            ?: System.getenv("ANDROID_SDK_ROOT")
-            ?: System.getProperty("user.home") + "/Library/Android/sdk"
-        env["ANDROID_HOME"] = androidHome
-        env["ANDROID_SDK_ROOT"] = androidHome
-        System.getenv("HOME")?.let { env["HOME"] = it }
-        System.getenv("PATH")?.let { env["PATH"] = it }
-        return env
     }
 }

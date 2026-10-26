@@ -19,9 +19,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // No `kotlinOptions { jvmTarget }`: it is a hard error from Kotlin 2.3, and KGP already targets
+    // the JDK 17 the daemon runs on, which is what compileOptions above asks for.
 }
 
 dependencies {

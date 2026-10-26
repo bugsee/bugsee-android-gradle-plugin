@@ -108,3 +108,116 @@ jobs:
             **/build/reports/tests/
             **/build/test-results/
           retention-days: 3
+
+  # Newer Gradle / AGP / Kotlin than the declared minimums that `build.sh --full` runs on (Gradle 8.7,
+  # AGP 8.6.0, Kotlin 2.1.0). Runs the same TestKit suite against each entry, so a regression that
+  # only shows on a newer toolchain fails here before release (issue #59). The versions are plain
+  # data: bump a row here and nothing else. Pairs must be compatible with each other (AGP 8.13 does
+  # not run on Gradle 9.7+, see README "Gradle 9"), and every entry is something that passes locally:
+  #   ./gradlew integrationTest -Pbugsee.it.gradleVersion=<gradle> -Pbugsee.it.agpVersion=<agp> \
+  #     -Pbugsee.it.kotlinVersion=<kotlin>
+  # The plugin itself is built by the wrapper's Gradle and handed to the fixtures as a jar.
+  toolchain:
+    name: integration (gradle ${{ matrix.gradle }}, agp ${{ matrix.agp }}, kotlin ${{ matrix.kotlin }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # One broken pairing must not hide the result of the other.
+      fail-fast: false
+      matrix:
+        include:
+          # Gradle 9 floor, last AGP 8.x, a Kotlin patch release between 2.2.0 and 2.2.21.
+          - { gradle: "9.0.0", agp: "8.13.2", kotlin: "2.2.20" }
+          # Newest verified Gradle 9 with AGP 9 (compiles Kotlin itself; the fixtures opt out, see
+          # FixtureProject.agp9Compat) and Kotlin 2.3.
+          - { gradle: "9.8.0", agp: "9.4.1", kotlin: "2.3.20" }
+
+    env:
+      RELEASE: "false"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Pre-create the Android user cache
+        run: mkdir -p ~/.android/cache
+
+      # ToolchainMatrixTest fails the leg if the fixtures did not really run on the requested
+      # versions, so a mistyped or ignored property cannot leave a leg green on the defaults.
+      - name: TestKit suite
+        run: >
+          ./gradlew integrationTest
+          -Pbugsee.it.gradleVersion=${{ matrix.gradle }}
+          -Pbugsee.it.agpVersion=${{ matrix.agp }}
+          -Pbugsee.it.kotlinVersion=${{ matrix.kotlin }}
+
+      - name: Upload test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-toolchain-${{ matrix.gradle }}-${{ matrix.agp }}-${{ matrix.kotlin }}-pr${{ github.event.pull_request.number }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 3
+
+  # The plugin downloads and runs a native `bugsee-cli` and is used from Windows developer machines,
+  # so the pieces that touch the OS get a Windows run: the CLI resolver and uploader unit tests, plus
+  # one real TestKit build (manifest injection through AGP's merged manifest, an APK and an AAB).
+  # Deliberately small: Windows minutes cost double, and the rest of the suite is OS-independent.
+  windows:
+    name: windows (CLI + TestKit smoke)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    env:
+      RELEASE: "false"
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            11
+            17
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Pre-create the Android user cache
+        run: mkdir -p ~/.android/cache
+
+      - name: CLI resolver and uploader unit tests
+        run: ./gradlew :test --tests '*CliBinaryResolverTest*' --tests '*CliUploaderTest*'
+
+      - name: TestKit smoke test
+        run: ./gradlew integrationTest --tests '*BugseeManifestE2ETest*'
+
+      - name: Upload test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-windows-pr${{ github.event.pull_request.number }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 3
