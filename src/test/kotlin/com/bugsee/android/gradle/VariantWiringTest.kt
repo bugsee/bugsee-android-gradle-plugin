@@ -261,7 +261,9 @@ class VariantWiringTest {
                 "androidComponents",
                 fakeComponents(),
             )
-            project.plugins.apply(BugseePlugin::class.java)
+            val plugin = project.plugins.apply(BugseePlugin::class.java)
+            // No real Android plugin is applied, so `withPlugin` never fires; wire directly.
+            plugin.wireAndroidComponents(project)
             extension = project.extensions.getByType(BugseePluginExtension::class.java)
             extension.configure()
         }
