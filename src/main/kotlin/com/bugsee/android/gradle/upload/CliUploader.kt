@@ -599,16 +599,18 @@ internal object CliUploader {
      * Visible for testing.
      */
     internal fun shouldFallback(exitCode: Int): Boolean =
-        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE || binaryDidNotRun(exitCode)
+        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE || isOsLevelFailure(exitCode)
 
     /**
-     * Exit codes that mean the process never got a fair start rather than a
-     * substantive CLI result: negative (e.g. Windows loader failures), POSIX
-     * 126 (not executable) / 127 (not found), and 128+ (killed by a signal).
+     * Exit codes produced by the OS/shell rather than a substantive CLI result, for
+     * which the symbol uploaders fall back: negative (Windows loader failures and
+     * crash/kill statuses), POSIX 126 (not executable) / 127 (not found), 128, and
+     * > 128 (killed by a signal). Not all of these mean the process never started;
+     * see [ranAndDied] for the ones where the CLI did run.
      *
      * Visible for testing.
      */
-    internal fun binaryDidNotRun(exitCode: Int): Boolean =
+    internal fun isOsLevelFailure(exitCode: Int): Boolean =
         exitCode < 0 || exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode >= EXIT_SIGNAL_BASE
 
     /**

@@ -681,7 +681,7 @@ class CliUploaderTest {
     }
 
     @Test fun `not-runnable exits fall back for both symbols and build registration`() {
-        for (code in listOf(126, 127, 128, -1, -1073741515, -1073741701)) {
+        for (code in listOf(126, 127, 128, -1, -1073741515, -1073741701, -1073741511, -1073741502)) {
             val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
             assertTrue(r.shouldFallback, "exit $code symbols")
             assertTrue(r.shouldFallbackForBuildRegistration, "exit $code build registration")
