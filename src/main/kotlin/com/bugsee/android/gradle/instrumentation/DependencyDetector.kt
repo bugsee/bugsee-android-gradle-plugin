@@ -55,6 +55,16 @@ internal object DependencyDetector {
             !TEST_WORD.containsMatchIn(name)
 
     /**
+     * Whether any dependency declared directly on a production-classpath configuration of
+     * [project] (see [isProductionConfiguration]) matches [predicate]. Shared by every
+     * third-party library detector so they cannot drift apart.
+     */
+    fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean =
+        project.configurations.any { config ->
+            isProductionConfiguration(config.name) && config.dependencies.any(predicate)
+        }
+
+    /**
      * Returns `true` if [project] — or any project it depends on, transitively —
      * declares a dependency matching the given [artifactPrefix] (external deps)
      * or [projectName] (Bugsee project deps).

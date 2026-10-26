@@ -430,14 +430,20 @@ the upload tasks skip with a single info-level message instead of failing or war
   variant that disabled the feature may carry an unused runtime module; its
   upload task and bytecode transform stay exact.
 - **Library detection reads production configurations of the app module only.**
-  The OkHttp / Compose / Ktor / Cronet detectors look at `implementation`, `api`,
-  `runtimeOnly` and their build-type / flavor / source-set equivalents declared
-  directly in the app module; test, androidTest, testFixtures and compileOnly
-  configurations are ignored, and libraries declared in other project modules are
-  not followed. The match is by name, so a flavor or build type whose name ends in
-  a capitalised `Test` word (for example `latestTest`) is treated as a test
-  configuration and its libraries are not detected. Declare the Bugsee extension
-  module explicitly in those cases.
+  The OkHttp / Compose / Ktor / Cronet detectors (including the Compose
+  compiler-plugin and Compose input-capture gates) look at `implementation`,
+  `api`, `runtimeOnly` and their build-type / flavor / source-set equivalents
+  declared directly in the app module. Test, androidTest, testFixtures and
+  compileOnly configurations are ignored, custom configurations that do not end
+  in `Implementation` / `Api` / `RuntimeOnly` are not scanned, and libraries
+  declared in other project modules are not followed. The match is by name, so a
+  configuration whose name contains a capitalised `Test` word (a flavor or build
+  type such as `latestTest` or `uiTest`) is treated as a test configuration and
+  its libraries are not detected. In these cases declare the library directly in
+  an app-module production configuration, or declare the Bugsee extension module
+  (for example `bugsee-android-okhttp`) explicitly. For Compose, the compiler
+  plugin additionally needs a direct Compose dependency in such a configuration:
+  declaring `bugsee-android-compose` alone does not enable it.
 - **Compose limitation.** The Compose Kotlin compiler-plugin gate is
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,

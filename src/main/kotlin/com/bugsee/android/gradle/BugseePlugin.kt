@@ -1062,23 +1062,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     // --- Dependency detection helpers ---
 
-    /**
-     * Whether any dependency declared on a production-classpath configuration
-     * (see [DependencyDetector.isProductionConfiguration]) matches [predicate].
-     * Third-party library detectors must use this, not a raw scan of every
-     * configuration: a library only in `testImplementation`, `compileOnly`, a
-     * lint or kapt configuration never ships in the app, so it must not pull the
-     * matching Bugsee extension module into the production classpath. Compose
-     * detection also gates [isApplicable] for the Kotlin compiler plugin, so
-     * Compose declared only in test / compileOnly configurations no longer
-     * applies it either.
-     */
-    private fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean {
-        return project.configurations.any { config ->
-            DependencyDetector.isProductionConfiguration(config.name) &&
-                config.dependencies.any(predicate)
-        }
-    }
+    // Third-party library detectors scan production-classpath configurations only (see
+    // DependencyDetector.anyProductionDependency): a library only in `testImplementation`,
+    // `compileOnly`, a lint or kapt configuration never ships in the app, so it must not pull the
+    // matching Bugsee extension module into the production classpath. Compose detection also gates
+    // [isApplicable] for the Kotlin compiler plugin, so Compose declared only in test / compileOnly
+    // configurations no longer applies it either.
+    private fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean =
+        DependencyDetector.anyProductionDependency(project, predicate)
 
     internal fun hasComposeDependency(project: Project): Boolean =
         anyProductionDependency(project) { dep -> dep.group?.startsWith("androidx.compose") == true }
