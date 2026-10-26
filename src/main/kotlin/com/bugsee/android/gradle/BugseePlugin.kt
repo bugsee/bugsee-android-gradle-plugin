@@ -422,7 +422,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             project.logger
         }
         val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
-        SettingsResolver(extension, parsed, project.objects, project.logger)
+        SettingsResolver(extension, parsed, project.objects, project.logger, root.layout.projectDirectory.asFile)
     }.also { settingsResolver = it }
 
     private fun registerManifestTask(
@@ -1518,18 +1518,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     companion object {
 
         /**
-         * [BugseePluginExtension.cliPath] with a relative value resolved against [project]'s directory
-         * (the module applying the plugin), whether it came from the DSL or from `bugsee.properties`.
-         * Without this a relative path would resolve against the Gradle daemon's working directory, so
-         * it would depend on where the daemon was started. Absolute values pass through unchanged and a
-         * blank value stays blank (the resolver treats it as unset). Lazy: the DSL value is not read
-         * until the task input is queried.
+         * [BugseePluginExtension.cliPath] with a relative DSL value resolved against [project]'s directory
+         * (the module applying the plugin). A relative value from `bugsee.properties` was already made
+         * absolute against the root project directory when it was read, so it passes through here. Without
+         * this a relative path would resolve against the Gradle daemon's working directory. Absolute and
+         * blank values are returned byte-for-byte (no `..` normalisation, no URI parsing). Lazy: the DSL
+         * value is not read until the task input is queried.
          */
         internal fun projectRelativeCliPath(project: Project, extension: BugseePluginExtension): Provider<String> {
-            val projectDir = project.layout.projectDirectory
-            return extension.cliPath.map { raw ->
-                if (raw.isBlank()) raw else projectDir.file(raw).asFile.path
-            }
+            val projectDir = project.layout.projectDirectory.asFile
+            return extension.cliPath.map { raw -> SettingDefinitions.resolvePath(raw, projectDir) }
         }
 
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */

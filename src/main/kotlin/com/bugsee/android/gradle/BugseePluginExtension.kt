@@ -52,10 +52,6 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
     /**
      * Path to the `bugsee-cli` binary — optional override. When set and the
      * file is executable, [uploader] = [UploaderStrategy.CLI] uses this binary
-     * verbatim. A relative path (from the DSL or `plugin.cliPath` in `bugsee.properties`) is
-     * resolved against the directory of the project applying the plugin, never the Gradle
-     * daemon's working directory; `~` and environment variables are not expanded. If the path
-     * does not resolve to an executable file a warning is logged and the Kotlin uploader is used.
      * verbatim. When unset, the plugin auto-downloads the version named in
      * [cliVersion] from `https://download.bugsee.com/cli/v<version>/`, caches
      * it under `${gradleUserHome}/caches/bugsee-cli/<version>/<triple>/`,
@@ -65,6 +61,12 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * Override use cases: locally-built CLI (`cargo build --release` in
      * `~/Projects/Bugsee/bugsee-cli`); air-gapped CI environments; testing
      * a CLI version the plugin doesn't yet pin.
+     *
+     * A relative path never depends on the Gradle daemon's working directory. Set in the DSL it is
+     * relative to the module applying the plugin; set as `plugin.cliPath` in `bugsee.properties` it is
+     * relative to that file's directory (the root project), so every module sees the same binary.
+     * Absolute paths are used as written; `~` and environment variables are not expanded. If the path
+     * does not resolve to an executable file a warning is logged and the Kotlin uploader is used.
      *
      * Default: unset (auto-download kicks in).
      */
