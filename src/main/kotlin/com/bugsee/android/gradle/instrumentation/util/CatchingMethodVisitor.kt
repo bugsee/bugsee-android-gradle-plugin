@@ -79,6 +79,11 @@ internal class CatchingMethodVisitor(
             // Already attributed by an inner guard — propagate as-is so we
             // don't bury the original class/method under a re-wrap.
             throw e
+        } catch (e: IllegalArgumentException) {
+            // AGP retries a version-50 class with COMPUTE_MAXS iff it sees exactly this
+            // exception, unwrapped; wrapping it turns a recoverable build into a failed one.
+            if (e.message == FrameFallbackContext.JSR_RET_MESSAGE) throw e
+            throw InstrumentationException(className, methodName, methodDescriptor, e)
         } catch (t: Throwable) {
             throw InstrumentationException(className, methodName, methodDescriptor, t)
         }

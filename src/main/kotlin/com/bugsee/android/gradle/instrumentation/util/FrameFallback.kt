@@ -18,7 +18,6 @@ import org.objectweb.asm.tree.TypeInsnNode
 import org.objectweb.asm.tree.VarInsnNode
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Per-method safety net for the buffering lanes (`MethodNode`-based): a method whose
@@ -32,21 +31,34 @@ import java.util.concurrent.ConcurrentHashMap
  * into the class — there is no way to take it back. The only safe order is therefore:
  *
  *  1. record the lane's input, run the lane into a SCRATCH buffer;
- *  2. prove the buffered result can be written (a scratch `ClassWriter(COMPUTE_FRAMES)`
- *     whose `getCommonSuperClass` is the REAL writer's, so "unresolvable hierarchy" fails the
- *     trial exactly as it would fail the build);
+ *  2. prove the buffered result can be written: a scratch `ClassWriter` with the SAME
+ *     compute flags as the real one (AGP: `COMPUTE_MAXS` for class files older than Java 6,
+ *     `COMPUTE_FRAMES` otherwise), `toByteArray` included;
  *  3. only then replay it into the real writer — or, if anything above failed, replay the
  *     recorded INPUT instead. The real writer sees exactly one complete method either way.
  *
- * ### Known limit
+ * ### What actually triggers it
  *
- * The fallback replays the method THROUGH the real writer, so its frames are recomputed once
- * more. A method whose ORIGINAL form already defeats frame computation (e.g. `JSR/RET`)
- * therefore still fails, with the attributed [InstrumentationException]: the stream-through
- * "copy" fast path is only available to a method a lane declined before buffering it.
- * What this DOES cover is the case that matters in practice — the transformed code (or the
- * hierarchy lookup it adds, e.g. a Bugsee type merged with another at a branch join) being
- * what breaks frame computation.
+ * The realistic trigger is `MethodTooLargeException`: a huge (typically obfuscator-produced)
+ * method that is valid as is but exceeds 65,535 bytes once instrumented; ASM raises it from
+ * `toByteArray`, outside the visitor chain. Frame-computation failures that exist only for the
+ * transformed form are rarer on AGP, whose writer resolves unknown classes leniently
+ * (`java/lang/Object`), so an unresolvable hierarchy does NOT fail a real build. The unit
+ * tests simulate such failures artificially and say so.
+ *
+ * ### Known limits
+ *
+ *  - The fallback replays the method THROUGH the real writer, so its frames are recomputed
+ *    once more. A method whose ORIGINAL form already defeats frame computation therefore still
+ *    fails with the attributed [InstrumentationException]: the stream-through "copy" fast path
+ *    is only available to a method a lane declined before buffering it.
+ *  - `ClassTooLargeException` (constant pool beyond 65,535 entries) still fails the build: the
+ *    trial writer starts with a fresh pool, so it cannot see the real one filling up.
+ *  - Version-50 classes with `JSR/RET`: AGP retries the whole class with `COMPUTE_MAXS` iff it
+ *    sees the bare `IllegalArgumentException("JSR/RET are not supported with computeFrames
+ *    option")`. That exception is therefore never wrapped or swallowed here ([JSR_RET_MESSAGE]),
+ *    so AGP's retry still happens (and the retry's writer is `COMPUTE_MAXS`, which the trial
+ *    mirrors).
  *
  * Streaming lanes (log, thread, okhttp, ...) deliberately do not use this: buffering every
  * method of every class just to have a fallback is the wrong trade for them, and they keep
@@ -57,14 +69,19 @@ internal class FrameFallbackContext private constructor(
     private val classVersion: Int,
     private val hierarchy: ClassWriter,
     private val hierarchyLookup: Method?,
+    private val computeFlags: Int,
 ) {
+
+    /** True when [t] is the exception AGP keys its `COMPUTE_MAXS` retry on, for a version-50 class. */
+    fun isAgpRetrySignal(t: Throwable): Boolean =
+        (classVersion and 0xFFFF) == Opcodes.V1_6 && isJsrRetSignal(t)
 
     /**
      * Throws if [method] cannot be written with recomputed frames — the same condition under
      * which the real writer would throw for it.
      */
     fun trial(method: MethodNode) {
-        val scratch = TrialWriter(hierarchy, hierarchyLookup)
+        val scratch = TrialWriter(hierarchy, hierarchyLookup, computeFlags)
         scratch.visit(
             classVersion,
             Opcodes.ACC_PUBLIC or Opcodes.ACC_SUPER,
@@ -81,7 +98,8 @@ internal class FrameFallbackContext private constructor(
     private class TrialWriter(
         private val real: ClassWriter,
         private val lookup: Method?,
-    ) : ClassWriter(COMPUTE_FRAMES) {
+        flags: Int,
+    ) : ClassWriter(flags) {
         override fun getCommonSuperClass(type1: String, type2: String): String {
             if (lookup == null) return "java/lang/Object"
             try {
@@ -94,7 +112,6 @@ internal class FrameFallbackContext private constructor(
 
     companion object {
         private val LOGGER = Logging.getLogger("com.bugsee.android.gradle.instrumentation")
-        private val reported: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
         /** Test hook: receives every message that would be logged. */
         @Volatile
@@ -113,11 +130,31 @@ internal class FrameFallbackContext private constructor(
                 val reader: ClassReader? = MinifiedClassSkip.findClassReader(chain)
                 // Offset 6 is the major version; with minor 0 that equals ASM's V* constant.
                 val version = reader?.readShort(6)?.toInt() ?: Opcodes.V11
-                FrameFallbackContext(ownerInternalName, version, writer, findLookup(writer))
+                FrameFallbackContext(ownerInternalName, version, writer, findLookup(writer), computeFlagsOf(writer, version))
             }
         } catch (t: Throwable) {
             null
         }
+
+        /**
+         * The flags the REAL writer computes with. Read from the writer itself so a retry with a
+         * different mode (AGP's `COMPUTE_MAXS` retry) is mirrored; if the private field cannot be
+         * read, fall back to AGP's rule by class version.
+         */
+        private fun computeFlagsOf(writer: ClassWriter, version: Int): Int {
+            try {
+                val f = ClassWriter::class.java.getDeclaredField("compute").apply { isAccessible = true }
+                // ASM-internal: 4 = COMPUTE_ALL_FRAMES, 1 = COMPUTE_MAX_STACK_AND_LOCAL.
+                return if (f.getInt(writer) == 4) ClassWriter.COMPUTE_FRAMES else ClassWriter.COMPUTE_MAXS
+            } catch (t: Throwable) {
+                return if ((version and 0xFFFF) < Opcodes.V1_6) ClassWriter.COMPUTE_MAXS else ClassWriter.COMPUTE_FRAMES
+            }
+        }
+
+        const val JSR_RET_MESSAGE = "JSR/RET are not supported with computeFrames option"
+
+        internal fun isJsrRetSignal(t: Throwable): Boolean =
+            t is IllegalArgumentException && t.message == JSR_RET_MESSAGE
 
         private fun findLookup(writer: ClassWriter): Method? {
             var c: Class<*>? = writer.javaClass
@@ -162,22 +199,39 @@ internal class FrameFallbackContext private constructor(
         internal fun isRecoverable(t: Throwable): Boolean =
             t !is VirtualMachineError || t is StackOverflowError
 
-        internal fun report(className: String, methodName: String, descriptor: String, cause: Throwable) {
+        /**
+         * One warning per failing method. Deliberately NOT de-duplicated process-wide: the daemon
+         * outlives builds, so a static set would silence later builds that still leave the method
+         * uninstrumented, and Gradle's transform cache already means each class is processed once
+         * per input.
+         */
+        internal fun report(
+            className: String,
+            methodName: String,
+            descriptor: String,
+            cause: Throwable,
+            laneThrew: Boolean,
+        ) {
             val dotted = className.replace('/', '.')
-            if (!reported.add("$dotted.$methodName$descriptor")) return
             val prefix = dotted.substringBeforeLast('.', missingDelimiterValue = dotted)
-            val message = "Bugsee: left $dotted.$methodName$descriptor UNINSTRUMENTED — its " +
-                "transformed bytecode could not be written (${cause.javaClass.simpleName}: ${cause.message}). " +
-                "The build continues and the app is unaffected apart from missing Bugsee " +
-                "capture in that method. To silence this, exclude the class or its package " +
-                "(for obfuscated libraries, whose class names are short, the package prefix is " +
-                "the form to use): bugsee { instrumentation { excludes.add(\"$prefix\") } }"
+            val reason = (if (laneThrew) {
+                "the instrumentation itself failed on it"
+            } else {
+                "its instrumented bytecode could not be written"
+            }) + " (${cause.javaClass.simpleName}: ${cause.message})"
+            val alternative = if (prefix != dotted) {
+                " or, for an obfuscated library whose class names are short, its whole package " +
+                    "`excludes.add(\"$prefix\")`"
+            } else {
+                ""
+            }
+            val message = "Bugsee: $dotted.$methodName$descriptor was left UNINSTRUMENTED: $reason. " +
+                "The build continues; Bugsee captures nothing in that method. To stop instrumenting " +
+                "it deliberately, exclude the class: `bugsee { instrumentation { excludes.add(\"$dotted\") } }`" +
+                "$alternative. Note that an exclude disables ALL Bugsee instrumentation for what it matches."
             val sink = reportSink
             if (sink != null) sink(message) else LOGGER.warn(message)
         }
-
-        /** Forgets what was already reported. Tests only. */
-        internal fun resetReported() = reported.clear()
 
         /**
          * Cheap structural comparison used to skip the (frame-computing) trial for methods
@@ -240,19 +294,22 @@ internal class FallbackMethodVisitor(
         super.visitEnd()
         val out = scratch()
         var failure: Throwable? = null
+        var laneThrew = false
         var dropped = false
         try {
+            laneThrew = true
             val lane = build(out)
             if (lane == null) {
                 dropped = true
             } else {
                 accept(lane)
+                laneThrew = false
                 if (!FrameFallbackContext.sameCode(this, out)) {
                     context.trial(out)
                 }
             }
         } catch (t: Throwable) {
-            if (!FrameFallbackContext.isRecoverable(t)) throw t
+            if (!FrameFallbackContext.isRecoverable(t) || context.isAgpRetrySignal(t)) throw t
             failure = t
         }
         if (dropped) return
@@ -260,22 +317,25 @@ internal class FallbackMethodVisitor(
         if (failure == null) {
             try {
                 out.accept(dest)
-            } catch (t: InstrumentationException) {
-                throw t
             } catch (t: Throwable) {
-                throw InstrumentationException(className, methodName, methodDescriptor, t)
+                throw attributed(t)
             }
         } else {
-            FrameFallbackContext.report(className, methodName, methodDescriptor, unwrap(failure))
+            FrameFallbackContext.report(className, methodName, methodDescriptor, unwrap(failure), laneThrew)
             try {
                 accept(dest)
             } catch (t: Throwable) {
-                // The ORIGINAL method fails too (see "Known limit"): nothing left to fall back to.
-                t.addSuppressed(failure)
-                if (t is InstrumentationException) throw t
-                throw InstrumentationException(className, methodName, methodDescriptor, t)
+                // The ORIGINAL method fails too (see "Known limits"): nothing left to fall back to.
+                if (!context.isAgpRetrySignal(t)) t.addSuppressed(failure)
+                throw attributed(t)
             }
         }
+    }
+
+    /** Keeps AGP's retry signal bare; attributes everything else. */
+    private fun attributed(t: Throwable): Throwable = when {
+        t is InstrumentationException || context.isAgpRetrySignal(t) -> t
+        else -> InstrumentationException(className, methodName, methodDescriptor, t)
     }
 
     private fun scratch() = MethodNode(

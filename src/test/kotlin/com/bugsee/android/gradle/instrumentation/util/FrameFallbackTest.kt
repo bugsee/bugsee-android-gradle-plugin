@@ -39,7 +39,6 @@ class FrameFallbackTest {
 
     @Before
     fun setUp() {
-        FrameFallbackContext.resetReported()
         reports.clear()
         FrameFallbackContext.reportSink = { reports.add(it) }
     }
@@ -47,7 +46,6 @@ class FrameFallbackTest {
     @After
     fun tearDown() {
         FrameFallbackContext.reportSink = null
-        FrameFallbackContext.resetReported()
     }
 
     /**
@@ -56,6 +54,11 @@ class FrameFallbackTest {
      * that common superclass needs the Bugsee type to be loadable, which (as for an SDK class
      * missing from the hierarchy resolver) it is not here: only the TRANSFORMED method breaks.
      */
+    // NOTE on realism: on AGP the realistic trigger is MethodTooLargeException (see the
+    // dedicated test and the consumer-app run in the PR). AGP's own writer resolves unknown
+    // classes leniently, so the hierarchy-based failures below are ARTIFICIAL: they use the plain
+    // ClassWriter from AsmTestHarness, whose Class.forName cannot load the Bugsee type. They
+    // exercise the mechanism (trial, fallback, once-per-method report), not a production shape.
     private val branchySource = """
         package fixtures;
         import java.io.*;
@@ -137,15 +140,19 @@ class FrameFallbackTest {
         // Reported exactly once, naming the class and the escape hatch.
         assertEquals(1, reports.size)
         assertTrue(reports[0], reports[0].contains("fixtures.Branchy.pick"))
+        assertTrue(reports[0], reports[0].contains("excludes.add(\"fixtures.Branchy\")"))
         assertTrue(reports[0], reports[0].contains("excludes.add(\"fixtures\")"))
+        assertTrue(reports[0], reports[0].contains("could not be written"))
     }
 
     @Test
-    fun `op-dispatch - a failure is reported once even if the class is processed twice`() {
+    fun `op-dispatch - the warning is not de-duplicated across processing runs`() {
+        // A daemon outlives builds: a process-wide once-set would silence later builds that still
+        // leave the method uninstrumented. Each processing run reports its own failures.
         val original = compile("fixtures/Branchy.java", branchySource, "fixtures.Branchy")
         opDispatchWithFallback(original, "fixtures.Branchy")
         opDispatchWithFallback(original, "fixtures.Branchy")
-        assertEquals(1, reports.size)
+        assertEquals(2, reports.size)
     }
 
     @Test
@@ -184,15 +191,16 @@ class FrameFallbackTest {
     }
 
     /**
-     * KNOWN LIMIT, pinned on purpose: when the ORIGINAL method already defeats frame
+     * KNOWN LIMIT, pinned on purpose (modelled with a version-51 class, where JSR is invalid but
+     * an unframeable original is what is being simulated): when the ORIGINAL method already defeats frame
      * recomputation (JSR/RET) there is nothing to fall back to, because the lane has already
      * buffered the method and so forfeited ASM's copy fast path. The build still fails — with
      * the attributed, actionable [InstrumentationException] rather than a bare ASM trace.
      */
     @Test
-    fun `op-dispatch - a method that cannot be framed even unmodified still fails with attribution`() {
+    fun `op-dispatch - a method that cannot be framed even unmodified still fails`() {
         val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
-        cw.visit(Opcodes.V1_4, Opcodes.ACC_PUBLIC, "fixtures/Jsr", null, "java/lang/Object", null)
+        cw.visit(Opcodes.V1_7, Opcodes.ACC_PUBLIC, "fixtures/Jsr", null, "java/lang/Object", null)
         val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "m", "()V", null, null)
         val sub = Label()
         mv.visitCode()
@@ -207,9 +215,10 @@ class FrameFallbackTest {
 
         try {
             opDispatchWithFallback(cw.toByteArray(), "fixtures.Jsr")
-            fail("expected an attributed InstrumentationException")
-        } catch (e: InstrumentationException) {
-            assertTrue(e.message!!, e.message!!.contains("fixtures.Jsr.m()V"))
+            fail("expected the build to still fail")
+        } catch (e: RuntimeException) {
+            // AGP's own retry signal is re-thrown bare (never swallowed, never reported).
+            assertTrue(reports.isEmpty() || !reports[0].contains("fixtures.Jsr"))
         }
     }
 
@@ -262,7 +271,8 @@ class FrameFallbackTest {
         """.trimIndent()
         val original = compile("fixtures/App.java", src, "fixtures.App")
 
-        // The first hierarchy lookup fails (the trial's), later ones succeed: models a failure
+        // ARTIFICIAL (not a production shape): the first hierarchy lookup fails on purpose (the
+        // trial's), later ones succeed. It exercises the startup-lane wiring only, and models a failure
         // that only the transformed form triggers, which the real writer then does not see.
         val reader = ClassReader(original)
         var calls = 0
@@ -298,5 +308,92 @@ class FrameFallbackTest {
             ClassNode().also { ClassReader(bytes).accept(it, 0) }.methods.first { it.name == "open" }
         assertTrue(FrameFallbackContext.sameCode(node(a), node(a)))
         assertFalse(FrameFallbackContext.sameCode(node(a), node(b)))
+    }
+
+    // ── class-file-version cases: what AGP does with JSR/RET ─────────────────────────
+
+    /** `m(URL)`: a guarded call (instrumented by op-dispatch) followed by a JSR/RET subroutine. */
+    private fun jsrClass(version: Int): ByteArray {
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(version, Opcodes.ACC_PUBLIC, "fixtures/Old", null, "java/lang/Object", null)
+        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "m", "(Ljava/net/URL;)V", null, null)
+        val sub = Label()
+        mv.visitCode()
+        mv.visitVarInsn(Opcodes.ALOAD, 0)
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/net/URL", "openStream", "()Ljava/io/InputStream;", false)
+        mv.visitInsn(Opcodes.POP)
+        mv.visitJumpInsn(Opcodes.JSR, sub)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitLabel(sub)
+        mv.visitVarInsn(Opcodes.ASTORE, 1)
+        mv.visitVarInsn(Opcodes.RET, 1)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        return cw.toByteArray()
+    }
+
+    private fun usesDispatcher(bytes: ByteArray) =
+        String(bytes, Charsets.ISO_8859_1).contains("BugseeOperationDispatcher")
+
+    /**
+     * AGP writes class files older than Java 6 with COMPUTE_MAXS, so JSR/RET is legal there and
+     * main instruments the method. The trial must use the same mode, not COMPUTE_FRAMES.
+     */
+    @Test
+    fun `version-48 JSR class is still instrumented (trial mirrors AGP's COMPUTE_MAXS)`() {
+        val original = jsrClass(Opcodes.V1_4)
+
+        val out = AsmTestHarness.transform(original, computeFrames = false) { writer ->
+            FrameFallbackLane.install(writer, "fixtures.Old") { next -> OperationDispatchClassVisitor(next, "fixtures.Old") }
+        }
+
+        assertTrue("method must be instrumented", usesDispatcher(out))
+        assertTrue("no false warning: $reports", reports.isEmpty())
+        // Loads and verifies (initialize=true forces linking/verification).
+        Class.forName(
+            "fixtures.Old", true,
+            com.bugsee.android.gradle.instrumentation.fixtures.InMemoryClassLoader(mapOf("fixtures.Old" to out)),
+        )
+    }
+
+    /**
+     * Version 50: AGP first writes with COMPUTE_FRAMES and retries the whole class with
+     * COMPUTE_MAXS iff it sees the BARE `IllegalArgumentException("JSR/RET are not supported
+     * with computeFrames option")`. It must neither be wrapped nor swallowed-and-reported.
+     */
+    @Test
+    fun `version-50 JSR class - the retry signal is re-thrown bare, and the retry instruments it`() {
+        val original = jsrClass(Opcodes.V1_6)
+
+        try {
+            opDispatchWithFallback(original, "fixtures.Old")
+            fail("first attempt (COMPUTE_FRAMES) must raise the retry signal")
+        } catch (e: IllegalArgumentException) {
+            assertEquals("JSR/RET are not supported with computeFrames option", e.message)
+        }
+        assertTrue("no 'left uninstrumented' report before AGP's retry: $reports", reports.isEmpty())
+
+        // AGP's retry: same class, COMPUTE_MAXS writer.
+        val out = AsmTestHarness.transform(original, computeFrames = false) { writer ->
+            FrameFallbackLane.install(writer, "fixtures.Old") { next -> OperationDispatchClassVisitor(next, "fixtures.Old") }
+        }
+        assertTrue(usesDispatcher(out))
+        assertTrue(reports.isEmpty())
+        Class.forName(
+            "fixtures.Old", true,
+            com.bugsee.android.gradle.instrumentation.fixtures.InMemoryClassLoader(mapOf("fixtures.Old" to out)),
+        )
+    }
+
+    @Test
+    fun `report distinguishes a lane failure from a write failure`() {
+        FrameFallbackContext.report("a/b/C", "m", "()V", IllegalStateException("boom"), laneThrew = true)
+        FrameFallbackContext.report("C", "m", "()V", IllegalStateException("boom"), laneThrew = false)
+        assertTrue(reports[0], reports[0].contains("the instrumentation itself failed on it"))
+        assertTrue(reports[0], reports[0].indexOf("excludes.add(\"a.b.C\")") < reports[0].indexOf("excludes.add(\"a.b\")"))
+        assertTrue(reports[0], reports[0].contains("disables ALL Bugsee instrumentation"))
+        assertTrue(reports[1], reports[1].contains("could not be written"))
+        assertFalse("default package has no distinct prefix form", reports[1].contains("whole package"))
     }
 }
