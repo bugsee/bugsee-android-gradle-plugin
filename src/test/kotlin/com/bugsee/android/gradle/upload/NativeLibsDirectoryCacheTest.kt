@@ -44,7 +44,7 @@ class NativeLibsDirectoryCacheTest {
 
     private fun invocations() = if (counter.exists()) counter.readLines().size else 0
 
-    private fun runTask(force: Boolean = false, endpoint: String = "https://api.example.com", token: String = "tok") {
+    private fun runTask(force: Boolean = false, endpoint: String = "https://api.example.com", token: String = "tok", cliVersion: String = "0.8.1", cliBin: File = cli) {
         val manifest = File(temp.root, "AndroidManifest.xml").apply {
             writeText(
                 "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" " +
@@ -59,8 +59,8 @@ class NativeLibsDirectoryCacheTest {
         task.forceUpload.set(force)
         task.useMergedNativeLibs.set(true)
         task.mergedNativeLibsDir.set(project.layout.projectDirectory.dir("build/intermediates/merged_native_libs/release"))
-        task.cliPath.set(cli.path)
-        task.cliVersion.set("0.8.1")
+        task.cliPath.set(cliBin.path)
+        task.cliVersion.set(cliVersion)
         task.cliAutoUpdate.set(false)
         task.gradleUserHomeDir.set(temp.newFolder())
         task.uploader.set(UploaderStrategy.CLI)
@@ -110,6 +110,17 @@ class NativeLibsDirectoryCacheTest {
         assertEquals(3, invocations())
         runTask()
         assertEquals(3, invocations(), "the original entry survives")
+    }
+
+    @Test fun `a CLI version or path change invalidates the marker`() {
+        runTask()
+        runTask(cliVersion = "0.9.0")
+        assertEquals(2, invocations(), "pinned CLI upgrade re-sends")
+        val other = File(temp.root, "bugsee-cli-2").apply { writeText(cli.readText()); setExecutable(true) }
+        runTask(cliBin = other)
+        assertEquals(3, invocations(), "swapped CLI path re-sends")
+        runTask(cliBin = other)
+        assertEquals(3, invocations())
     }
 
     @Test fun `digest follows content, names and sizes but not mtime`() {

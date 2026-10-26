@@ -115,6 +115,22 @@ class VariantWiringTest {
     }
 
     @Test
+    fun nativeUploadFollowsIsDebuggableOfRealBuildTypes() {
+        val h = Harness("plugin.ndk.enabled=true\n")
+        h.registerBuildTypes(
+            "debug" to true, "staging" to true, "beta" to true, "qa" to false, "release" to false,
+        )
+        for (bt in listOf("debug", "staging", "beta", "qa", "release")) h.runVariant(bt, buildType = bt)
+        // `staging` is initWith(debug), `beta` is release-derived with isDebuggable = true:
+        // neither name contains "debug", only the DSL flag identifies them.
+        assertNull(h.nativeTask("Debug"))
+        assertNull(h.nativeTask("Staging"), "initWith(debug) build type is debuggable")
+        assertNull(h.nativeTask("Beta"), "isDebuggable = true wins over the name")
+        assertNotNull(h.nativeTask("Qa"), "initWith(release) keeps the upload")
+        assertNotNull(h.nativeTask("Release"))
+    }
+
+    @Test
     fun noVariantInput_taskInputsMatchGlobalExtension() {
         val h = Harness(
             "app_token=root-token\nplugin.ndk.enabled=true\nplugin.ndk.useMergedNativeLibs=false\n",
@@ -452,6 +468,33 @@ class VariantWiringTest {
         fun runVariant(name: String, flavors: List<Pair<String, String>> = emptyList(), buildType: String = "release") {
             val variant = fakeVariant(project, name, flavors, buildType)
             callbacks.forEach { it(variant) }
+        }
+
+        /** Registers an `android` extension whose build types carry the given `isDebuggable` flags. */
+        fun registerBuildTypes(vararg types: Pair<String, Boolean>) {
+            val container = project.container(com.android.build.api.dsl.ApplicationBuildType::class.java) { name ->
+                val debuggable = types.first { it.first == name }.second
+                Proxy.newProxyInstance(
+                    javaClass.classLoader,
+                    arrayOf(com.android.build.api.dsl.ApplicationBuildType::class.java),
+                ) { _, m, _ ->
+                    when (m.name) {
+                        "getName" -> name
+                        "isDebuggable" -> debuggable
+                        "toString" -> "BuildType($name)"
+                        "hashCode" -> name.hashCode()
+                        "equals" -> false
+                        else -> null
+                    }
+                } as com.android.build.api.dsl.ApplicationBuildType
+            }
+            types.forEach { container.create(it.first) }
+            val ext = Proxy.newProxyInstance(
+                javaClass.classLoader,
+                arrayOf(com.android.build.api.dsl.ApplicationExtension::class.java),
+            ) { _, m, _ -> if (m.name == "getBuildTypes") container else null }
+            @Suppress("UNCHECKED_CAST")
+            project.extensions.add(com.android.build.api.dsl.ApplicationExtension::class.java as Class<Any>, "android", ext)
         }
 
         fun manifestTask(cap: String) =

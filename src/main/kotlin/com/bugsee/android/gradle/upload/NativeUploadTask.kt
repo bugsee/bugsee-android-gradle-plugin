@@ -272,10 +272,11 @@ abstract class NativeUploadTask : DefaultTask() {
                 // Cheap local "already uploaded" marker: a digest of the tree's file names, sizes
                 // and content. Only a successful CLI run records it, so a failed upload is retried;
                 // `force` bypasses the check (but still records on success).
-                val dirKey = nativeLibsCacheKey(appToken, variantName.get(), endpoint.get())
+                val dirKey = nativeLibsCacheKey(appToken, variantName.get(), endpoint.get(), cliVersion.orNull, cliPath.orNull)
                 val dirDigest = nativeLibsDigest(libsDir)
                 if (!skipCache && SymbolHashCache.isCached(cacheFile, dirKey, dirDigest)) {
-                    if (isDebug) logger.warn("Bugsee: Native libraries unchanged (digest=$dirDigest). Skipping upload.")
+                    val msg = "Bugsee: Native libraries unchanged (digest=$dirDigest). Skipping upload."
+                    if (isDebug) logger.warn(msg) else logger.info(msg)
                     return
                 }
                 if (isDebug) logger.warn("Bugsee: Uploading unstripped native libraries from ${libsDir.path}")
@@ -480,13 +481,22 @@ internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String
 
 /**
  * Key into [SymbolHashCache] for the unstripped-libraries directory upload. Unlike the
- * zip key it also carries the endpoint: the digest says what was sent, not where, and a
- * token can be used against several backends. The `elf-dir-v1` generation keeps these
+ * zip key it also carries the endpoint (the digest says what was sent, not where, and a
+ * token can be used against several backends) and the requested CLI version / explicit CLI
+ * path, so a CLI upgrade or swap re-sends what an older (possibly buggy) CLI recorded. The `elf-dir-v1` generation keeps these
  * entries apart from the zip ones (a digest and a zip hash never compare).
  */
-internal fun nativeLibsCacheKey(appToken: String, variantName: String, endpoint: String): String =
-    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-dir-v1:" +
-        HashUtils.sha1Hex(endpoint)
+internal fun nativeLibsCacheKey(
+    appToken: String,
+    variantName: String,
+    endpoint: String,
+    cliVersion: String? = null,
+    cliPath: String? = null,
+): String =
+    "${HashUtils.sha1Hex(appToken)}:$variantName:" +
+        "cli-${cliVersion?.takeIf { it.isNotBlank() } ?: CliBinaryResolver.DEFAULT_VERSION}:" +
+        "path-${cliPath?.takeIf { it.isNotBlank() }?.let { HashUtils.sha1Hex(it).take(12) } ?: "none"}:" +
+        "elf-dir-v1:${HashUtils.sha1Hex(endpoint)}"
 
 /**
  * Digest of the libraries the CLI would pick up under [dir] (`.so`, `.so.dbg`, `.so.sym`):

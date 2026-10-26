@@ -730,6 +730,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     ): Boolean {
         if (!extension.ndk.enabled.get()) return false
         if (!isReleaseLikeVariant(project, variant) && !extension.ndk.allBuildTypes.getOrElse(false)) {
+            logNativeSkippedOnce(project, variant)
             if (isDebug) {
                 project.logger.warn(
                     "Bugsee: skipping native symbol upload for non-release variant '${variant.name}' — " +
@@ -739,6 +740,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return false
         }
         return true
+    }
+
+    /** One lifecycle line per project: a behaviour change that must not pass silently. */
+    private fun logNativeSkippedOnce(project: Project, variant: ApplicationVariant) {
+        val key = "bugseeNativeSkipWarned"
+        val extra = project.extensions.extraProperties
+        if (extra.has(key) && extra.get(key) == true) return
+        extra.set(key, true)
+        project.logger.lifecycle(
+            "Bugsee: native symbols are uploaded only for non-debuggable build types " +
+                "(skipped: ${variant.buildType ?: variant.name}, and any other with isDebuggable = true); " +
+                "set ndk.allBuildTypes=true to include them"
+        )
     }
 
     private fun registerNativeUploadTask(
