@@ -89,4 +89,20 @@ class InstrumentationExcludesTest {
         assertTrue(InstrumentationExcludes.isExcluded("com.b.Bar", p))
         assertFalse(InstrumentationExcludes.isExcluded("com.c.Bar", p))
     }
+
+    @Test
+    fun slashSeparatedPatternsAreNormalizedToDots() {
+        assertTrue(InstrumentationExcludes.isExcluded("com.vivalnk.Foo", listOf("com/vivalnk/**")))
+        assertTrue(InstrumentationExcludes.isExcluded("a.b.C", listOf("a/b/C")))
+        assertTrue(InstrumentationExcludes.isExcluded("com.foo.sub.Baz", listOf("com/foo")))
+        assertTrue(InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("  com/foo/*  ")))
+        assertFalse(InstrumentationExcludes.isExcluded("com.foobar.Bar", listOf("com/foo")))
+        assertFalse(InstrumentationExcludes.isExcluded("com.other.Bar", listOf("com/foo/**")))
+    }
+
+    @Test
+    fun slashAndDotSpellingsAreIdempotent() {
+        assertTrue(InstrumentationExcludes.isExcluded("com.vivalnk.Foo", listOf("com.vivalnk.**")))
+        assertTrue(InstrumentationExcludes.isExcluded("a.b.C", listOf("a.b/C")))
+    }
 }
