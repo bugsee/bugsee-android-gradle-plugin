@@ -662,6 +662,8 @@ class CliUploaderTest {
         assertEquals("exit-1", CliUploader.fallbackReason(1))
         assertEquals("exit-2", CliUploader.fallbackReason(2))
         assertEquals("exit-126-not-runnable", CliUploader.fallbackReason(126))
+        assertEquals("exit-128-not-runnable", CliUploader.fallbackReason(128))
+        assertEquals("exit-129-signal-1", CliUploader.fallbackReason(129))
         assertEquals("exit-139-signal-11", CliUploader.fallbackReason(139))
         assertEquals("exit-0xFFFFFFFF-not-runnable", CliUploader.fallbackReason(-1))
     }

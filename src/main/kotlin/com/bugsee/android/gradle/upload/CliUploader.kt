@@ -599,15 +599,17 @@ internal object CliUploader {
      */
     internal fun fallbackReason(exitCode: Int): String = when {
         exitCode < 0 -> "exit-0x${Integer.toHexString(exitCode).uppercase()}-not-runnable"
-        exitCode >= EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"
-        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND -> "exit-$exitCode-not-runnable"
+        exitCode > EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode == EXIT_SIGNAL_BASE ->
+            "exit-$exitCode-not-runnable"
         else -> "exit-$exitCode"
     }
 
     private fun describeFallback(exitCode: Int): String = when {
         exitCode < 0 -> "could not be run (exit 0x${Integer.toHexString(exitCode).uppercase()})"
-        exitCode >= EXIT_SIGNAL_BASE -> "was killed by signal ${exitCode - EXIT_SIGNAL_BASE} (exit $exitCode)"
-        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND -> "could not be run (exit $exitCode)"
+        exitCode > EXIT_SIGNAL_BASE -> "was killed by signal ${exitCode - EXIT_SIGNAL_BASE} (exit $exitCode)"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode == EXIT_SIGNAL_BASE ->
+            "could not be run (exit $exitCode)"
         else -> "exited with $exitCode (structural failure)"
     }
 }
