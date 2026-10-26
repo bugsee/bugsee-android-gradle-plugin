@@ -119,7 +119,7 @@ bugsee {
     }
 
     // Instrumentation excludes — exercised by InstrumentationExcludesIntegrationTest.
-    // `-PbugseeFixtureExcludes=<comma-separated FQN patterns>` opts those
+    // `-PbugseeFixtureExcludes=<comma-separated patterns, dotted or slash form>` opts those
     // classes out of ALL Bugsee bytecode instrumentation.
     val excludePatterns = project.findProperty("bugseeFixtureExcludes")?.toString()
     if (!excludePatterns.isNullOrBlank()) {

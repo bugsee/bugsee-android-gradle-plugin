@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.util
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,8 +102,36 @@ class InstrumentationExcludesTest {
     }
 
     @Test
-    fun slashAndDotSpellingsAreIdempotent() {
+    fun mixedSlashAndDotPatternsMatch() {
         assertTrue(InstrumentationExcludes.isExcluded("com.vivalnk.Foo", listOf("com.vivalnk.**")))
         assertTrue(InstrumentationExcludes.isExcluded("a.b.C", listOf("a.b/C")))
+    }
+
+    @Test
+    fun slashAndDotFormsGiveIdenticalResults() {
+        val classes = listOf("com.foo.Bar", "com.foo.sub.Baz", "com.foobar.Bar", "x.databinding.FooBinding")
+        for ((dotted, slashed) in listOf("com.foo" to "com/foo", "com.foo.*" to "com/foo/*", "*.databinding.*Binding" to "*/databinding/*Binding")) {
+            for (c in classes) {
+                assertEquals(
+                    "$dotted vs $slashed on $c",
+                    InstrumentationExcludes.isExcluded(c, listOf(dotted)),
+                    InstrumentationExcludes.isExcluded(c, listOf(slashed)),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun leadingAndTrailingSeparatorsAreIgnored() {
+        assertTrue(InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("com/foo/")))
+        assertTrue(InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("/com/foo/Bar")))
+        assertTrue(InstrumentationExcludes.isExcluded("com.foo.Bar", listOf("com.foo.")))
+        assertFalse(InstrumentationExcludes.isExcluded("com.foobar.Bar", listOf("com/foo/")))
+    }
+
+    @Test
+    fun innerClassAndMidGlobSlashForms() {
+        assertTrue(InstrumentationExcludes.isExcluded("com.foo.Outer\$Inner", listOf("com/foo/Outer\$Inner")))
+        assertTrue(InstrumentationExcludes.isExcluded("x.databinding.FooBinding", listOf("*/databinding/*Binding")))
     }
 }

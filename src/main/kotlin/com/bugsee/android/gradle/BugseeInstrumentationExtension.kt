@@ -55,7 +55,8 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      * names the offending class; add it here to unblock while the
      * underlying plugin bug is fixed.
      *
-     * Patterns match the dot-separated FQN. A bare class name matches
+     * Patterns match the dot-separated FQN; the slash-separated bytecode
+     * spelling (`com/vendor/sdk`) is accepted too and is equivalent. A bare class name matches
      * exactly; a bare package name excludes everything under it; `*` is a
      * wildcard (any characters). Examples:
      * ```kotlin
@@ -64,6 +65,7 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      *         excludes.add("com.example.Problematic")  // one class
      *         excludes.add("com.vendor.sdk")           // whole package (+ sub-packages)
      *         excludes.add("*.databinding.*Binding")   // glob
+     *         excludes.add("com/vendor/sdk")           // slash form of a package
      *     }
      * }
      * ```
