@@ -15,11 +15,10 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  *  2. the names AGP reserves (`test`, `androidTest`, `unitTest`, `testFixtures`, and the same
  *     followed by an upper-case variant part: `testDebug`, `androidTestFreeDebug`, plus
  *     `...TestFixtures`) can never be a production variant, so they classify on name alone;
- *  3. on an ANDROID compilation the AGP-generated suffixes `UnitTest`, `AndroidTest`,
- *     `ScreenshotTest`, `HostTest` and `DeviceTest` (`debugUnitTest`, `freeReleaseAndroidTest`,
- *     `androidHostTest`) classify by name, confirmed by a SIBLING compilation: the name minus the
- *     suffix must be another compilation of the same target (`debug`, or `androidMain` for
- *     `android` + `HostTest`). They cannot lean on associations: AGP 9's built-in Kotlin reports NO
+ *  3. on an ANDROID compilation the AGP-generated suffixes `UnitTest`, `AndroidTest` and
+ *     `ScreenshotTest` (`debugUnitTest`, `freeReleaseAndroidTest`, `debugScreenshotTest`) classify
+ *     by name, confirmed by a SIBLING compilation: the name minus the suffix must be another
+ *     compilation of the same target (`debug` for `debugUnitTest`). They cannot lean on associations: AGP 9's built-in Kotlin reports NO
  *     associated compilations for them, even at execution time. The sibling check is what keeps a
  *     production `freeDeviceTest` (flavor `free`, build type `deviceTest`, which AGP accepts) from
  *     being read as a test; if the sibling list cannot be read the name alone decides;
@@ -36,7 +35,7 @@ internal object ComposeTestCompilation {
     private val RESERVED = Regex("^(test|androidTest|unitTest)(\\p{Lu}.*)?$")
     private val RESERVED_FIXTURES = Regex("^(testFixtures|.*TestFixtures)$")
     private val ANDROID_GENERATED_SUFFIX =
-        Regex("^.*(UnitTest|AndroidTest|ScreenshotTest|HostTest|DeviceTest)$")
+        Regex("^.*(UnitTest|AndroidTest|ScreenshotTest)$")
     private val TEST_SUFFIX = Regex("^.*Test$")
 
     fun isTest(compilation: KotlinCompilation<*>): Boolean {
@@ -67,7 +66,7 @@ internal object ComposeTestCompilation {
             if (suffix != null) {
                 val known = siblings() ?: return true
                 val prefix = name.removeSuffix(suffix)
-                if (prefix.isNotEmpty() && (prefix in known || prefix + "Main" in known)) return true
+                if (prefix.isNotEmpty() && prefix in known) return true
             }
         }
         return TEST_SUFFIX.matches(name) && associated()

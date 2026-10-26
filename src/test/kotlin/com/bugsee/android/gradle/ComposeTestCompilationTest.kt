@@ -49,7 +49,7 @@ class ComposeTestCompilationTest {
     @Test
     fun `android generated test suffixes are tests without any association`() {
         listOf("debugUnitTest", "freeReleaseUnitTest", "debugAndroidTest", "freeDebugAndroidTest",
-            "debugScreenshotTest", "androidHostTest", "androidDeviceTest").forEach {
+            "debugScreenshotTest").forEach {
             assertTrue(isTest(it, associated = false, androidJvm = true), it)
         }
         // Off Android the same names are not trusted without an association.
@@ -68,7 +68,6 @@ class ComposeTestCompilationTest {
         // ...while the generated compilations next to real variants are still tests, with no association.
         assertTrue(isTest("freeDebugUnitTest", androidJvm = true, siblings = siblings))
         assertTrue(isTest("freeDeviceTestUnitTest", androidJvm = true, siblings = siblings))
-        assertTrue(isTest("androidHostTest", androidJvm = true, siblings = setOf("androidMain", "androidHostTest")))
     }
 
     @Test
@@ -215,5 +214,14 @@ class ComposeTestCompilationTest {
     fun `isApplicable skips an association-less AGP 9 unit test compilation`() {
         val (p, plugin) = appliedPlugin()
         assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", allAssociated = { emptySet() })))
+    }
+
+    @Test
+    fun `isApplicable uses the sibling compilations of an association-less test compilation`() {
+        val (p, plugin) = appliedPlugin()
+        val siblings = listOf("debug", "debugUnitTest", "freeDeviceTest")
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = siblings)))
+        assertTrue(plugin.isApplicable(stub(p, "freeDeviceTest", siblings = siblings)))
+        assertTrue(plugin.isApplicable(stub(p, "debug", siblings = siblings)))
     }
 }
