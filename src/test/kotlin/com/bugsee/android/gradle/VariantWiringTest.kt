@@ -192,6 +192,43 @@ class VariantWiringTest {
     }
 
     @Test
+    fun relativeDslCliPathResolvesAgainstProjectDir() {
+        val h = Harness(null)
+        h.extension.cliPath.set("tools/fake-cli.sh")
+        h.runVariant("release")
+
+        assertEquals(
+            File(h.project.projectDir, "tools/fake-cli.sh").path,
+            h.mappingTask("Release").cliPath.get(),
+        )
+    }
+
+    @Test
+    fun relativeFileCliPathResolvesAgainstProjectDir() {
+        val h = Harness("plugin.cliPath=tools/fake-cli.sh\n")
+        h.runVariant("release")
+
+        assertEquals(
+            File(h.project.projectDir, "tools/fake-cli.sh").path,
+            h.mappingTask("Release").cliPath.get(),
+        )
+    }
+
+    @Test
+    fun absoluteAndBlankCliPathPassThrough() {
+        val abs = File(System.getProperty("java.io.tmpdir"), "bugsee-cli").absolutePath
+        val h = Harness(null)
+        h.extension.cliPath.set(abs)
+        h.runVariant("release")
+        assertEquals(abs, h.mappingTask("Release").cliPath.get())
+
+        val blank = Harness(null)
+        blank.extension.cliPath.set("  ")
+        blank.runVariant("release")
+        assertEquals("  ", blank.mappingTask("Release").cliPath.get())
+    }
+
+    @Test
     fun rootFileTokenUsedWhenDslHasNone() {
         val h = Harness("app_token=root-file-token\n")
         h.runVariant("release")

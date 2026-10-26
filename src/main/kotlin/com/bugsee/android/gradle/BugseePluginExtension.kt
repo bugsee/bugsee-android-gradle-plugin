@@ -52,6 +52,10 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
     /**
      * Path to the `bugsee-cli` binary — optional override. When set and the
      * file is executable, [uploader] = [UploaderStrategy.CLI] uses this binary
+     * verbatim. A relative path (from the DSL or `plugin.cliPath` in `bugsee.properties`) is
+     * resolved against the directory of the project applying the plugin, never the Gradle
+     * daemon's working directory; `~` and environment variables are not expanded. If the path
+     * does not resolve to an executable file a warning is logged and the Kotlin uploader is used.
      * verbatim. When unset, the plugin auto-downloads the version named in
      * [cliVersion] from `https://download.bugsee.com/cli/v<version>/`, caches
      * it under `${gradleUserHome}/caches/bugsee-cli/<version>/<triple>/`,

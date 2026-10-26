@@ -614,7 +614,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // optional (lets developers point at a locally-built binary);
             // when unset, the task auto-downloads `cliVersion` from
             // download.bugsee.com into the per-user Gradle cache.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             // Gradle user home wired CC-safely as a File (eagerly captured).
@@ -685,7 +685,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // wiring on MappingUploadTask. Same auto-download story: when
             // `cliPath` is unset, the task downloads `cliVersion` from
             // download.bugsee.com into the per-user Gradle cache.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
@@ -882,7 +882,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // otherwise the task auto-downloads `cliVersion` into the
             // per-user Gradle cache. `gradleUserHomeDir` is that cache
             // root, captured CC-safely as a File.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
@@ -955,7 +955,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // otherwise the task auto-downloads `cliVersion` into the
             // per-user Gradle cache. `gradleUserHomeDir` is that cache
             // root, captured CC-safely as a File.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
@@ -1516,6 +1516,21 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     companion object {
+
+        /**
+         * [BugseePluginExtension.cliPath] with a relative value resolved against [project]'s directory
+         * (the module applying the plugin), whether it came from the DSL or from `bugsee.properties`.
+         * Without this a relative path would resolve against the Gradle daemon's working directory, so
+         * it would depend on where the daemon was started. Absolute values pass through unchanged and a
+         * blank value stays blank (the resolver treats it as unset). Lazy: the DSL value is not read
+         * until the task input is queried.
+         */
+        internal fun projectRelativeCliPath(project: Project, extension: BugseePluginExtension): Provider<String> {
+            val projectDir = project.layout.projectDirectory
+            return extension.cliPath.map { raw ->
+                if (raw.isBlank()) raw else projectDir.file(raw).asFile.path
+            }
+        }
 
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
