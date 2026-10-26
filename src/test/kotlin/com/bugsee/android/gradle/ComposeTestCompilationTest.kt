@@ -56,12 +56,17 @@ class ComposeTestCompilationTest {
      */
     @Test
     fun `android generated test suffixes are tests without any association`() {
+        val siblings = setOf("debug", "freeRelease", "freeDebug")
         listOf("debugUnitTest", "freeReleaseUnitTest", "debugAndroidTest", "freeDebugAndroidTest",
             "debugScreenshotTest").forEach {
-            assertTrue(isTest(it, associated = false, androidJvm = true), it)
+            assertTrue(isTest(it, associated = false, androidJvm = true, siblings = siblings), it)
         }
         // Off Android the same names are not trusted without an association.
-        assertFalse(isTest("debugUnitTest", associated = false, androidJvm = false))
+        assertFalse(isTest("debugUnitTest", associated = false, androidJvm = false, siblings = siblings))
+        // An unreadable sibling list confirms nothing: unknown means "not a test"...
+        assertFalse(isTest("debugUnitTest", associated = false, androidJvm = true, siblings = null))
+        // ...unless the association says otherwise.
+        assertTrue(isTest("debugUnitTest", associated = true, androidJvm = true, siblings = null))
     }
 
     /**
@@ -148,7 +153,7 @@ class ComposeTestCompilationTest {
 
     @Test
     fun `stub compilations are classified by name, platform and association`() {
-        assertTrue(ComposeTestCompilation.isTest(stub(project, "debugUnitTest")))
+        assertTrue(ComposeTestCompilation.isTest(stub(project, "debugUnitTest", siblings = listOf("debug"))))
         assertFalse(ComposeTestCompilation.isTest(stub(project, "debug")))
         assertFalse(ComposeTestCompilation.isTest(stub(project, "smokeTest")))
         assertTrue(ComposeTestCompilation.isTest(stub(project, "smokeTest", allAssociated = { setOf(Any()) })))
@@ -219,17 +224,21 @@ class ComposeTestCompilationTest {
     @Test
     fun `isApplicable keeps production compilations and skips test ones`() {
         val (p, plugin) = appliedPlugin()
+        val all = listOf("debug", "release", "freeDebug", "staging", "smokeTest", "debugUnitTest",
+            "releaseAndroidTest", "debugScreenshotTest", "test", "debugTestFixtures")
         listOf("debug", "release", "freeDebug", "staging", "smokeTest").forEach {
-            assertTrue(plugin.isApplicable(stub(p, it)), "$it must stay applicable")
+            assertTrue(plugin.isApplicable(stub(p, it, siblings = all)), "$it must stay applicable")
         }
         listOf("debugUnitTest", "releaseAndroidTest", "debugScreenshotTest", "test", "debugTestFixtures")
-            .forEach { assertFalse(plugin.isApplicable(stub(p, it)), "$it must not be applicable") }
+            .forEach { assertFalse(plugin.isApplicable(stub(p, it, siblings = all)), "$it must not be applicable") }
     }
 
     @Test
     fun `isApplicable skips an association-less AGP 9 unit test compilation`() {
         val (p, plugin) = appliedPlugin()
-        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", allAssociated = { emptySet() })))
+        assertFalse(
+            plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug"), allAssociated = { emptySet() }))
+        )
     }
 
     @Test

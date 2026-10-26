@@ -23,7 +23,8 @@ import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
  *     compilation of the same target (`debug` for `debugUnitTest`). They cannot lean on associations: AGP 9's built-in Kotlin reports NO
  *     associated compilations for them, even at execution time. The sibling check is what keeps a
  *     production `freeDeviceTest` (flavor `free`, build type `deviceTest`, which AGP accepts) from
- *     being read as a test; if the sibling list cannot be read the name alone decides;
+ *     being read as a test. If the sibling list cannot be read nothing is confirmed, and the name
+ *     falls through to rule 4 (unknown means "not a test");
  *  4. any other `...Test` name (in practice a custom compilation such as `integrationTest`; the
  *     stock `test` compilation is caught by rule 2) must be ASSOCIATED with another compilation (`associateWith`), which is how KMP
  *     attaches a test compilation to the one it tests. A production `smokeTest` build type has no
@@ -66,9 +67,10 @@ internal object ComposeTestCompilation {
             if (RESERVED.matches(name) || RESERVED_FIXTURES.matches(name)) return true
             val suffix = ANDROID_GENERATED_SUFFIX.matchEntire(name)?.groupValues?.get(1)
             if (suffix != null) {
-                val known = siblings() ?: return true
+                // An unreadable sibling list confirms nothing: fall through to the association rule.
+                val known = siblings()
                 val prefix = name.removeSuffix(suffix)
-                if (prefix.isNotEmpty() && prefix in known) return true
+                if (known != null && prefix.isNotEmpty() && prefix in known) return true
             }
         }
         return TEST_SUFFIX.matches(name) && associated()
