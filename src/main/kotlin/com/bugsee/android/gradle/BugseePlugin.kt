@@ -649,12 +649,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
         }
 
-        // Finalize after assemble and bundle tasks
-        project.tasks.configureEach { t ->
-            if (t.name == "assemble$capitalizedVariant" || t.name == "bundle$capitalizedVariant") {
-                t.finalizedBy(mappingUploadTaskProvider)
-            }
-        }
+        // Finalize after assemble/bundle and the packaging/signing tasks below them
+        finalizeAfter(project, apkAndBundleEntryTaskNames(capitalizedVariant), mappingUploadTaskProvider)
     }
 
     private fun registerNativeUploadTask(
@@ -726,11 +722,41 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        // Finalize after assemble and bundle tasks
+        // Finalize after assemble/bundle and the packaging/signing tasks below them
+        finalizeAfter(project, apkAndBundleEntryTaskNames(capitalizedVariant), nativeUploadTaskProvider)
+    }
+
+    /**
+     * Names of the AGP tasks a build pipeline may request for [capitalizedVariant]
+     * instead of `assemble`/`bundle`: `package<V>` (APK; also what `install<V>`
+     * depends on), `package<V>Bundle` and `sign<V>Bundle` (AAB; what Gradle Play
+     * Publisher's `publish<V>Bundle` depends on). The uploads must follow these
+     * too, otherwise an artifact is produced from a mapping that is never
+     * uploaded. A task absent in a given AGP version is simply never matched.
+     */
+    private fun apkAndBundleEntryTaskNames(capitalizedVariant: String): Set<String> =
+        bundleEntryTaskNames(capitalizedVariant) +
+            setOf("assemble$capitalizedVariant", "package$capitalizedVariant")
+
+    private fun bundleEntryTaskNames(capitalizedVariant: String): Set<String> = setOf(
+        "bundle$capitalizedVariant",
+        "package${capitalizedVariant}Bundle",
+        "sign${capitalizedVariant}Bundle",
+    )
+
+    /**
+     * Lazily make every task named in [names] be finalized by [upload]. Uses
+     * `configureEach` (no realization) so a missing task is a no-op, and a
+     * finalizer runs at most once per build however many of [names] are in
+     * the graph.
+     */
+    private fun finalizeAfter(
+        project: Project,
+        names: Set<String>,
+        upload: org.gradle.api.tasks.TaskProvider<*>,
+    ) {
         project.tasks.configureEach { t ->
-            if (t.name == "assemble$capitalizedVariant" || t.name == "bundle$capitalizedVariant") {
-                t.finalizedBy(nativeUploadTaskProvider)
-            }
+            if (t.name in names) t.finalizedBy(upload)
         }
     }
 
@@ -897,11 +923,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        project.tasks.configureEach { t ->
-            if (t.name == "bundle$capitalizedVariant") {
-                t.finalizedBy(bundleUploadTaskProvider)
-            }
-        }
+        finalizeAfter(project, bundleEntryTaskNames(capitalizedVariant), bundleUploadTaskProvider)
 
         // APK upload task — wired to APK output
         val apkUploadTaskProvider = project.tasks.register(
@@ -970,11 +992,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        project.tasks.configureEach { t ->
-            if (t.name == "assemble$capitalizedVariant") {
-                t.finalizedBy(apkUploadTaskProvider)
-            }
-        }
+        finalizeAfter(
+            project,
+            setOf("assemble$capitalizedVariant", "package$capitalizedVariant"),
+            apkUploadTaskProvider,
+        )
     }
 
     // --- KotlinCompilerPluginSupportPlugin ---

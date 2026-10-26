@@ -157,6 +157,37 @@ class VariantWiringTest {
     }
 
     @Test
+    fun uploadsFinalizeEveryEntryTaskBelowAssembleAndBundle() {
+        // Issue #41: a pipeline requesting package/sign/publish-bundle (not assemble/bundle)
+        // must still run the uploads. Fake AGP tasks are registered both before and after
+        // the variant callback, since AGP creates them in either order relative to ours.
+        val h = Harness("plugin.ndk.enabled=true\n")
+        val tasks = h.project.tasks
+        tasks.register("packageRelease")
+        h.runVariant("release")
+        listOf("assembleRelease", "bundleRelease", "packageReleaseBundle", "signReleaseBundle",
+            "compileReleaseKotlin", "lintRelease", "minifyReleaseWithR8", "installRelease")
+            .forEach { tasks.register(it) }
+
+        fun finalizers(name: String): Set<String> =
+            tasks.getByName(name).finalizedBy.getDependencies(null).map { it.name }.toSet()
+
+        val mapping = "uploadBugseeReleaseMapping"
+        val native = "uploadBugseeReleaseNative"
+        val bundle = "uploadBugseeReleaseBundle"
+        val apk = "uploadBugseeReleaseApk"
+        assertEquals(setOf(mapping, native, apk), finalizers("assembleRelease"))
+        assertEquals(setOf(mapping, native, apk), finalizers("packageRelease"))
+        for (name in listOf("bundleRelease", "packageReleaseBundle", "signReleaseBundle")) {
+            assertEquals(setOf(mapping, native, bundle), finalizers(name), name)
+        }
+        // Tasks that only compile/lint/shrink/install must not trigger any upload by themselves.
+        for (name in listOf("compileReleaseKotlin", "lintRelease", "minifyReleaseWithR8", "installRelease")) {
+            assertEquals(emptySet(), finalizers(name), name)
+        }
+    }
+
+    @Test
     fun lateDslValuesReachTaskInputs() {
         // AGP runs onVariants from its own afterEvaluate, so a user's later afterEvaluate { bugsee { … } }
         // used to reach the tasks through the live global properties. It still must.
