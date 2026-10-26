@@ -29,6 +29,11 @@ A problem occurred configuring project ':app'.
 `ProjectDependencyCompat` fixes this in 4.0.3 by resolving the dependency's
 project reflectively (commit `2066da5`).
 
+### Plugin order
+
+The order of plugins in `plugins {}` doesn't matter from 4.0.9; earlier versions silently
+did nothing when Bugsee was listed before the Android plugin (#46).
+
 ### Flutter
 
 Flutter apps need no workaround. Flutter's Gradle plugin writes into AGP's

@@ -149,6 +149,34 @@ class BugseeLibraryVariantGatingTest {
 
     // ── Helpers ──────────────────────────────────────────────────────
 
+    @Test
+    fun bugsee_listed_before_the_library_plugin_still_wires_and_skips_library_variants() {
+        // Issue #46: with the old apply() the wiring never ran for this order. Debug mode makes the
+        // library skip path log, which proves the variant callback was registered and reached.
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-first"))
+        val build = fixture.projectDir.resolve("lib/build.gradle.kts")
+        build.writeText(
+            build.readText()
+                .replace(
+                    "    id(\"com.android.library\")\n    id(\"org.jetbrains.kotlin.android\")\n    id(\"com.bugsee.android.gradle\")",
+                    "    id(\"com.bugsee.android.gradle\")\n    id(\"com.android.library\")\n    id(\"org.jetbrains.kotlin.android\")",
+                )
+                .replace("bugsee {\n", "bugsee {\n    debug.set(true)\n"),
+        )
+        assertTrue(
+            "fixture rewrite must put bugsee first",
+            build.readText().indexOf("com.bugsee.android.gradle") < build.readText().indexOf("com.android.library"),
+        )
+
+        val result = buildLibAssembleDebug(fixture.projectDir)
+
+        assertTrue(
+            "wiring must run and skip the library variant:\n${result.output}",
+            result.output.contains("skipping plugin wiring for non-application variant debug"),
+        )
+        assertFalse(result.output.contains("AndroidComponentsExtension not found"))
+    }
+
     private fun buildLibAssembleDebug(projectDir: File): org.gradle.testkit.runner.BuildResult {
         // Pure helper — assembles the library AAR. Doesn't go through
         // FixtureProject.build() because that hardcodes
