@@ -192,6 +192,29 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun sdkAutoLoadFalseLogsOneWarningPerInertOptInFromTheRealAction() {
+        val h = Harness(null, declareCore = false) {
+            sdkAutoLoad.set(false)
+            ndk.enabled.set(true)
+            leak.enabled.set(true)
+            feedback.set(true)
+        }
+        h.declare("com.bugsee:bugsee-android-leak:$SDK_VERSION")
+        val bugsee = captureOutput {
+            h.autoAdded()
+            h.autoAdded() // a second read must not repeat the warnings
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(
+            listOf(
+                BugseePlugin.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
+                BugseePlugin.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback"),
+            ),
+            bugsee,
+            "one warning each for the undeclared ndk and feedback; none for the declared leak module",
+        )
+    }
+
+    @Test
     fun inertOptInsAreReportedUnlessModuleDeclared() {
         val h = Harness(null, declareCore = false) {
             sdkAutoLoad.set(false)
@@ -206,7 +229,7 @@ class AutoAddScopeTest {
         )
         assertEquals(
             "Bugsee: ndk.enabled=true but sdkAutoLoad=false and com.bugsee:bugsee-android-ndk is not declared; " +
-                "declare it or the feature is inactive",
+                "declare it or the runtime is not added",
             BugseePlugin.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
         )
         val none = Harness(null)
@@ -318,6 +341,31 @@ class AutoAddScopeTest {
         )
     }
 
+    /**
+     * Messages logged while [block] runs. ProjectBuilder's loggers write through Gradle's slf4j
+     * logger context, which has no public hook, so the test swaps its output listener (same
+     * technique as VariantWiringTest).
+     */
+    private fun captureOutput(block: () -> Unit): List<String> {
+        val context = org.slf4j.LoggerFactory.getILoggerFactory()
+        val type = context.javaClass
+        val listenerType = org.gradle.internal.logging.events.OutputEventListener::class.java
+        val original = type.getMethod("getOutputEventListener").invoke(context) as
+            org.gradle.internal.logging.events.OutputEventListener
+        val setter = type.getMethod("setOutputEventListener", listenerType)
+        val lines = mutableListOf<String>()
+        setter.invoke(context, org.gradle.internal.logging.events.OutputEventListener { event ->
+            if (event is org.gradle.internal.logging.events.LogEvent) lines += event.message
+            original.onOutput(event)
+        })
+        try {
+            block()
+        } finally {
+            setter.invoke(context, original)
+        }
+        return lines
+    }
+
     // ── Reference: the pre-change logic, verbatim ───────────────────
 
     private fun oldIsAutoAddEnabled(project: Project, dslProperty: Property<Boolean>, key: String): Boolean {
@@ -347,6 +395,7 @@ class AutoAddScopeTest {
         configure: BugseePluginExtension.() -> Unit = {},
     ) {
         val project: Project = ProjectBuilder.builder().build()
+
         val extension: BugseePluginExtension
         private val before = mutableSetOf<String>()
 

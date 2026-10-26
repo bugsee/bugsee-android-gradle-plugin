@@ -226,10 +226,11 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * then adds no Bugsee runtime module on its own, neither the core SDK nor any
      * extension (`bugsee-android-okhttp`, `-compose`, `-ktor-2/3`, `-cronet`,
      * `-ndk`, `-leak`, `-feedback`). Declare every module you want yourself.
-     * Because `ndk.enabled`, `leak.enabled` and `feedback` only existed to auto-add
-     * their module, they have no effect for a module you do not declare; the plugin
-     * warns about each such opt-in. Modules you declare keep working as before
-     * (instrumentation, NDK symbol upload). The Compose compiler plugin
+     * Because `leak.enabled` and `feedback` only existed to auto-add their module,
+     * they have no effect for a module you do not declare. `ndk.enabled` still enables
+     * the NDK symbol upload, but the NDK runtime is not added for an undeclared module.
+     * The plugin warns about each such opt-in. Modules you declare keep working as
+     * before (instrumentation, NDK symbol upload). The Compose compiler plugin
      * (`bugsee-compose-compiler-plugin`) is a compiler-side artifact and is still
      * resolved when Compose is present; it must stay resolvable from a repository.
      * Also settable as `plugin.sdkAutoLoad` in bugsee.properties (global-only; the

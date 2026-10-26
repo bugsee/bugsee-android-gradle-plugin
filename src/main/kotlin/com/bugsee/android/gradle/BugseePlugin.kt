@@ -1550,7 +1550,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         internal fun sdkAutoLoadOffWarning(setting: String, artifact: String): String =
             "Bugsee: $setting=true but sdkAutoLoad=false and $BUGSEE_GROUP:$artifact is not declared; " +
-                "declare it or the feature is inactive"
+                "declare it or the runtime is not added"
 
 
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */

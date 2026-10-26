@@ -175,8 +175,8 @@ When `enabled`, the plugin automatically adds the `bugsee-android-leak`
 module dependency (memory/thread leak detection). If the app already
 declares the leak module explicitly, this is a no-op — mirroring the
 `ndk.enabled` behaviour. With `sdkAutoLoad=false` nothing is added, so
-`leak.enabled` (like `ndk.enabled` and `feedback`) only works if you declare
-the module yourself; the plugin warns otherwise.
+`leak.enabled` (like `feedback` and the `ndk.enabled` runtime) only works if you
+declare the module yourself; the plugin warns otherwise.
 
 | Key | Type | Default |
 |---|---|---|
@@ -433,9 +433,10 @@ the upload tasks skip with a single info-level message instead of failing or war
   (`bugsee { sdkAutoLoad.set(false) }` or `plugin.sdkAutoLoad=false`) it adds
   none of them; declare every Bugsee module yourself. Modules you declared are
   never removed, and instrumentation of them is unaffected. Global-only setting.
-  `ndk.enabled`, `leak.enabled` and `feedback` only auto-add their module, so
-  they are inert for undeclared modules (a warning names each one); the NDK
-  symbol upload still runs. The Compose compiler plugin
+  `leak.enabled` and `feedback` only auto-add their module, so they are inert for
+  undeclared modules; `ndk.enabled` still runs the NDK symbol upload but the NDK
+  runtime is not added. A warning names each such opt-in (once per module that
+  applies the plugin). The Compose compiler plugin
   (`bugsee-compose-compiler-plugin`) is still resolved when Compose is present
   and must stay resolvable from a repository (offline / local-artifact setups
   included). The decision is made when `implementation` is first resolved or
