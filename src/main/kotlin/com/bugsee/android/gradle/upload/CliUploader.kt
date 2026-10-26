@@ -12,6 +12,8 @@ import java.io.File
  *   - exit 0 → success, no fallback.
  *   - exit 1 (Unexpected) or exit 2 (Usage) → structural CLI failure;
  *     the Kotlin uploader is given a chance to take over.
+ *   - negative, 126, 127 or >= 128 → the binary did not run (not executable,
+ *     not found, loader failure, killed by a signal); fall back as well.
  *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40+) →
  *     substantive failure; the Kotlin uploader would hit the same error,
  *     so we do NOT retry and the caller surfaces the failure as-is.
@@ -53,6 +55,13 @@ internal object CliUploader {
 
     /** Per the CLI's documented exit-code contract: 2 = Usage (argv error). */
     private const val EXIT_USAGE = 2
+
+    /** POSIX shell convention: 126 = found but not executable, 127 = not found. */
+    private const val EXIT_NOT_EXECUTABLE = 126
+    private const val EXIT_NOT_FOUND = 127
+
+    /** POSIX: 128 + signal number when the process is killed by a signal. */
+    private const val EXIT_SIGNAL_BASE = 128
 
     /** The environment variable bugsee-cli reads the app token from (`--app-token` is its flag form). */
     internal const val APP_TOKEN_ENV = "BUGSEE_APP_TOKEN"
@@ -375,7 +384,11 @@ internal object CliUploader {
                     success = false,
                     exitCode = exitCode,
                     shouldFallback = true,
-                    fallbackReason = "exit-$exitCode",
+                    fallbackReason = if (binaryDidNotRun(exitCode)) {
+                        "exit-$exitCode-binary-did-not-run"
+                    } else {
+                        "exit-$exitCode"
+                    },
                 )
             }
             else -> {
@@ -567,5 +580,15 @@ internal object CliUploader {
      * Visible for testing.
      */
     internal fun shouldFallback(exitCode: Int): Boolean =
-        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE
+        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE || binaryDidNotRun(exitCode)
+
+    /**
+     * Exit codes that mean the process never got a fair start rather than a
+     * substantive CLI result: negative (e.g. Windows loader failures), POSIX
+     * 126 (not executable) / 127 (not found), and 128+ (killed by a signal).
+     *
+     * Visible for testing.
+     */
+    internal fun binaryDidNotRun(exitCode: Int): Boolean =
+        exitCode < 0 || exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode >= EXIT_SIGNAL_BASE
 }

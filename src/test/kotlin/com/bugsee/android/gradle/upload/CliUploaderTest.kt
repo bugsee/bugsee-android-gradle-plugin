@@ -381,11 +381,17 @@ class CliUploaderTest {
         )
     }
 
+    @Test fun `binary-did-not-run exit codes trigger fallback`() {
+        listOf(126, 127, 128, 134, 137, 139, -1, -1073741701, -1073741515).forEach { code ->
+            assertTrue(CliUploader.shouldFallback(code), "exit $code means the binary did not run")
+        }
+    }
+
     @Test fun `reserved exit codes in 40+ range do NOT trigger fallback`() {
         // Defensive: any future addition to the CLI's exit-code enum lands
         // in a non-fallback bucket by default. A new code that SHOULD trigger
         // fallback must be added explicitly to `CliUploader.shouldFallback`.
-        listOf(40, 41, 50, 99, 127).forEach { code ->
+        listOf(3, 40, 41, 50, 99, 125).forEach { code ->
             assertFalse(
                 CliUploader.shouldFallback(code),
                 "exit $code (reserved) must default to substantive-failure; update both sides if needed",
@@ -630,6 +636,21 @@ class CliUploaderTest {
         assertEquals(2, result.exitCode)
         assertTrue(result.shouldFallback, "exit 2 (Usage) → structural fallback")
         assertEquals("exit-2", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 127 to fallback with binary-did-not-run reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 127), executableCliStub())
+        assertFalse(result.success)
+        assertEquals(127, result.exitCode)
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-127-binary-did-not-run", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 3 to no-fallback failure`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 3), executableCliStub())
+        assertFalse(result.success)
+        assertFalse(result.shouldFallback)
+        assertEquals(null, result.fallbackReason)
     }
 
     @Test fun `verifyAndExec maps substantive exit codes to no-fallback failures`() {
