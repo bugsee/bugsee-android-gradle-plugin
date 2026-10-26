@@ -6,6 +6,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.util.zip.ZipFile
 
 /**
  * Issue #33: a Flutter-style task that writes into AGP's merged-assets dir
@@ -40,5 +41,11 @@ class FlutterAssetsOrderingE2ETest {
             "Flutter's asset must survive injection (a late copy would drop it)",
             File(injected, "flutter_marker.txt").isFile,
         )
+        val apk = File(fixture.projectDir, "app/build/outputs/apk/debug")
+            .listFiles { f -> f.extension == "apk" }!!.single()
+        ZipFile(apk).use { zip ->
+            assertTrue("build-id asset must be in the APK", zip.getEntry("assets/bugsee_build_id.properties") != null)
+            assertTrue("Flutter's asset must be in the APK", zip.getEntry("assets/flutter_marker.txt") != null)
+        }
     }
 }

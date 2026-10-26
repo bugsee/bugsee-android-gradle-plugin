@@ -153,7 +153,9 @@ if (project.findProperty("bugseeFixtureFakeFlutter")?.toString() == "true") {
         into(mergedAssets)
         dependsOn("mergeDebugAssets")
     }
-    tasks.matching { it.name == "processDebugResources" }.configureEach {
+    // Flutter also declares the copy as a dependency of the tasks that read the
+    // merged dir (FlutterPlugin.kt `tasksToCheck`: compress<Variant>Assets, ...).
+    tasks.matching { it.name == "processDebugResources" || it.name == "compressDebugAssets" }.configureEach {
         dependsOn(copyFlutter)
     }
 }
