@@ -87,15 +87,19 @@ internal object SymbolUploader {
      * the request URL, and the app token is part of the metadata path.
      */
     private fun warnTransportFailure(e: Exception, appToken: String, logger: Logger) {
-        // Mask the token and drop any query string: a malformed presigned URL echoed in the message
-        // carries its signature (a write credential) in the query.
-        val message = (e.message ?: "")
-            .replace(appToken, BundleUploader.maskAppToken(appToken))
-            .replace(QUERY_IN_MESSAGE, "?<redacted>")
-        logger.warn("Bugsee upload failed: ${e.javaClass.simpleName}: $message")
-        // Full detail (stack trace) for diagnosis with --info; it can hide a programming error.
-        logger.info("Bugsee upload failure details", e)
+        logger.warn("Bugsee upload failed: ${e.javaClass.simpleName}: ${sanitize(e.message ?: "", appToken)}")
+        // Full detail (stack trace, causes) for diagnosis with --info; it can hide a programming error.
+        // Rendered to text and sanitized: passing the Throwable itself would print the raw message and
+        // cause chain, bypassing the masking.
+        logger.info("Bugsee upload failure details: ${sanitize(e.stackTraceToString(), appToken)}")
     }
+
+    /**
+     * Mask the token and drop any query string: a malformed presigned URL echoed in an exception message
+     * carries its signature (a write credential) in the query.
+     */
+    private fun sanitize(text: String, appToken: String): String =
+        text.replace(appToken, BundleUploader.maskAppToken(appToken)).replace(QUERY_IN_MESSAGE, "?<redacted>")
 
     /** True when the thread was interrupted or [e] says the request was cancelled (not a plain timeout). */
     private fun isInterruption(e: IOException): Boolean =
@@ -146,7 +150,14 @@ internal object SymbolUploader {
                 if (last || isInterruption(e) || e is SocketTimeoutException || elapsedMs() + waitMs >= policy.budgetMs) throw e
                 logger.warn("Bugsee: $step failed (${e.javaClass.simpleName}), retrying (attempt $attempt of $MAX_ATTEMPTS)")
             }
-            if (waitMs > 0) Thread.sleep(waitMs)
+            if (waitMs > 0) {
+                try {
+                    Thread.sleep(waitMs)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                }
+            }
         }
         error("unreachable")
     }

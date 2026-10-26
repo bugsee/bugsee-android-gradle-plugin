@@ -227,6 +227,18 @@ class SymbolUploaderHttpTest {
         assertTrue(logger.warnMessages.any { it.contains("Bugsee upload failed") }, "must still warn; got: ${logger.warnMessages}")
     }
 
+    @Test fun `the info-level failure details do not leak the app token or a signature`() {
+        // A configured endpoint with a space makes HttpPost throw IllegalArgumentException that echoes the URL.
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = "http://127.0.0.1:1/bad path?X-Amz-Signature=SECRETSIG",
+            logger = logger, debug = false,
+        )
+        assertFalse(ok)
+        val all = logger.warnMessages + logger.infoMessages
+        assertTrue(logger.infoMessages.any { it.contains("failure details") }, "must log details at info; got: $all")
+        assertFalse(all.any { it.contains("SECRETSIG") || it.contains(appToken) }, "leak; got: $all")
+    }
+
     @Test fun `an interrupted thread rethrows instead of swallowing the failure`() {
         val dead = java.net.ServerSocket(0).use { it.localPort }
         Thread.currentThread().interrupt()
@@ -851,11 +863,12 @@ private class RecordingLoggerForSymbol : Logger {
     override fun debug(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
     override fun isInfoEnabled(): Boolean = false
     override fun isInfoEnabled(p: org.slf4j.Marker?): Boolean = false
-    override fun info(msg: String?) {}
+    val infoMessages: MutableList<String> = mutableListOf()
+    override fun info(msg: String?) { if (msg != null) infoMessages.add(msg) }
     override fun info(format: String?, arg: Any?) {}
     override fun info(format: String?, arg1: Any?, arg2: Any?) {}
     override fun info(format: String?, vararg arguments: Any?) {}
-    override fun info(msg: String?, t: Throwable?) {}
+    override fun info(msg: String?, t: Throwable?) { if (msg != null) infoMessages.add(msg + (t?.let { " " + it } ?: "")) }
     override fun info(marker: org.slf4j.Marker?, msg: String?) {}
     override fun info(marker: org.slf4j.Marker?, format: String?, arg: Any?) {}
     override fun info(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) {}
