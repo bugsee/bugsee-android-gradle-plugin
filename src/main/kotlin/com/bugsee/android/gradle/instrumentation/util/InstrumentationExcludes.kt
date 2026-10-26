@@ -19,6 +19,10 @@ import java.util.concurrent.ConcurrentHashMap
  *    `com.example.Foo` and `com.example.sub.Bar`), or
  *  - it contains `*` wildcards, treated as "any characters" — e.g.
  *    `com.example.*` or `*.databinding.*Binding`.
+ *
+ * Patterns may also be written in the slash-separated bytecode form
+ * (e.g. `com/example/Foo`, with or without wildcards); `/` is normalized to `.` so both
+ * spellings are equivalent. Leading/trailing separators are ignored.
  */
 internal object InstrumentationExcludes {
 
@@ -36,7 +40,7 @@ internal object InstrumentationExcludes {
 
     fun isExcluded(className: String, patterns: Collection<String>): Boolean {
         if (patterns.isEmpty()) return false
-        return patterns.any { matches(className, it.trim()) }
+        return patterns.any { matches(className, it.trim().replace('/', '.').trim('.')) }
     }
 
     private fun matches(className: String, pattern: String): Boolean {
