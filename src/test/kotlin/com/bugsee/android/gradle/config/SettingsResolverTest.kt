@@ -326,6 +326,25 @@ class SettingsResolverTest {
         assertEquals(emptyList(), logger.warnings)
     }
 
+    @Test
+    fun preferSettingsFileYieldsAbsoluteCliPathAgainstFileDir() {
+        val fileDir = java.io.File("/some/root")
+        val global = newExtension()
+        global.preferSettingsFile.set(true)
+        global.cliPath.set("tools/from-dsl")
+        val resolver = SettingsResolver(
+            global,
+            file(root = mapOf("cliPath" to "tools/cli")),
+            project.objects,
+            logger,
+            fileDir,
+        )
+
+        val effective = resolver.effectiveFor(stagingRelease)
+
+        assertEquals(java.io.File(fileDir, "tools/cli").path, effective.cliPath.get())
+    }
+
     // ── Scope ───────────────────────────────────────────────────────
 
     @Test
@@ -581,7 +600,7 @@ class SettingsResolverTest {
         file: SettingsFile,
         contexts: List<VariantContext>,
     ) {
-        val resolver = SettingsResolver(global, file, project.objects, RecordingLogger())
+        val resolver = SettingsResolver(global, file, project.objects, RecordingLogger(), null)
         for (c in contexts) {
             val effective = resolver.effectiveFor(c)
             for (def in SettingDefinitions.all) {
@@ -629,7 +648,7 @@ class SettingsResolverTest {
         project.objects.newInstance(BugseePluginExtension::class.java)
 
     private fun resolver(global: BugseePluginExtension, file: SettingsFile = SettingsFile.EMPTY) =
-        SettingsResolver(global, file, project.objects, logger)
+        SettingsResolver(global, file, project.objects, logger, null)
 
     private fun file(
         root: Map<String, String> = emptyMap(),

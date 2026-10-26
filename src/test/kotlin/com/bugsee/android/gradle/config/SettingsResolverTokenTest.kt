@@ -248,7 +248,7 @@ class SettingsResolverTokenTest {
         project.objects.newInstance(BugseePluginExtension::class.java)
 
     private fun resolver(global: BugseePluginExtension, file: SettingsFile = SettingsFile.EMPTY) =
-        SettingsResolver(global, file, project.objects, logger)
+        SettingsResolver(global, file, project.objects, logger, null)
 
     // ── Empty root app_token ────────────────────────────────────────
 

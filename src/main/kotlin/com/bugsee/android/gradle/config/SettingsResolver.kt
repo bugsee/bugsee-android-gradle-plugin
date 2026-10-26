@@ -53,7 +53,7 @@ internal class SettingsResolver(
     private val objects: ObjectFactory,
     private val logger: Logger,
     /** Directory of `bugsee.properties` (the root project); relative path values from the file resolve against it. */
-    private val fileDir: java.io.File? = null,
+    private val fileDir: java.io.File?,
 ) {
 
     private val warnedShadowKeys = HashSet<String>()

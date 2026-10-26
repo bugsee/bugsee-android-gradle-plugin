@@ -28,7 +28,7 @@ class PlaceholderTokenTest {
         project.objects.newInstance(BugseePluginExtension::class.java)
 
     private fun resolver(global: BugseePluginExtension, props: String = "") =
-        SettingsResolver(global, SettingsFileParser.parse(props, logger), project.objects, logger)
+        SettingsResolver(global, SettingsFileParser.parse(props, logger), project.objects, logger, null)
 
     private fun token(global: BugseePluginExtension, props: String = "") =
         resolver(global, props).appTokenFor(ctx, debug = false)
