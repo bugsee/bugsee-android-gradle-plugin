@@ -36,9 +36,11 @@ internal data class CliUploadResult(
     /**
      * Fallback gate for the build-registration path (`upload build`). Unlike
      * symbol uploads (idempotent: duplicate 16004 is success), a second
-     * registration is not known to be safe, so a signal exit (> 128) — where the
-     * CLI DID run and may have already registered the build before being killed —
-     * must not trigger a retry. Every other fallback case is unchanged.
+     * registration is not known to be safe, so a signal exit (> 128) or a Windows
+     * crash/kill status (< -1, other than loader failures such as 0xC0000135) — where
+     * the CLI DID run and may have already registered the build before dying — must
+     * not trigger a retry. Only 1, 2, 126, 127, 128, loader failures and the
+     * plugin-synthesized -1 keep the fallback.
      */
     val shouldFallbackForBuildRegistration: Boolean
         get() = shouldFallback && !CliUploader.ranAndDied(exitCode)
@@ -69,6 +71,14 @@ internal object CliUploader {
     /** POSIX shell convention: 126 = found but not executable, 127 = not found. */
     private const val EXIT_NOT_EXECUTABLE = 126
     private const val EXIT_NOT_FOUND = 127
+
+    /**
+     * Windows NT statuses meaning the image never started (so nothing could have been
+     * registered): 0xC0000135 DLL_NOT_FOUND, 0xC000007B INVALID_IMAGE_FORMAT,
+     * 0xC0000139 ENTRYPOINT_NOT_FOUND, 0xC0000142 DLL_INIT_FAILED.
+     */
+    private val WINDOWS_LOADER_FAILURES: Set<Int> =
+        setOf(0xC0000135L, 0xC000007BL, 0xC0000139L, 0xC0000142L).map { it.toInt() }.toSet()
 
     /** POSIX: 128 + signal number when the process is killed by a signal. */
     private const val EXIT_SIGNAL_BASE = 128
@@ -191,7 +201,9 @@ internal object CliUploader {
      *
      * Returns the [CliUploadResult] contract: a structural failure (exit 1/2,
      * exit < 0 / 126 / 127 / >= 128, binary missing) signals the caller to fall back to the native
-     * Bundle/ChunkedBundleUploader path; a substantive failure (bad token /
+     * Bundle/ChunkedBundleUploader path — but callers must gate registration on
+     * [CliUploadResult.shouldFallbackForBuildRegistration], which skips the retry after
+     * a signal kill or Windows crash status (the build may already be registered); a substantive failure (bad token /
      * server / transport) propagates without fallback since the native path
      * would hit the same error.
      *
@@ -601,11 +613,13 @@ internal object CliUploader {
 
     /**
      * Whether the CLI DID start and then died: a POSIX signal exit (> 128, signal
-     * `exit - 128`) or a Windows NT status crash/kill (< -1, e.g. 0xC0000005). Plugin-
+     * `exit - 128`) or a Windows NT status crash/kill (< -1, e.g. 0xC0000005), except
+     * Windows loader failures ([WINDOWS_LOADER_FAILURES]; the process never reached main). Plugin-
      * synthesized -1 (binary missing / not executable / exec failed) is NOT included.
      * Used to avoid a second build registration, whose state is unknown.
      */
-    internal fun ranAndDied(exitCode: Int): Boolean = exitCode > EXIT_SIGNAL_BASE || exitCode < -1
+    internal fun ranAndDied(exitCode: Int): Boolean =
+        exitCode > EXIT_SIGNAL_BASE || (exitCode < -1 && exitCode !in WINDOWS_LOADER_FAILURES)
 
     /**
      * `X-Bugsee-Uploader` fallback reason for a fallback [exitCode]: `exit-1` /
