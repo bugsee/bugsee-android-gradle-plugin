@@ -28,10 +28,10 @@ class ProxyEnvTest {
 
     @Test fun `nonProxyHosts converts to NO_PROXY`() {
         val out = proxyEnvFromSystemProperties(
-            mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|192.168.1.*|*suffix.example|foo*|*|internal"),
+            mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|192.168.1.*|*suffix.example|foo*|*corp*|*|internal"),
             emptyMap(),
         )
-        assertEquals(mapOf("NO_PROXY" to "localhost,.corp.example,10.0.0.0/8,192.168.1.0/24,suffix.example,*,internal"), out)
+        assertEquals(mapOf("NO_PROXY" to "localhost,.corp.example,10.0.0.0/8,192.168.1.0/24,suffix.example,*,internal,localhost,127.0.0.0/8,::1,0.0.0.0,::"), out)
     }
 
     @Test fun `variables already in the environment are not overridden`() {
@@ -54,7 +54,7 @@ class ProxyEnvTest {
 
     @Test fun `unset nonProxyHosts mirrors the JDK loopback default only when a proxy is derived`() {
         assertEquals(
-            mapOf("HTTPS_PROXY" to "http://ph:1", "NO_PROXY" to "localhost,127.0.0.1,::1"),
+            mapOf("HTTPS_PROXY" to "http://ph:1", "NO_PROXY" to "localhost,127.0.0.0/8,::1,0.0.0.0,::"),
             proxyEnvFromSystemProperties(mapOf("https.proxyHost" to "ph", "https.proxyPort" to "1"), emptyMap()),
         )
     }
@@ -68,5 +68,14 @@ class ProxyEnvTest {
             emptyMap(),
         )
         assertEquals("http://me%40corp:p%20w%3A%2F@ph:1", out["HTTPS_PROXY"])
+    }
+
+    @Test fun `loopback is appended to a non-empty list and an empty list stays empty`() {
+        val props = mapOf("https.proxyHost" to "ph", "https.proxyPort" to "1")
+        assertEquals(
+            ".corp.example,localhost,127.0.0.0/8,::1,0.0.0.0,::",
+            proxyEnvFromSystemProperties(props + ("http.nonProxyHosts" to "*.corp.example"), emptyMap())["NO_PROXY"],
+        )
+        assertEquals(null, proxyEnvFromSystemProperties(props + ("http.nonProxyHosts" to ""), emptyMap())["NO_PROXY"])
     }
 }

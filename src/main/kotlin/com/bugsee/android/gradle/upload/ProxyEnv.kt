@@ -41,13 +41,13 @@ internal fun proxyEnvFromSystemProperties(
     if (!has("NO_PROXY", "no_proxy")) {
         val raw = sysProps["http.nonProxyHosts"]
         if (raw == null) {
-            // Mirror the JDK built-in default (localhost|127.*|[::1]) so loopback stays direct.
-            if (result.isNotEmpty()) result["NO_PROXY"] = "localhost,127.0.0.1,::1"
-        } else {
-            val noProxy = raw.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+            // Mirror the JDK built-in default so loopback stays direct.
+            if (result.isNotEmpty()) result["NO_PROXY"] = JDK_LOOPBACK_NO_PROXY
+        } else if (raw.isNotBlank()) {
+            // The JDK appends its loopback set to any non-empty list; an empty value means empty.
+            val translated = raw.split('|').map { it.trim() }.filter { it.isNotEmpty() }
                 .mapNotNull { nonProxyEntryToNoProxy(it) }
-                .joinToString(",")
-            if (noProxy.isNotEmpty()) result["NO_PROXY"] = noProxy
+            result["NO_PROXY"] = (translated + JDK_LOOPBACK_NO_PROXY).joinToString(",")
         }
     }
     return result
@@ -69,8 +69,9 @@ private fun enc(v: String): String = java.net.URLEncoder.encode(v, "UTF-8").repl
  */
 private fun nonProxyEntryToNoProxy(p: String): String? = when {
     p == "*" -> "*"
-    p.startsWith("*.") -> p.substring(1)
-    p.startsWith("*") -> p.substring(1)
+    p.length > 1 && p.startsWith("*") && p.endsWith("*") -> null
+    p.startsWith("*.") -> p.substring(1).takeUnless { '*' in it }
+    p.startsWith("*") -> p.substring(1).takeUnless { '*' in it }
     p.endsWith(".*") -> {
         val octets = p.dropLast(2).split('.')
         if (octets.size in 1..3 && octets.all { o -> o.toIntOrNull()?.let { it in 0..255 } == true }) {
@@ -83,3 +84,6 @@ private fun nonProxyEntryToNoProxy(p: String): String? = when {
     p.endsWith("*") -> null
     else -> p
 }
+
+/** The JDK's built-in loopback bypass (`localhost|127.*|[::1]|0.0.0.0|[::0]`) in NO_PROXY syntax. */
+private const val JDK_LOOPBACK_NO_PROXY = "localhost,127.0.0.0/8,::1,0.0.0.0,::"

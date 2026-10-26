@@ -602,8 +602,8 @@ derives `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` from the properties above.
 Proxy credentials (`proxyUser`/`proxyPassword`) are percent-encoded into the URL.
 `nonProxyHosts` globs are translated to `NO_PROXY` syntax: `*.b` becomes `.b`,
 `10.*` becomes `10.0.0.0/8`, and patterns that cannot be expressed are dropped.
-When `http.nonProxyHosts` is unset, `NO_PROXY=localhost,127.0.0.1,::1` mirrors the
-JDK default. Variables you already set in the environment are never overridden.
+The JDK's built-in loopback bypass is always appended (`localhost,127.0.0.0/8,::1,0.0.0.0,::`),
+except when `http.nonProxyHosts` is explicitly empty. Variables you already set in the environment are never overridden.
 
 ## Example
 
