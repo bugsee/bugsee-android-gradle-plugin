@@ -1,7 +1,11 @@
 package com.bugsee.android.gradle
 
 import org.gradle.api.Project
+import org.gradle.api.configuration.BuildFeatures
 import org.gradle.api.file.RegularFile
+import java.util.Collections
+import java.util.WeakHashMap
+import javax.inject.Inject
 
 /**
  * Project-model access that stays inside the project being configured, so it is safe under
@@ -24,28 +28,39 @@ internal object ProjectAccess {
     /**
      * The value of Gradle property [name] as seen from [project], or `null`.
      *
-     * Order: the project's own extra properties, then Gradle properties (`-P`, `gradle.properties`
-     * in the root, the user home or the project directory, via [org.gradle.api.provider.ProviderFactory.gradleProperty]).
-     * Unlike `Project.findProperty` this never walks up to a parent project.
+     * Without Isolated Projects this is exactly `Project.findProperty` (own properties, then the
+     * parent chain, so a root build script's `extra["..."]` is still inherited) - behaviour is
+     * unchanged for every build that does not opt in. Under Isolated Projects the parent chain is
+     * off limits, so it reads the project's own extra properties (which already include `-P`
+     * and every `gradle.properties` level) and then [org.gradle.api.provider.ProviderFactory.gradleProperty].
      */
     fun gradleProperty(project: Project, name: String): String? {
+        if (!isIsolatedProjects(project)) return project.findProperty(name)?.toString()
         val extra = project.extensions.extraProperties
         if (extra.has(name)) return extra.get(name)?.toString()
         return project.providers.gradleProperty(name).orNull
     }
 
+    private val cache: MutableMap<Any, Boolean> = Collections.synchronizedMap(WeakHashMap())
+
     /**
-     * Whether Isolated Projects is enabled for this build. Gradle exposes no public API for it, so
-     * this reads the switch itself (`-D` or `gradle.properties`, current and legacy spelling).
+     * Whether Isolated Projects is active for this build, read from Gradle's own
+     * [BuildFeatures] (so `-Porg.gradle.unsafe.isolated-projects=true`, which Gradle ignores, does
+     * not count). Falls back to `false` on a Gradle without that API.
      */
     fun isIsolatedProjects(project: Project): Boolean =
-        ISOLATED_PROJECTS_KEYS.any { key ->
-            project.providers.systemProperty(key).orNull.equals("true", ignoreCase = true) ||
-                project.providers.gradleProperty(key).orNull.equals("true", ignoreCase = true)
+        cache.getOrPut(project.gradle) {
+            runCatching { isActive(project.objects.newInstance(FeaturesHolder::class.java).features) }
+                .getOrDefault(false)
         }
 
-    private val ISOLATED_PROJECTS_KEYS = listOf(
-        "org.gradle.unsafe.isolated-projects",
-        "org.gradle.isolated-projects",
-    )
+    /** The decision itself, separated so tests can drive it with a fake [BuildFeatures]. */
+    internal fun isActive(features: BuildFeatures): Boolean =
+        features.isolatedProjects.active.getOrElse(false)
+
+    /** Gradle injects its [BuildFeatures] service into this when created via `ObjectFactory`. */
+    internal abstract class FeaturesHolder {
+        @get:Inject
+        abstract val features: BuildFeatures
+    }
 }

@@ -13,6 +13,7 @@ import com.bugsee.android.gradle.config.VariantContext
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
+import com.bugsee.android.gradle.instrumentation.warnIfProjectDependenciesNotInspected
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
@@ -413,7 +414,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // The file is shared by every module, so its diagnostics are reported by the first project
         // that reads it; later projects parse silently.
         val warnedKey = "bugsee.settingsFileDiagnosticsReported"
-        val parseLogger = if (BugseeBuildState.of(project).claim(warnedKey)) {
+        val parseLogger = if (BugseeBuildState.claim(project, warnedKey)) {
             project.logger
         } else {
             discardingLogger()
@@ -1360,11 +1361,13 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * Gradle's conflict resolver silently override the user's pin.
      */
     private fun isCoreSdkPresent(project: Project): Boolean {
-        return project.configurations.any { config ->
+        val present = project.configurations.any { config ->
             config.dependencies.any { dep ->
                 isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep)
             }
         }
+        if (!present) warnIfProjectDependenciesNotInspected(project, "the core Bugsee SDK was not found")
+        return present
     }
 
     private fun isCoreSdkExternal(dep: Dependency): Boolean {
@@ -1465,7 +1468,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }.getOrNull()
 
     private fun knownVariantNames(project: Project): MutableSet<String> {
-        return BugseeBuildState.of(project).knownVariantNames()
+        return BugseeBuildState.knownVariantNames(project)
     }
 
     /** Names of every application variant, shared across modules. */
@@ -1495,7 +1498,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     private fun warnUnsupportedKotlinOnce(project: Project, version: String?) {
         val key = "bugsee.composeCompilerKotlinWarned"
-        if (!BugseeBuildState.of(project).claim(key)) return
+        if (!BugseeBuildState.claim(project, key)) return
         project.logger.warn(
             "Bugsee gradle plugin: Compose instrumentation is disabled because the project " +
                 "uses Kotlin ${version ?: "(undetermined)"}, which this plugin's Compose " +

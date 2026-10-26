@@ -50,7 +50,12 @@ internal object DependencyDetector {
         artifactPrefix: String,
         projectName: String? = null,
         scope: Set<String>? = null,
-    ): Boolean = scan(project, artifactPrefix, projectName, scope, HashSet())
+    ): Boolean = scan(project, artifactPrefix, projectName, scope, HashSet()).also { found ->
+        // Only the core SDK lookup: that is the one whose miss disables instrumentation.
+        if (!found && artifactPrefix == "bugsee-android") {
+            warnIfProjectDependenciesNotInspected(project, "the core Bugsee SDK was not found")
+        }
+    }
 
     private fun scan(
         project: Project,

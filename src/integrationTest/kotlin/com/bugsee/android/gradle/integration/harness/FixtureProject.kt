@@ -90,6 +90,27 @@ internal class FixtureProject private constructor(
     }
 
     /**
+     * Like [buildTasks] but does not fail on a failing build; returns the [BuildResult] either
+     * way. For tests that inspect problems (e.g. Isolated Projects violations) in a build that
+     * is expected to fail for reasons outside the plugin.
+     */
+    fun runTasks(tasks: List<String>, vararg extraArgs: String): BuildResult {
+        val args = mutableListOf<String>().apply {
+            addAll(tasks)
+            add("-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}")
+            add("-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}")
+            add("--stacktrace")
+            addAll(extraArgs)
+        }
+        return GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withArguments(args)
+            .withEnvironment(testKitEnvironment())
+            .forwardOutput()
+            .run()
+    }
+
+    /**
      * Read the POST-TRANSFORM merged manifest for the given variant
      * — i.e. the [com.bugsee.android.gradle.manifest.BugseeManifestTask]
      * output, NOT AGP's pre-transform `processDebugMainManifest`

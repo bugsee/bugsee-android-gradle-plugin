@@ -52,6 +52,31 @@ bugsee {
 A name that matches no task is reported with a warning and ignored. The setting
 is DSL-only (not available in `bugsee.properties`).
 
+### Isolated Projects
+
+The plugin does not read other projects' models, so it is not itself a source of
+Isolated Projects violations (`org.gradle.unsafe.isolated-projects=true`).
+Cross-module state (once-only warnings, variant names) lives in a shared build
+service, `bugsee.properties` is located through the build's root directory, and
+the `bugsee.instrumentation.*` Gradle properties are read from the module's own
+properties (`-P`, `gradle.properties`, the module's `ext`).
+
+Two behaviours differ when the mode is on; with it off nothing changes:
+
+- **Gradle properties are not inherited from a parent project's `ext`.** A root
+  build script's `extra["bugsee.instrumentation.log"] = false` stops reaching the
+  modules; put it in `gradle.properties`, pass `-P`, or use `bugsee { ... }` /
+  `bugsee.properties`.
+- **Project dependencies are not inspected.** Without Isolated Projects the plugin
+  follows `project(":lib")` dependencies to find the Bugsee SDK declared there.
+  With it, only the module's own dependencies are seen. If `com.bugsee:bugsee-android`
+  is declared only in a library module (or the SDK itself is a source project
+  dependency), the application module does not see it: instrumentations that need
+  the SDK are skipped, and the SDK may be auto-added a second time. The plugin logs
+  a warning once per module when this can be the cause. Declare
+  `com.bugsee:bugsee-android` directly in the application module, or set
+  `bugsee { sdkAutoLoad.set(false) }` and the per-feature switches.
+
 ### Verified combinations
 
 Each combination below was built with plugin **4.0.7** as a minified release

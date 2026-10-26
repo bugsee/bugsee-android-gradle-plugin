@@ -45,8 +45,12 @@ internal object ProjectDependencyCompat {
      *
      * @param from the project whose graph is being walked; used to resolve the dependency path
      */
-    fun targetProject(from: Project, dep: ProjectDependency): Project? {
-        if (ProjectAccess.isIsolatedProjects(from)) return null
+    fun targetProject(from: Project, dep: ProjectDependency): Project? =
+        targetProject(from, dep, ProjectAccess.isIsolatedProjects(from))
+
+    /** [targetProject] with the Isolated Projects decision supplied, for tests. */
+    internal fun targetProject(from: Project, dep: ProjectDependency, isolatedProjects: Boolean): Project? {
+        if (isolatedProjects) return null
         getPathMethod?.let { method ->
             val path = runCatching { method.invoke(dep) as? String }.getOrNull()
             if (path != null) {
@@ -59,4 +63,24 @@ internal object ProjectDependencyCompat {
             runCatching { method.invoke(dep) as? Project }.getOrNull()
         }
     }
+}
+
+/**
+ * Once per module, tells the user that Isolated Projects stopped the plugin from looking into
+ * this module's project dependencies, when that can matter: [what] describes the lookup that
+ * came up empty (for example "the core Bugsee SDK was not found"). Silent when the mode is off
+ * or the module has no project dependencies.
+ */
+internal fun warnIfProjectDependenciesNotInspected(project: Project, what: String) {
+    if (!ProjectAccess.isIsolatedProjects(project)) return
+    val hasProjectDeps = project.configurations.any { config -> config.dependencies.any { it is ProjectDependency } }
+    if (!hasProjectDeps) return
+    if (!com.bugsee.android.gradle.BugseeBuildState.claim(project, "bugsee.isolatedProjectsSkip:${project.path}")) return
+    project.logger.warn(
+        "Bugsee: Isolated Projects is enabled, so the plugin does not inspect other modules, and " +
+            "$what in ${project.displayName} itself. If the Bugsee SDK is declared only in a module " +
+            "this one depends on (project(\":...\")), declare com.bugsee:bugsee-android directly in " +
+            "this module (or the instrumentation is skipped and the SDK may be added a second time). " +
+            "See the README section on Isolated Projects."
+    )
 }

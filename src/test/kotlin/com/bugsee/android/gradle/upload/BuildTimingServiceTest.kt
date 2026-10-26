@@ -165,7 +165,7 @@ class BuildTimingServiceTest {
         val flagKey = "bugseeBuildTimingListenerRegistered"
         assertTrue(
             "flag must be set after first call",
-            !com.bugsee.android.gradle.BugseeBuildState.of(sub1).claim(flagKey)
+            !com.bugsee.android.gradle.BugseeBuildState.claim(sub1, flagKey)
         )
         assertTrue(
             "root project extras must stay untouched",

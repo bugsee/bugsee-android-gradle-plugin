@@ -51,7 +51,7 @@ internal fun registerBuildTimingListenerOnce(
     listenerRegistry: BuildEventsListenerRegistry,
     timingService: Provider<BuildTimingService>,
 ) {
-    if (BugseeBuildState.of(project).claim(BUILD_TIMING_LISTENER_FLAG_KEY)) {
+    if (BugseeBuildState.claim(project, BUILD_TIMING_LISTENER_FLAG_KEY)) {
         listenerRegistry.onTaskCompletion(timingService)
     }
 }
