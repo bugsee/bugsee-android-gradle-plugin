@@ -178,9 +178,12 @@ class VariantWiringTest {
         val apk = "uploadBugseeReleaseApk"
         assertEquals(setOf(mapping, native, apk), finalizers("assembleRelease"))
         assertEquals(setOf(mapping, native, apk), finalizers("packageRelease"))
-        for (name in listOf("bundleRelease", "packageReleaseBundle", "signReleaseBundle")) {
+        for (name in listOf("bundleRelease", "signReleaseBundle")) {
             assertEquals(setOf(mapping, native, bundle), finalizers(name), name)
         }
+        // package<V>Bundle only writes the unsigned intermediary bundle: no bundle upload
+        // (it consumes the signed artifact and would force sign<V>Bundle into the graph).
+        assertEquals(setOf(mapping, native), finalizers("packageReleaseBundle"))
         // Debug (non-release-like) variant: only assemble/bundle finalize, as before #41.
         val debugApp = Harness("plugin.ndk.enabled=true\n")
         // (name-based fallback: a build type containing "debug" is not release-like)

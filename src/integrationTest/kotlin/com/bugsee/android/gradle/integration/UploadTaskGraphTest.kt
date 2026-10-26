@@ -28,24 +28,25 @@ class UploadTaskGraphTest {
 
     private fun fixture() = FixtureProject.materialize("build-type-gating", temp.newFolder())
 
-    /** The `:app:uploadBugsee*` tasks scheduled by a dry run of [task], in graph order. */
-    private fun uploadsInGraph(task: String): List<String> {
+    /** Every task line scheduled by a dry run of [task], in graph order. */
+    private fun graph(task: String): List<String> {
         val (ok, out) = fixture().runTasksAllowingFailure(
             listOf(task, "--dry-run"),
             "-PbugseeFixtureMinifyRelease=true",
         )
         assertTrue("dry-run of $task failed:\n$out", ok)
-        return out.lineSequence().map { it.substringBefore(' ') }
-            .filter { it.startsWith(":app:uploadBugsee") }.toList()
+        return out.lineSequence().map { it.substringBefore(' ') }.filter { it.startsWith(":") }.toList()
     }
+
+    /** The `:app:uploadBugsee*` tasks scheduled by a dry run of [task], in graph order. */
+    private fun uploadsInGraph(task: String): List<String> = graph(task).filter { it.startsWith(":app:uploadBugsee") }
 
     @Test
     fun releaseEntryTasksBelowAssembleAndBundleScheduleTheUploads() {
         // (`installRelease` exists only for a signed release; it depends on packageRelease.)
         val expectApk = mapOf(
             ":app:assembleRelease" to true, ":app:packageRelease" to true,
-            ":app:bundleRelease" to false, ":app:packageReleaseBundle" to false,
-            ":app:signReleaseBundle" to false,
+            ":app:bundleRelease" to false, ":app:signReleaseBundle" to false,
         )
         for ((task, isApk) in expectApk) {
             val uploads = uploadsInGraph(task)
@@ -58,6 +59,17 @@ class UploadTaskGraphTest {
                 assertEquals("$task bundle upload", !isApk, bundle in uploads)
             }
         }
+    }
+
+    @Test
+    fun packageReleaseBundleDoesNotPullInSigning() {
+        // `package<V>Bundle` writes only the unsigned intermediary bundle; the bundle upload
+        // consumes the signed SingleArtifact.BUNDLE, so finalizing package<V>Bundle with it
+        // would force sign<V>Bundle (and a signing config) into a stage that stops unsigned.
+        val tasks = graph(":app:packageReleaseBundle")
+        assertTrue("mapping upload still runs: $tasks", mapping in tasks)
+        assertTrue("no bundle upload: $tasks", bundle !in tasks)
+        assertTrue("signing must not be scheduled: $tasks", ":app:signReleaseBundle" !in tasks)
     }
 
     @Test

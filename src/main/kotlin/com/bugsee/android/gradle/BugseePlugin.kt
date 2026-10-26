@@ -741,7 +741,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * depends on), `package<V>Bundle` and `sign<V>Bundle` (AAB; what Gradle Play
      * Publisher's `publish<V>Bundle` depends on). The uploads must follow these
      * too, otherwise an artifact is produced from a mapping that is never
-     * uploaded. A task absent in a given AGP version is simply never matched.
+     * uploaded. The bundle (size-analysis) upload follows only `bundle<V>` and
+     * `sign<V>Bundle`, the tasks that yield the signed AAB it reads;
+     * `package<V>Bundle` finalizes the mapping/native uploads only. A task absent in a given AGP version is simply never matched.
      *
      * The package/sign tasks are included only for release-like variants
      * ([releaseLike]): `installDebug`, `connectedDebugAndroidTest` and
@@ -763,11 +765,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             setOfNotNull(
                 "assemble$capitalizedVariant",
                 "package$capitalizedVariant".takeIf { releaseLike },
+                // Writes only the unsigned intermediary bundle: fine for the mapping/native
+                // uploads (they do not read the bundle), but NOT for the bundle upload, which
+                // consumes the signed SingleArtifact.BUNDLE and would drag sign<V>Bundle (and
+                // a signing config) into a stage that deliberately stops unsigned.
+                "package${capitalizedVariant}Bundle".takeIf { releaseLike },
             )
 
+    /** Entry tasks that finalize the bundle upload: those that produce the signed AAB. */
     private fun bundleEntryTaskNames(capitalizedVariant: String, releaseLike: Boolean): Set<String> = setOfNotNull(
         "bundle$capitalizedVariant",
-        "package${capitalizedVariant}Bundle".takeIf { releaseLike },
         "sign${capitalizedVariant}Bundle".takeIf { releaseLike },
     )
 
