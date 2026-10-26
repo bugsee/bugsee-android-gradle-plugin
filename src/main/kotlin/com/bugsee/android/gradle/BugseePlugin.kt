@@ -1062,37 +1062,34 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     // --- Dependency detection helpers ---
 
-    private fun hasComposeDependency(project: Project): Boolean {
+    /**
+     * Whether any dependency declared on a production-classpath configuration
+     * (see [DependencyDetector.isProductionConfiguration]) matches [predicate].
+     * Third-party library detectors must use this, not a raw scan of every
+     * configuration: a library only in `testImplementation`, `compileOnly`, a
+     * lint or kapt configuration never ships in the app, so it must not pull the
+     * matching Bugsee extension module into the production classpath.
+     */
+    private fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean {
         return project.configurations.any { config ->
-            config.dependencies.any { dep ->
-                dep.group?.startsWith("androidx.compose") == true
-            }
+            DependencyDetector.isProductionConfiguration(config.name) &&
+                config.dependencies.any(predicate)
         }
     }
 
-    private fun hasOkHttpDependency(project: Project): Boolean {
-        return project.configurations.any { config ->
-            config.dependencies.any { dep ->
-                dep.group == "com.squareup.okhttp3"
-            }
-        }
-    }
+    private fun hasComposeDependency(project: Project): Boolean =
+        anyProductionDependency(project) { dep -> dep.group?.startsWith("androidx.compose") == true }
 
-    private fun hasKtorDependency(project: Project, majorVersion: Int): Boolean {
-        return project.configurations.any { config ->
-            config.dependencies.any { dep ->
-                dep.group == "io.ktor" && dep.version?.startsWith("$majorVersion.") == true
-            }
-        }
-    }
+    private fun hasOkHttpDependency(project: Project): Boolean =
+        anyProductionDependency(project) { dep -> dep.group == "com.squareup.okhttp3" }
 
-    private fun hasCronetDependency(project: Project): Boolean {
-        return project.configurations.any { config ->
-            config.dependencies.any { dep ->
-                dep.group == "org.chromium.net"
-            }
+    private fun hasKtorDependency(project: Project, majorVersion: Int): Boolean =
+        anyProductionDependency(project) { dep ->
+            dep.group == "io.ktor" && dep.version?.startsWith("$majorVersion.") == true
         }
-    }
+
+    private fun hasCronetDependency(project: Project): Boolean =
+        anyProductionDependency(project) { dep -> dep.group == "org.chromium.net" }
 
     /**
      * Per-variant decision on whether to register the build-info

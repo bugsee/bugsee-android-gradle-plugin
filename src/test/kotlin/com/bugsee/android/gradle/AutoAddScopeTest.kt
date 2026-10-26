@@ -118,6 +118,47 @@ class AutoAddScopeTest {
         assertTrue("bugsee-android-leak" in added, "file leak.enabled=true wins")
     }
 
+    // ── Detector scope: production configurations only (#47) ────────
+
+    @Test
+    fun detectorsIgnoreLibrariesOutsideProductionConfigurations() {
+        val nonProduction = listOf(
+            "testImplementation", "androidTestImplementation", "testFixturesApi", "compileOnly",
+            "compileOnlyApi", "lintChecks", "annotationProcessor", "kapt", "ksp",
+            "testDebugImplementation", "debugUnitTestImplementation", "debugAndroidTestImplementation",
+            "androidTestUtil", "commonTestImplementation",
+        )
+        for (conf in nonProduction) {
+            val h = Harness(null)
+            h.project.configurations.maybeCreate(conf)
+            h.declareOn(conf, "com.squareup.okhttp3:okhttp:4.12.0")
+            h.declareOn(conf, "androidx.compose.ui:ui:1.6.0")
+            h.declareOn(conf, "io.ktor:ktor-client-core:2.3.0")
+            h.declareOn(conf, "io.ktor:ktor-client-core:3.0.0")
+            h.declareOn(conf, "org.chromium.net:cronet-api:119.6045.31")
+            assertEquals(emptySet(), h.autoAdded(), "$conf must not trigger any auto-add")
+        }
+    }
+
+    @Test
+    fun detectorsCountProductionConfigurations() {
+        for (conf in listOf("api", "runtimeOnly", "debugImplementation", "freeReleaseApi", "androidMainImplementation", "testingImplementation")) {
+            val h = Harness(null)
+            h.project.configurations.maybeCreate(conf)
+            h.declareOn(conf, "com.squareup.okhttp3:okhttp:4.12.0")
+            assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded(), conf)
+        }
+    }
+
+    @Test
+    fun okhttpInTestAndImplementationStillAdds() {
+        val h = Harness(null)
+        h.project.configurations.maybeCreate("testImplementation")
+        h.declareOn("testImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        h.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded())
+    }
+
     // ── Backward compatibility (no per-variant input) ───────────────
 
     /**
@@ -247,6 +288,12 @@ class AutoAddScopeTest {
         fun declare(coordinate: String) {
             project.dependencies.add("implementation", coordinate)
             before += coordinate.split(":")[1]
+        }
+
+        /** Declares [coordinate] on [configuration] without counting it as pre-existing. */
+        fun declareOn(configuration: String, coordinate: String) {
+            project.dependencies.add(configuration, coordinate)
+            if (configuration == "implementation") before += coordinate.split(":")[1]
         }
 
         /** A resolver over the same extension and file, as the plugin builds it. */
