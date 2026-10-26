@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation.operation_dispatch
 
 import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
+import com.bugsee.android.gradle.instrumentation.util.NewInitPairing
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
@@ -41,7 +42,7 @@ internal class OperationDispatchClassVisitor(
         // into corrupt bytecode. See CatchingMethodVisitor.
         return CatchingMethodVisitor(
             Opcodes.ASM9,
-            OperationDispatchMethodVisitor(access, name, descriptor, signature, exceptions, mv),
+            OperationDispatchMethodVisitor(access, name, descriptor, signature, exceptions, mv, className),
             className,
             name,
             descriptor,
@@ -60,9 +61,10 @@ private data class DispatchInfo(
 /**
  * MethodVisitor that:
  * - Remaps `FileInputStream`/`FileOutputStream` types to Bugsee wrappers
- *   at `new` allocation sites only. `super(...)` calls in user
- *   subclasses are left untouched (see [pendingRemaps] for the
- *   correctness argument).
+ *   at `new` allocation sites only, pairing each NEW with its `<init>` by data
+ *   flow (see [NewInitPairing]). `super(...)`/`this(...)` calls have no origin NEW
+ *   and are left untouched; methods whose pairing cannot be proven are left
+ *   un-remapped.
  * - Injects dispatcher start/end calls around database, network, and prefs operations
  */
 private class OperationDispatchMethodVisitor(
@@ -72,6 +74,7 @@ private class OperationDispatchMethodVisitor(
     signature: String?,
     exceptions: Array<out String>?,
     private val delegate: MethodVisitor,
+    private val ownerClassName: String,
 ) : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions?.toList()?.toTypedArray()) {
 
     /**
@@ -87,50 +90,6 @@ private class OperationDispatchMethodVisitor(
 
     private val guardedCalls = mutableListOf<GuardedCall>()
 
-    /**
-     * Stack of remap targets pushed by `NEW` instructions and popped
-     * by the matching `<init>` `INVOKESPECIAL`. The remap MUST be
-     * gated on a paired NEW because, per JVMS §4.10.1.9, an
-     * `INVOKESPECIAL` on `<init>` is only verifier-legal when the
-     * target type is either (a) the type of the uninitialized
-     * reference produced by the preceding NEW, OR (b) the immediate
-     * superclass of the current class (the `super(...)` case in a
-     * `<init>` method body).
-     *
-     * Case (a) is what we WANT to remap — `new FileInputStream(f)`
-     * → emit `NEW BugseeFileInputStream` paired with
-     * `INVOKESPECIAL BugseeFileInputStream.<init>`.
-     *
-     * Case (b) is what we MUST NOT remap — a user subclass
-     * `class MyFis extends FileInputStream { MyFis(File f) { super(f); } }`
-     * emits `INVOKESPECIAL java/io/FileInputStream.<init>` with no
-     * paired NEW. Remapping the owner would produce an INVOKESPECIAL
-     * whose target is neither (a) nor (b), which Android ART rejects
-     * at class load with a `VerifyError`.
-     *
-     * The stack is LIFO and only ever grows / shrinks by one entry
-     * per NEW / `<init>` pair, matching the JVM's own invariant that
-     * `<init>` calls always pop the most-recent matching NEW.
-     */
-    private val pendingRemaps = ArrayDeque<String>()
-
-    /**
-     * Intercept NEW instructions to remap FileInputStream/FileOutputStream
-     * types. The remap target is also pushed onto [pendingRemaps] so
-     * the paired `<init>` `INVOKESPECIAL` can be remapped in lockstep.
-     */
-    override fun visitTypeInsn(opcode: Int, type: String?) {
-        if (opcode == Opcodes.NEW) {
-            val remapped = remapType(type)
-            if (remapped != null) {
-                pendingRemaps.addLast(remapped)
-                super.visitTypeInsn(opcode, remapped)
-                return
-            }
-        }
-        super.visitTypeInsn(opcode, type)
-    }
-
     override fun visitMethodInsn(
         opcode: Int,
         owner: String?,
@@ -138,25 +97,6 @@ private class OperationDispatchMethodVisitor(
         descriptor: String?,
         isInterface: Boolean
     ) {
-        // --- File I/O type remapping for <init> calls ---
-        //
-        // ONLY remap when this <init> is the paired call to a NEW we
-        // already remapped (LIFO match against `pendingRemaps`). The
-        // mismatched case (no pending remap target, or the top entry
-        // doesn't match) is a `super(...)` call from a user subclass
-        // of FileInputStream/FileOutputStream — leave its owner alone
-        // so the resulting bytecode passes the JVM/ART verifier.
-        if (name == "<init>" && owner != null) {
-            val remapped = remapType(owner)
-            if (remapped != null
-                    && pendingRemaps.isNotEmpty()
-                    && pendingRemaps.last() == remapped) {
-                pendingRemaps.removeLast()
-                super.visitMethodInsn(opcode, remapped, name, descriptor, isInterface)
-                return
-            }
-        }
-
         // --- Dispatch injection for database, network, prefs ---
         val info = resolveDispatchInfo(owner, name, descriptor)
         if (info == null) {
@@ -268,6 +208,10 @@ private class OperationDispatchMethodVisitor(
             // can only append, and the reader has already emitted the user's entries.
             tryCatchBlocks.add(0, TryCatchBlockNode(call.start, call.end, call.handler, null))
         }
+
+        // File I/O remap runs LAST, over the final instruction list and exception table,
+        // so the data-flow analysis sees exactly what will be emitted.
+        NewInitPairing.rewrite(ownerClassName, this) { remapType(it) }
 
         super.visitEnd()
         accept(delegate)
