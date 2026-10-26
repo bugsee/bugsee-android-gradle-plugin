@@ -1,7 +1,9 @@
 package com.bugsee.android.gradle.integration
 
 import com.bugsee.android.gradle.integration.harness.FixtureProject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -43,6 +45,16 @@ class NonMinifiedVariantWarningsTest {
         )
         assertFalse("AGP listener message leaked for a minified variant\n$out", "will never be invoked" in out)
         val buildId = File(fixture.projectDir, "app/build/intermediates/bugsee/release/build-id.txt")
-        assertTrue("resolved build id missing", buildId.isFile && buildId.readText().isNotBlank())
+        assertTrue("resolved build id missing", buildId.isFile)
+        // The id must be derived from the R8 mapping, not the manifest fallback (which is
+        // also non-blank and would pass if the listener were wrongly skipped).
+        val mapping = File(fixture.projectDir, "app/build/outputs/mapping/release/mapping.txt")
+        assertTrue("R8 must have produced a mapping", mapping.isFile)
+        val fallback = File(fixture.projectDir, "app/build/intermediates/bugsee/release/fallback-build-id.txt")
+        assertEquals(
+            java.util.UUID.nameUUIDFromBytes(mapping.readBytes()).toString(),
+            buildId.readText().trim(),
+        )
+        assertNotEquals(fallback.readText().trim(), buildId.readText().trim())
     }
 }

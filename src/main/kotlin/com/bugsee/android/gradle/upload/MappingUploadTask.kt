@@ -112,6 +112,16 @@ abstract class MappingUploadTask : DefaultTask() {
     abstract val mappingFile: RegularFileProperty
 
     /**
+     * Whether the build-id resolve task listens for the R8 mapping (see
+     * `BugseePlugin.mayProduceMapping`). False plus a present [mappingFile] means a
+     * non-AGP producer (e.g. DexGuard with minify off) supplied it: the build id is then
+     * not mapping-derived, and the task warns.
+     */
+    @get:Input
+    @get:Optional
+    abstract val mappingListenerRegistered: Property<Boolean>
+
+    /**
      * The resolved BUILD_UUID for this variant, written by
      * [com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask]:
      *   - R8 enabled: a hash of the mapping.txt content. Bytecode-
@@ -205,6 +215,18 @@ abstract class MappingUploadTask : DefaultTask() {
                 logger.warn("Bugsee: Mapping file does not exist for variant ${variantName.get()}. Skipping upload.")
             }
             return
+        }
+
+        // The build id is only mapping-derived when the resolve task listened for the
+        // mapping. A mapping that exists although it did not (a third-party R8 replacement
+        // publishing it with minify off) leaves the manifest-derived id, which does not change
+        // with the code: a later upload for new code can be skipped as a duplicate.
+        if (!mappingListenerRegistered.getOrElse(true)) {
+            logger.warn(
+                "Bugsee: a mapping file exists for variant ${variantName.get()}, but minification is " +
+                    "not enabled for it, so its build id is not derived from the mapping. " +
+                    "Crashes may not deobfuscate after code-only changes."
+            )
         }
 
         // App-token resolution chain — mirrors BundleUploadTask. The
