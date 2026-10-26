@@ -34,6 +34,7 @@ import org.gradle.api.artifacts.Dependency
 import org.gradle.api.artifacts.DependencySet
 import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.TaskProvider
 import org.gradle.build.event.BuildEventsListenerRegistry
 import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
@@ -650,7 +651,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
 
         // Finalize after assemble/bundle and the packaging/signing tasks below them
-        finalizeAfter(project, apkAndBundleEntryTaskNames(capitalizedVariant), mappingUploadTaskProvider)
+        finalizeAfter(
+            project,
+            apkAndBundleEntryTaskNames(capitalizedVariant, isReleaseLikeVariant(project, variant)),
+            mappingUploadTaskProvider,
+        )
     }
 
     private fun registerNativeUploadTask(
@@ -723,7 +728,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
 
         // Finalize after assemble/bundle and the packaging/signing tasks below them
-        finalizeAfter(project, apkAndBundleEntryTaskNames(capitalizedVariant), nativeUploadTaskProvider)
+        finalizeAfter(
+            project,
+            apkAndBundleEntryTaskNames(capitalizedVariant, isReleaseLikeVariant(project, variant)),
+            nativeUploadTaskProvider,
+        )
     }
 
     /**
@@ -733,15 +742,30 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * Publisher's `publish<V>Bundle` depends on). The uploads must follow these
      * too, otherwise an artifact is produced from a mapping that is never
      * uploaded. A task absent in a given AGP version is simply never matched.
+     *
+     * The package/sign tasks are included only for release-like variants
+     * ([releaseLike]): `installDebug`, `connectedDebugAndroidTest` and
+     * `packageDebug` must not start uploading (e.g. unstripped native libs) on
+     * every developer/CI device run. `assemble`/`bundle` keep finalizing for
+     * every variant as before.
+     *
+     * Known trade-off: a finalizer also runs when the finalized task fails
+     * (e.g. signing fails after R8), so symbols can be stored for a build id
+     * that never produced an artifact. Harmless apart from storage/noise;
+     * skipping would need the finalized task's state at execution time, which
+     * is not configuration-cache friendly.
      */
-    private fun apkAndBundleEntryTaskNames(capitalizedVariant: String): Set<String> =
-        bundleEntryTaskNames(capitalizedVariant) +
-            setOf("assemble$capitalizedVariant", "package$capitalizedVariant")
+    private fun apkAndBundleEntryTaskNames(capitalizedVariant: String, releaseLike: Boolean): Set<String> =
+        bundleEntryTaskNames(capitalizedVariant, releaseLike) +
+            setOfNotNull(
+                "assemble$capitalizedVariant",
+                "package$capitalizedVariant".takeIf { releaseLike },
+            )
 
-    private fun bundleEntryTaskNames(capitalizedVariant: String): Set<String> = setOf(
+    private fun bundleEntryTaskNames(capitalizedVariant: String, releaseLike: Boolean): Set<String> = setOfNotNull(
         "bundle$capitalizedVariant",
-        "package${capitalizedVariant}Bundle",
-        "sign${capitalizedVariant}Bundle",
+        "package${capitalizedVariant}Bundle".takeIf { releaseLike },
+        "sign${capitalizedVariant}Bundle".takeIf { releaseLike },
     )
 
     /**
@@ -753,7 +777,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun finalizeAfter(
         project: Project,
         names: Set<String>,
-        upload: org.gradle.api.tasks.TaskProvider<*>,
+        upload: TaskProvider<*>,
     ) {
         project.tasks.configureEach { t ->
             if (t.name in names) t.finalizedBy(upload)
@@ -923,7 +947,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        finalizeAfter(project, bundleEntryTaskNames(capitalizedVariant), bundleUploadTaskProvider)
+        val releaseLike = isReleaseLikeVariant(project, variant)
+        finalizeAfter(project, bundleEntryTaskNames(capitalizedVariant, releaseLike), bundleUploadTaskProvider)
 
         // APK upload task — wired to APK output
         val apkUploadTaskProvider = project.tasks.register(
@@ -994,7 +1019,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         finalizeAfter(
             project,
-            setOf("assemble$capitalizedVariant", "package$capitalizedVariant"),
+            setOfNotNull("assemble$capitalizedVariant", "package$capitalizedVariant".takeIf { releaseLike }),
             apkUploadTaskProvider,
         )
     }

@@ -96,4 +96,11 @@ dependencies {
 }
 
 bugsee {
+    // Opt-in (UploadTaskGraphTest): point uploads at a mock server so a real run can
+    // assert what reaches it. Without the property nothing is configured, as before.
+    project.findProperty("bugseeFixtureEndpoint")?.toString()?.let {
+        endpoint.set(it)
+        appToken("fixture-token-0123456789")
+        uploader.set(com.bugsee.android.gradle.upload.UploaderStrategy.KOTLIN)
+    }
 }

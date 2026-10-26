@@ -181,6 +181,21 @@ class VariantWiringTest {
         for (name in listOf("bundleRelease", "packageReleaseBundle", "signReleaseBundle")) {
             assertEquals(setOf(mapping, native, bundle), finalizers(name), name)
         }
+        // Debug (non-release-like) variant: only assemble/bundle finalize, as before #41.
+        val debugApp = Harness("plugin.ndk.enabled=true\n")
+        // (name-based fallback: a build type containing "debug" is not release-like)
+        debugApp.runVariant("debug", buildType = "debug")
+        val dTasks = debugApp.project.tasks
+        listOf("assembleDebug", "bundleDebug", "packageDebug", "packageDebugBundle", "signDebugBundle", "installDebug")
+            .forEach { dTasks.register(it) }
+        fun debugFinalizers(name: String) =
+            dTasks.getByName(name).finalizedBy.getDependencies(null).map { it.name }.toSet()
+        assertEquals(true, debugFinalizers("assembleDebug").isNotEmpty())
+        assertEquals(true, debugFinalizers("bundleDebug").isNotEmpty())
+        for (name in listOf("packageDebug", "packageDebugBundle", "signDebugBundle", "installDebug")) {
+            assertEquals(emptySet(), debugFinalizers(name), name)
+        }
+
         // Tasks that only compile/lint/shrink/install must not trigger any upload by themselves.
         for (name in listOf("compileReleaseKotlin", "lintRelease", "minifyReleaseWithR8", "installRelease")) {
             assertEquals(emptySet(), finalizers(name), name)

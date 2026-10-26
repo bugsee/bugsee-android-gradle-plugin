@@ -103,7 +103,7 @@ src/main/kotlin/com/bugsee/android/gradle/
 
 Uses `AndroidComponentsExtension.onVariants` to register per-variant:
 - **Manifest task** — `createBugsee${Variant}ManifestConfig` (all variants)
-- **Mapping upload task** — `uploadBugsee${Variant}Mapping` (ApplicationVariant only, finalized by assemble/bundle)
+- **Mapping upload task** — `uploadBugsee${Variant}Mapping` (ApplicationVariant only, finalized by `assemble<V>`/`bundle<V>` for every variant, plus `package<V>`, `package<V>Bundle`, `sign<V>Bundle` for release-like (non-debuggable) variants only — so `install`/`publish<V>Bundle` pipelines upload too, while `installDebug`/`connected*` do not)
 - **Native upload task** — `uploadBugsee${Variant}Native` (ApplicationVariant only, when `ndk=true`)
 - **Instrumentation** — applies all matching instrumentations via `InstrumentationRegistrar`
 
