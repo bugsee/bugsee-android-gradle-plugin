@@ -1552,7 +1552,6 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "Bugsee: $setting=true but sdkAutoLoad=false and $BUGSEE_GROUP:$artifact is not declared; " +
                 "declare it or the runtime is not added"
 
-
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
             VariantContext(variant.name, variant.productFlavors.map { it.second }, variant.buildType)

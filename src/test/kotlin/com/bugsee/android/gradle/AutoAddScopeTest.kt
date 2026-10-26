@@ -395,7 +395,6 @@ class AutoAddScopeTest {
         configure: BugseePluginExtension.() -> Unit = {},
     ) {
         val project: Project = ProjectBuilder.builder().build()
-
         val extension: BugseePluginExtension
         private val before = mutableSetOf<String>()
 
