@@ -53,6 +53,12 @@ class IsolatedProjectsIntegrationTest {
 
         val report = reportFile(result.output)
         assertNotNull("expected a configuration-cache report in:\n${result.output}", report)
+        // Guard against a vacuous pass: the fixture's AGP is not Isolated Projects-clean, so a
+        // parseable report has problem entries. None found means the report format changed.
+        assertTrue(
+            "configuration-cache report has no problem entries; the parser below is out of date",
+            Regex("\"problem\":\\[").containsMatchIn(report!!.readText()),
+        )
         val ownedByBugsee = Regex("com\\.bugsee\\.android\\.gradle'\"\\}\\],\"problem\":\\[(.*?)\\]")
             .findAll(report!!.readText())
             .map { m -> Regex("\"(?:text|name)\":\"(.*?)\"").findAll(m.groupValues[1]).joinToString("") { it.groupValues[1] } }
