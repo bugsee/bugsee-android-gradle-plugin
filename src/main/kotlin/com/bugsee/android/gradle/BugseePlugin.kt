@@ -1536,7 +1536,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
          * the build-id resolve task should listen for it (#53).
          *
          *  - `isMinifyEnabled` true: yes.
-         *  - AGP 9 `buildTypes.<type>.optimization.enable` (needs
+         *  - AGP 9 `optimization.enable` on the variant's build type or any of its product
+         *    flavors (AGP merges them with OR; `buildTypes.<type>.optimization.enable`, needs
          *    `android.r8.gradual.support=true`) runs R8 and emits a mapping while the variant's
          *    `isMinifyEnabled` stays false; `CanMinifyCode` does not expose it (it is DSL-only),
          *    so it is read reflectively from [androidExtension] (the `android` DSL object; the
@@ -1557,27 +1558,40 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         ): Boolean {
             val minifiable = variant as? com.android.build.api.variant.CanMinifyCode ?: return true
             if (minifiable.isMinifyEnabled) return true
-            val buildTypeName = variant.buildType ?: return false
+            val extension = androidExtension ?: return false
             return try {
-                val buildTypes = androidExtension?.let { noArgMethod(it, "getBuildTypes")?.invoke(it) }
-                    as? org.gradle.api.NamedDomainObjectCollection<*> ?: return false
-                val buildType = buildTypes.findByName(buildTypeName) ?: return false
-                val getOptimization = noArgMethod(buildType, "getOptimization") ?: return false
-                val optimization = getOptimization.invoke(buildType)
-                // AGP 8.x has an `optimization` block without `enable`: R8 is minify-driven there.
-                val getEnable = noArgMethod(optimization, "getEnable") ?: return false
-                getEnable.invoke(optimization) as Boolean
+                // AGP merges `optimization.enable` across build type and flavors with OR.
+                optimizationEnabled(extension, "getBuildTypes", variant.buildType) ||
+                    variant.productFlavors.any { optimizationEnabled(extension, "getProductFlavors", it.second) }
             } catch (_: Exception) {
                 true
             }
         }
 
-        /** A public no-arg method declared by a public type (DSL impl classes may not be public). */
-        private fun noArgMethod(target: Any, name: String): java.lang.reflect.Method? =
-            target.javaClass.methods.firstOrNull {
-                it.name == name && it.parameterCount == 0 &&
-                    java.lang.reflect.Modifier.isPublic(it.declaringClass.modifiers)
-            }
+        /** `android.<containerGetter>.<name>.optimization.enable`; false when any link is absent. */
+        private fun optimizationEnabled(extension: Any, containerGetter: String, name: String?): Boolean {
+            if (name == null) return false
+            val container = callNoArg(extension, containerGetter) as? org.gradle.api.NamedDomainObjectCollection<*>
+                ?: return false
+            val dsl = container.findByName(name) ?: return false
+            // AGP 8.x: no `optimization` or no `enable` -> R8 is minify-driven there.
+            val optimization = callNoArg(dsl, "getOptimization") ?: return false
+            return callNoArg(optimization, "getEnable") as? Boolean ?: false
+        }
+
+        /**
+         * Calls a no-arg getter reflectively; null when it does not exist. DSL impl classes may
+         * not be public, so a method declared by a public type is preferred and otherwise access
+         * is forced (a method that exists but cannot be called throws, which the caller treats as
+         * "keep the listener").
+         */
+        private fun callNoArg(target: Any, name: String): Any? {
+            val candidates = target.javaClass.methods.filter { it.name == name && it.parameterCount == 0 }
+            val method = candidates.firstOrNull { java.lang.reflect.Modifier.isPublic(it.declaringClass.modifiers) }
+                ?: candidates.firstOrNull()?.also { it.isAccessible = true }
+                ?: return null
+            return method.invoke(target)
+        }
 
         /** The per-variant debug summary. [token] is masked; it is never printed in full. */
         internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =

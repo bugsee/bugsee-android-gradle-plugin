@@ -217,18 +217,6 @@ abstract class MappingUploadTask : DefaultTask() {
             return
         }
 
-        // The build id is only mapping-derived when the resolve task listened for the
-        // mapping. A mapping that exists although it did not (a third-party R8 replacement
-        // publishing it with minify off) leaves the manifest-derived id, which does not change
-        // with the code: a later upload for new code can be skipped as a duplicate.
-        if (!mappingListenerRegistered.getOrElse(true)) {
-            logger.warn(
-                "Bugsee: a mapping file exists for variant ${variantName.get()}, but minification is " +
-                    "not enabled for it, so its build id is not derived from the mapping. " +
-                    "Crashes may not deobfuscate after code-only changes."
-            )
-        }
-
         // App-token resolution chain — mirrors BundleUploadTask. The
         // registration-time work (extension + properties-file) is
         // already baked into `preResolvedAppToken`; the manifest
@@ -276,6 +264,14 @@ abstract class MappingUploadTask : DefaultTask() {
             )
             return
         }
+
+        // The build id is only mapping-derived when the resolve task listened for the
+        // mapping. A mapping that exists although it did not (a third-party R8 replacement
+        // publishing it with minify off) leaves the manifest-derived id, which does not change
+        // with the code: a later upload for new code can be skipped as a duplicate. Warned only
+        // here, once an upload will actually happen.
+        buildIdNotMappingDerivedWarning(variantName.get(), mappingListenerRegistered.getOrElse(true))
+            ?.let { logger.warn(it) }
 
         // Resolve app icon from the pre-wired source-file list.
         val iconResourceId = ManifestModifier.getApplicationIcon(manifest)
@@ -355,5 +351,17 @@ abstract class MappingUploadTask : DefaultTask() {
         } finally {
             zipTemp.delete()
         }
+    }
+
+    internal companion object {
+        /**
+         * Warning for a mapping that exists although the build-id resolve task did not listen
+         * for it, or null when the build id is mapping-derived.
+         */
+        fun buildIdNotMappingDerivedWarning(variantName: String, listenerRegistered: Boolean): String? =
+            if (listenerRegistered) null
+            else "Bugsee: a mapping file exists for variant $variantName, but minification is " +
+                "not enabled for it, so its build id is not derived from the mapping. " +
+                "Crashes may not deobfuscate after code-only changes."
     }
 }

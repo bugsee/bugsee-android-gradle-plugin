@@ -37,11 +37,27 @@ class MayProduceMappingTest {
     /** An AGP 8-style build type: no `getOptimization` at all. */
     class LegacyBuildType(val name: String)
 
-    class FakeExtension<T : Any>(private val buildTypes: NamedDomainObjectContainer<T>) {
+    class FakeExtension<T : Any>(
+        private val buildTypes: NamedDomainObjectContainer<T>,
+        private val productFlavors: NamedDomainObjectContainer<FakeBuildType>? = null,
+    ) {
         fun getBuildTypes(): NamedDomainObjectContainer<T> = buildTypes
+        fun getProductFlavors(): NamedDomainObjectContainer<FakeBuildType> =
+            productFlavors ?: error("no flavors")
     }
 
-    private fun variant(minify: Boolean, buildType: String? = "release"): Variant =
+    /** Declared by a non-public class, like AGP's internal DSL impls. */
+    private class HiddenOptimization(val enable: Boolean)
+    private class HiddenBuildType(val name: String, enable: Boolean) {
+        private val optimization = HiddenOptimization(enable)
+        fun getOptimization(): HiddenOptimization = optimization
+    }
+
+    private fun variant(
+        minify: Boolean,
+        buildType: String? = "release",
+        flavors: List<String> = emptyList(),
+    ): Variant =
         Proxy.newProxyInstance(
             javaClass.classLoader,
             arrayOf(ApplicationVariant::class.java),
@@ -49,6 +65,7 @@ class MayProduceMappingTest {
                 when (m.name) {
                     "isMinifyEnabled" -> minify
                     "getBuildType" -> buildType
+                    "getProductFlavors" -> flavors.map { "dim" to it }
                     else -> null
                 }
             },
@@ -102,6 +119,21 @@ class MayProduceMappingTest {
     @Test
     fun minifyDisabled_optimizationUnreadable_keepsListener() {
         assertTrue(BugseePlugin.mayProduceMapping(variant(false), extensionWith(BrokenBuildType("release"))))
+    }
+
+    @Test
+    fun flavorOptimizationEnabled_listens() {
+        val flavors = ProjectBuilder.builder().build().container(FakeBuildType::class.java) { n -> FakeBuildType(n, true) }
+        flavors.create("paid")
+        val ext = FakeExtension(extensionWith(FakeBuildType("release", false)).getBuildTypes(), flavors)
+        assertTrue(BugseePlugin.mayProduceMapping(variant(false, "release", listOf("paid")), ext))
+        assertFalse(BugseePlugin.mayProduceMapping(variant(false, "release", listOf("free")), ext))
+    }
+
+    @Test
+    fun nonPublicDeclaringClass_isStillRead() {
+        assertTrue(BugseePlugin.mayProduceMapping(variant(false), extensionWith(HiddenBuildType("release", true))))
+        assertFalse(BugseePlugin.mayProduceMapping(variant(false), extensionWith(HiddenBuildType("release", false))))
     }
 
     @Test
