@@ -24,7 +24,14 @@ internal fun proxyEnvFromSystemProperties(
             .ifEmpty { if (scheme == "https") "443" else "80" }
         // IPv6 literals must be bracketed in a URL authority.
         val authority = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
-        return "http://$authority:$port"
+        // Credentials (http(s).proxyUser/proxyPassword) go in the URL, percent-encoded, so the
+        // CLI authenticates like the Kotlin path. The environment is not world-readable.
+        val user = sysProps["$scheme.proxyUser"].orEmpty()
+        val creds = if (user.isEmpty()) "" else {
+            val pass = sysProps["$scheme.proxyPassword"].orEmpty()
+            enc(user) + (if (pass.isEmpty()) "" else ":" + enc(pass)) + "@"
+        }
+        return "http://$creds$authority:$port"
     }
 
     val result = LinkedHashMap<String, String>()
@@ -32,15 +39,16 @@ internal fun proxyEnvFromSystemProperties(
     if (!has("HTTP_PROXY", "http_proxy")) proxyUrl("http")?.let { result["HTTP_PROXY"] = it }
 
     if (!has("NO_PROXY", "no_proxy")) {
-        // The JDK reads only `http.nonProxyHosts` (for both schemes): `a|*.b|c` — `*` wildcard
-        // at the start or end. NO_PROXY is comma-separated and uses `.b` for a domain suffix.
-        val noProxy = sysProps["http.nonProxyHosts"].orEmpty()
-            .split('|')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .map { if (it.startsWith("*.")) it.substring(1) else it }
-            .joinToString(",")
-        if (noProxy.isNotEmpty()) result["NO_PROXY"] = noProxy
+        val raw = sysProps["http.nonProxyHosts"]
+        if (raw == null) {
+            // Mirror the JDK built-in default (localhost|127.*|[::1]) so loopback stays direct.
+            if (result.isNotEmpty()) result["NO_PROXY"] = "localhost,127.0.0.1,::1"
+        } else {
+            val noProxy = raw.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+                .mapNotNull { nonProxyEntryToNoProxy(it) }
+                .joinToString(",")
+            if (noProxy.isNotEmpty()) result["NO_PROXY"] = noProxy
+        }
     }
     return result
 }
@@ -51,3 +59,27 @@ internal fun proxyEnvForCli(): Map<String, String> =
         System.getProperties().stringPropertyNames().associateWith { System.getProperty(it) },
         System.getenv(),
     )
+
+private fun enc(v: String): String = java.net.URLEncoder.encode(v, "UTF-8").replace("+", "%20")
+
+/**
+ * One JDK `http.nonProxyHosts` pattern (`*` allowed only at the start or end) to a NO_PROXY entry.
+ * NO_PROXY has no globs: exact host, domain suffix (`.b`) or CIDR. Returns null (dropped) for a
+ * pattern that cannot be expressed.
+ */
+private fun nonProxyEntryToNoProxy(p: String): String? = when {
+    p == "*" -> "*"
+    p.startsWith("*.") -> p.substring(1)
+    p.startsWith("*") -> p.substring(1)
+    p.endsWith(".*") -> {
+        val octets = p.dropLast(2).split('.')
+        if (octets.size in 1..3 && octets.all { o -> o.toIntOrNull()?.let { it in 0..255 } == true }) {
+            val full = octets + List(4 - octets.size) { "0" }
+            full.joinToString(".") + "/" + octets.size * 8
+        } else {
+            null
+        }
+    }
+    p.endsWith("*") -> null
+    else -> p
+}

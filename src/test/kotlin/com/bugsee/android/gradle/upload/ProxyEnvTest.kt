@@ -13,7 +13,8 @@ class ProxyEnvTest {
             ),
             emptyMap(),
         )
-        assertEquals(mapOf("HTTPS_PROXY" to "http://ph:3128", "HTTP_PROXY" to "http://ph2:8080"), out)
+        assertEquals("http://ph:3128", out["HTTPS_PROXY"])
+        assertEquals("http://ph2:8080", out["HTTP_PROXY"])
     }
 
     @Test fun `missing port defaults per scheme and IPv6 host is bracketed`() {
@@ -27,10 +28,10 @@ class ProxyEnvTest {
 
     @Test fun `nonProxyHosts converts to NO_PROXY`() {
         val out = proxyEnvFromSystemProperties(
-            mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|internal"),
+            mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|192.168.1.*|*suffix.example|foo*|*|internal"),
             emptyMap(),
         )
-        assertEquals(mapOf("NO_PROXY" to "localhost,.corp.example,10.*,internal"), out)
+        assertEquals(mapOf("NO_PROXY" to "localhost,.corp.example,10.0.0.0/8,192.168.1.0/24,suffix.example,*,internal"), out)
     }
 
     @Test fun `variables already in the environment are not overridden`() {
@@ -49,5 +50,23 @@ class ProxyEnvTest {
             emptyMap(),
             proxyEnvFromSystemProperties(mapOf("https.proxyHost" to " ", "http.nonProxyHosts" to ""), emptyMap()),
         )
+    }
+
+    @Test fun `unset nonProxyHosts mirrors the JDK loopback default only when a proxy is derived`() {
+        assertEquals(
+            mapOf("HTTPS_PROXY" to "http://ph:1", "NO_PROXY" to "localhost,127.0.0.1,::1"),
+            proxyEnvFromSystemProperties(mapOf("https.proxyHost" to "ph", "https.proxyPort" to "1"), emptyMap()),
+        )
+    }
+
+    @Test fun `proxy credentials are percent-encoded into the URL`() {
+        val out = proxyEnvFromSystemProperties(
+            mapOf(
+                "https.proxyHost" to "ph", "https.proxyPort" to "1",
+                "https.proxyUser" to "me@corp", "https.proxyPassword" to "p w:/",
+            ),
+            emptyMap(),
+        )
+        assertEquals("http://me%40corp:p%20w%3A%2F@ph:1", out["HTTPS_PROXY"])
     }
 }
