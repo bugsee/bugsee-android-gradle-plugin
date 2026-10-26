@@ -6,6 +6,7 @@ import com.bugsee.android.gradle.instrumentation.fixtures.JavaSourceCompiler
 import com.bugsee.android.gradle.instrumentation.util.NewInitPairing
 import org.junit.Test
 import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
@@ -36,18 +37,32 @@ class OperationDispatchNewInitPairingTest {
     private val obj = "java/lang/Object"
 
     private val stubs: Map<String, ByteArray> by lazy {
-        fun stub(simple: String, base: String) = """
+        fun stub(simple: String, base: String, appendCtors: String = "") = """
             package com.bugsee.library.adapters;
             public class $simple extends java.io.$base {
                 public $simple(java.io.File f) throws java.io.FileNotFoundException { super(f); }
                 public $simple(java.lang.String s) throws java.io.FileNotFoundException { super(s); }
+$appendCtors
                 public $simple(java.io.FileDescriptor fd) { super(fd); }
             }
         """.trimIndent()
         JavaSourceCompiler.compileAll(
             mapOf(
                 "BugseeFileInputStream.java" to stub("BugseeFileInputStream", "FileInputStream"),
-                "BugseeFileOutputStream.java" to stub("BugseeFileOutputStream", "FileOutputStream"),
+                "BugseeFileOutputStream.java" to stub(
+                    "BugseeFileOutputStream", "FileOutputStream",
+                    """
+                    public BugseeFileOutputStream(java.io.File f, boolean append) throws java.io.FileNotFoundException { super(f, append); }
+                    public BugseeFileOutputStream(java.lang.String s, boolean append) throws java.io.FileNotFoundException { super(s, append); }
+                    """.trimIndent(),
+                ),
+                "BugseeOperationDispatcher.java" to """
+                    package com.bugsee.library.adapters;
+                    public final class BugseeOperationDispatcher {
+                        public static void onFileReadOperationStart(String a, String b) {}
+                        public static void onFileReadOperationEnd(String a, String b) {}
+                    }
+                """.trimIndent(),
             )
         )
     }
@@ -78,8 +93,32 @@ class OperationDispatchNewInitPairingTest {
     private fun MethodVisitor.initFile(owner: String) =
         visitMethodInsn(INVOKESPECIAL, owner, "<init>", "(Ljava/io/File;)V", false)
 
-    private fun transform(bytes: ByteArray) =
-        AsmTestHarness.transform(bytes) { OperationDispatchClassVisitor(it, "fx.Gen") }
+    private fun transform(bytes: ByteArray) = transformWith(bytes) { OperationDispatchClassVisitor(it, "fx.Gen") }
+
+    /**
+     * Like [AsmTestHarness.transform] (COMPUTE_FRAMES) but frame merging may need to relate the
+     * stub wrapper types to JDK types, so resolve them through the stub class loader.
+     */
+    private fun transformWith(bytes: ByteArray, chain: (ClassVisitor) -> ClassVisitor): ByteArray {
+        val loader = InMemoryClassLoader(stubs, javaClass.classLoader)
+        val reader = ClassReader(bytes)
+        val writer = object : ClassWriter(reader, COMPUTE_FRAMES) {
+            override fun getCommonSuperClass(type1: String, type2: String): String = try {
+                val c1 = Class.forName(type1.replace('/', '.'), false, loader)
+                val c2 = Class.forName(type2.replace('/', '.'), false, loader)
+                when {
+                    c1.isAssignableFrom(c2) -> type1
+                    c2.isAssignableFrom(c1) -> type2
+                    c1.isInterface || c2.isInterface -> obj
+                    else -> generateSequence(c1) { it.superclass }.first { it.isAssignableFrom(c2) }.name.replace('.', '/')
+                }
+            } catch (e: Throwable) {
+                obj
+            }
+        }
+        reader.accept(chain(writer), ClassReader.EXPAND_FRAMES)
+        return writer.toByteArray()
+    }
 
     /** Defines the class on a real loader: this runs the JVM bytecode verifier. */
     private fun load(bytes: ByteArray): Class<*> =
@@ -302,5 +341,115 @@ class OperationDispatchNewInitPairingTest {
         assertEquals(0, n)
         assertTrue(mn.instructions.toList().filterIsInstance<TypeInsnNode>().all { it.desc == fis })
         assertTrue(mn.instructions.toList().filterIsInstance<MethodInsnNode>().all { it.owner == fis })
+    }
+
+    // ---- ASM 9.7 try-range regression (real javac output) --------------------
+
+    @Test
+    fun `javac switch-expression with try inside the argument is still rewritten`() {
+        // javac spills the pending `new FileInputStream` into locals around the try, so the
+        // NEW and <init> are not LIFO. ASM 9.7's analyzer treats labels inside a try range as
+        // throwing and loses the NEW identity unless newControlFlowExceptionEdge is narrowed.
+        // Real javac output, checked in as a resource (see javac-shapes/SwitchAlloc.java).
+        val bytes = javaClass.classLoader.getResourceAsStream("javac-shapes/SwitchAlloc.class")!!.readBytes()
+        val out = transformWith(bytes) { OperationDispatchClassVisitor(it, "SwitchAlloc") }
+        assertEquals(listOf(wFis), news(out, "open").filter { it != "java/io/File" })
+        assertEquals(listOf(wFis), inits(out, "open").filter { it != "java/io/File" })
+
+        val c = Class.forName("SwitchAlloc", true, InMemoryClassLoader(stubs + ("SwitchAlloc" to out), javaClass.classLoader))
+        val (i, _) = tmp()
+        for (k in 0..1) {
+            assertEquals(
+                "com.bugsee.library.adapters.BugseeFileInputStream",
+                c.getMethod("open", Int::class.javaPrimitiveType, File::class.java).invoke(null, k, i),
+            )
+        }
+    }
+
+    // ---- stale limits from earlier visitors in the chain ----------------------
+
+    /** Emulates an earlier visitor that adds [n] pushes at method entry WITHOUT updating maxStack. */
+    private class PushVisitor(next: ClassVisitor, val n: Int) : ClassVisitor(ASM9, next) {
+        override fun visitMethod(a: Int, name: String?, d: String?, sig: String?, ex: Array<out String>?): MethodVisitor {
+            val mv = super.visitMethod(a, name, d, sig, ex)
+            return object : MethodVisitor(ASM9, mv) {
+                override fun visitCode() {
+                    super.visitCode()
+                    repeat(n) { visitInsn(ICONST_0) }
+                    repeat(n) { visitInsn(POP) }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `understated max stack from an earlier visitor does not stop the rewrite`() {
+        for (n in intArrayOf(8, 50)) {
+            val original = genClass(reordered)
+            val out = transformWith(original) { PushVisitor(OperationDispatchClassVisitor(it, "fx.Gen"), n) }
+            assertEquals(listOf(wFis, wFos), news(out, "reordered"), "n=$n")
+            val (i, o) = tmp()
+            val r = call(load(out), "reordered", i, o) as Array<*>
+            assertEquals("com.bugsee.library.adapters.BugseeFileInputStream", r[0]!!.javaClass.name, "n=$n")
+        }
+    }
+
+    // ---- skip paths keep the class valid -------------------------------------
+
+    @Test
+    fun `full visitor leaves a method with an init in dead code untouched and the class still loads`() {
+        // Java 5 class: no stack map frames, so dead code is legal input. The whole method must
+        // be skipped (live NEW/init stay java/io), and the class must still load.
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS) // keep the dead code in the input
+        cw.visit(V1_5, ACC_PUBLIC, "fx/Gen", null, obj, null)
+        val mv = cw.visitMethod(ACC_PUBLIC or ACC_STATIC, "dead", "(Ljava/io/File;Ljava/io/File;)Ljava/lang/Object;", null, arrayOf("java/lang/Exception"))
+        mv.visitCode()
+        mv.visitTypeInsn(NEW, fis); mv.visitInsn(DUP); mv.visitVarInsn(ALOAD, 0); mv.initFile(fis)
+        mv.visitInsn(ARETURN)
+        mv.visitVarInsn(ALOAD, 0); mv.initFile(fis) // dead
+        mv.visitInsn(ARETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        val out = transform(cw.toByteArray())
+        assertEquals(listOf(fis), news(out, "dead"))
+        val (i, o) = tmp()
+        assertEquals("java.io.FileInputStream", call(load(out), "dead", i, o)!!.javaClass.name)
+    }
+
+    @Test
+    fun `analysis failure (stack underflow) leaves the method unchanged`() {
+        val mn = MethodNode(ASM9, ACC_STATIC, "m", "()V", null, null)
+        mn.visitCode()
+        mn.visitTypeInsn(NEW, fis)
+        mn.visitInsn(POP)
+        mn.visitInsn(POP) // underflow -> AnalyzerException
+        mn.visitInsn(RETURN)
+        mn.visitMaxs(1, 0)
+        assertEquals(0, NewInitPairing.rewrite("fx/Gen", mn) { if (it == fis) wFis else null })
+        assertEquals(listOf(fis), mn.instructions.toList().filterIsInstance<TypeInsnNode>().map { it.desc })
+    }
+
+    // ---- guarded call mixed with an allocation in one method ------------------
+
+    @Test
+    fun `method mixing a guarded RandomAccessFile call with a reordered FileInputStream`() {
+        val gen = genClass("mixed" to { mv: MethodVisitor ->
+            mv.visitTypeInsn(NEW, fis); mv.visitVarInsn(ASTORE, 2)
+            mv.visitTypeInsn(NEW, "java/io/RandomAccessFile"); mv.visitInsn(DUP)
+            mv.visitVarInsn(ALOAD, 0); mv.visitLdcInsn("r")
+            mv.visitMethodInsn(INVOKESPECIAL, "java/io/RandomAccessFile", "<init>", "(Ljava/io/File;Ljava/lang/String;)V", false)
+            mv.visitInsn(POP)
+            mv.visitVarInsn(ALOAD, 2); mv.visitVarInsn(ALOAD, 0); mv.initFile(fis)
+            mv.visitVarInsn(ALOAD, 2); mv.visitInsn(ARETURN)
+        })
+        val out = transform(gen)
+        assertEquals(listOf(wFis, "java/io/RandomAccessFile"), news(out, "mixed"))
+        assertTrue(
+            insns(out, "mixed").filterIsInstance<MethodInsnNode>().any { it.name == "onFileReadOperationStart" },
+            "guarded RandomAccessFile call must still be wrapped",
+        )
+        val (i, o) = tmp()
+        assertEquals("com.bugsee.library.adapters.BugseeFileInputStream", call(load(out), "mixed", i, o)!!.javaClass.name)
     }
 }

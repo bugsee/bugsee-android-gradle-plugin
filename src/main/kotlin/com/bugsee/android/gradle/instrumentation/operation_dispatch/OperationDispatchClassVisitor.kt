@@ -211,7 +211,7 @@ private class OperationDispatchMethodVisitor(
 
         // File I/O remap runs LAST, over the final instruction list and exception table,
         // so the data-flow analysis sees exactly what will be emitted.
-        NewInitPairing.rewrite(ownerClassName, this) { remapType(it) }
+        NewInitPairing.rewrite(ownerClassName.replace('.', '/'), this) { remapType(it) }
 
         super.visitEnd()
         accept(delegate)

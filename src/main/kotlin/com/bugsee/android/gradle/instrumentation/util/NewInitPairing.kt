@@ -1,5 +1,7 @@
 package com.bugsee.android.gradle.instrumentation.util
 
+import org.gradle.api.logging.Logging
+import org.objectweb.asm.ConstantDynamic
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.tree.AbstractInsnNode
@@ -8,6 +10,7 @@ import org.objectweb.asm.tree.InvokeDynamicInsnNode
 import org.objectweb.asm.tree.LdcInsnNode
 import org.objectweb.asm.tree.MethodInsnNode
 import org.objectweb.asm.tree.MethodNode
+import org.objectweb.asm.tree.TryCatchBlockNode
 import org.objectweb.asm.tree.TypeInsnNode
 import org.objectweb.asm.tree.analysis.Analyzer
 import org.objectweb.asm.tree.analysis.Interpreter
@@ -58,22 +61,28 @@ internal object NewInitPairing {
         }
         if (candidates.isEmpty()) return 0
 
-        // Stale max stack (instrumentation may already have added pushes) would make the
-        // analyzer throw; the writer recomputes maxs regardless.
-        method.maxStack += 4
-
-        val analyzer = Analyzer(OriginInterpreter(candidates))
+        // Recompute max stack/locals from the code itself: earlier visitors in AGP's chain (and
+        // this one) may have added pushes or locals without updating the declared limits, and a
+        // stale limit makes the analyzer throw. The writer recomputes maxs regardless.
+        val analyzer = object : Analyzer<Origin>(OriginInterpreter(candidates)) {
+            // ASM 9.7's analyzer treats LABEL/LINE/FRAME pseudo-instructions inside a try range
+            // as throwing, which merges unrelated paths into the handler and loses the NEW's
+            // identity. Only real instructions (opcode >= 0) can throw, so this is sound.
+            override fun newControlFlowExceptionEdge(insnIndex: Int, tryCatchBlock: TryCatchBlockNode): Boolean =
+                method.instructions.get(insnIndex).opcode >= 0
+        }
         val frames = try {
-            analyzer.analyze(ownerClass, method)
+            analyzer.analyzeAndComputeMaxs(ownerClass, method)
         } catch (e: Exception) {
-            return 0
+            return skip(ownerClass, method, "data-flow analysis failed: $e")
         }
 
         val initsByNew = HashMap<TypeInsnNode, MutableList<MethodInsnNode>>()
         for (init in inits) {
-            val frame = frames[method.instructions.indexOf(init)] ?: return 0 // dead <init>: can't prove
+            val frame = frames[method.instructions.indexOf(init)]
+                ?: return skip(ownerClass, method, "rewritable <init> in unreachable code")
             val receiverIdx = frame.stackSize - 1 - Type.getArgumentTypes(init.desc).size
-            if (receiverIdx < 0) return 0
+            if (receiverIdx < 0) return skip(ownerClass, method, "<init> receiver not on the stack")
             val origin = frame.getStack(receiverIdx)?.origin ?: continue // super()/this() call
             initsByNew.getOrPut(origin) { ArrayList() } += init
         }
@@ -81,13 +90,26 @@ internal object NewInitPairing {
         var rewritten = 0
         for (new in candidates) {
             val pairedInits = initsByNew[new] ?: continue
-            if (pairedInits.any { it.owner != new.desc }) continue
+            if (pairedInits.any { it.owner != new.desc }) {
+                skip(ownerClass, method, "NEW ${new.desc} initialized by a different type")
+                continue
+            }
             val target = remap(new.desc) ?: continue
             new.desc = target
             pairedInits.forEach { it.owner = target }
             rewritten++
         }
         return rewritten
+    }
+
+    private val LOGGER = Logging.getLogger(NewInitPairing::class.java)
+
+    private fun skip(ownerClass: String, method: MethodNode, reason: String): Int {
+        LOGGER.debug(
+            "Bugsee: file I/O rewrite skipped for {}.{}{}: {}",
+            ownerClass.replace('/', '.'), method.name, method.desc, reason,
+        )
+        return 0
     }
 
     /** Value that remembers which candidate NEW produced it (null for everything else). */
@@ -98,9 +120,9 @@ internal object NewInitPairing {
     private class OriginInterpreter(private val candidates: Set<TypeInsnNode>) :
         Interpreter<Origin>(Opcodes.ASM9) {
 
-        private fun of(size: Int) = Origin(size, null)
-        private val one = of(1)
-        private val two = of(2)
+        private val one = Origin(1, null)
+        private val two = Origin(2, null)
+        private fun of(size: Int) = if (size == 2) two else one
 
         override fun newValue(type: Type?): Origin? = when {
             type == null -> one
@@ -112,8 +134,11 @@ internal object NewInitPairing {
             Opcodes.NEW -> if (insn in candidates) Origin(1, insn as TypeInsnNode) else one
             Opcodes.LCONST_0, Opcodes.LCONST_1, Opcodes.DCONST_0, Opcodes.DCONST_1 -> two
             Opcodes.LDC -> {
-                val cst = (insn as LdcInsnNode).cst
-                if (cst is Long || cst is Double) two else one
+                when (val cst = (insn as LdcInsnNode).cst) {
+                    is Long, is Double -> two
+                    is ConstantDynamic -> of(Type.getType(cst.descriptor).size)
+                    else -> one
+                }
             }
             Opcodes.GETSTATIC -> of(Type.getType((insn as FieldInsnNode).desc).size)
             else -> one
@@ -152,6 +177,6 @@ internal object NewInitPairing {
         override fun returnOperation(insn: AbstractInsnNode, value: Origin, expected: Origin) {}
 
         override fun merge(value1: Origin, value2: Origin): Origin =
-            if (value1 == value2) value1 else Origin(value1.slots, null)
+            if (value1 == value2) value1 else one
     }
 }

@@ -56,15 +56,16 @@ dependencies {
 
     // ASM tree + analysis used by the app-startup-tracing production
     // transforms (MethodNode-based rewrite, Analyzer/BasicInterpreter
-    // for natural-loop detection). compileOnly — AGP brings the same
-    // ASM 9.7 transitively at plugin runtime through its R8/transform
+    // for natural-loop detection). compileOnly — AGP brings its own
+    // ASM transitively at plugin runtime through its R8/transform
     // toolchain, so packaging another copy would risk classloader
     // pollution.
     //
     // **AGP→ASM version coupling.** AGP 8.6.0 (the version this plugin
-    // is built against) pulls ASM 9.7 transitively via its R8/transform
-    // chain (`com.android.tools.build:gradle:8.6.0` → `transform-api`
-    // → `org.ow2.asm:asm-*:9.7`). Consumers MUST use AGP 8.6.0+ at
+    // is built against) resolves ASM 9.6 at runtime (AGP 8.8/8.9 ship 9.7,
+    // 8.10 ships 9.7.1); the 9.7 here is only the compile/test API level.
+    // Code that depends on analyzer behaviour must hold on all of them — run
+    // the unit tests with `-PasmTestVersion=9.6` to check. Consumers MUST use AGP 8.6.0+ at
     // build time; earlier AGP releases shipped older ASM versions
     // (e.g. AGP 8.4 ships ASM 9.5) that lack a few utility methods
     // this plugin doesn't use today but is one refactor away from
@@ -94,10 +95,12 @@ dependencies {
     // ASM toolchain used by the app-startup-tracing test harness
     // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
     // for CFG-correctness assertions, tree + core for transform code).
-    testImplementation("org.ow2.asm:asm:9.7")
-    testImplementation("org.ow2.asm:asm-tree:9.7")
-    testImplementation("org.ow2.asm:asm-util:9.7")
-    testImplementation("org.ow2.asm:asm-analysis:9.7")
+    // `-PasmTestVersion=9.6` (AGP 8.6.0's runtime ASM) re-runs them on another ASM.
+    val asmTestVersion = providers.gradleProperty("asmTestVersion").orElse("9.7").get()
+    testImplementation("org.ow2.asm:asm:$asmTestVersion")
+    testImplementation("org.ow2.asm:asm-tree:$asmTestVersion")
+    testImplementation("org.ow2.asm:asm-util:$asmTestVersion")
+    testImplementation("org.ow2.asm:asm-analysis:$asmTestVersion")
 
     // Kotlin compiler embeddable for the test harness's Kotlin-source
     // compiler (compiles inline Kotlin snippets to class bytes that the
