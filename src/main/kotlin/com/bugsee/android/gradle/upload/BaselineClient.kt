@@ -86,6 +86,7 @@ internal object BaselineClient {
 
         return try {
             HttpClients.custom()
+                .useSystemProperties()
                 .setDefaultRequestConfig(requestConfig)
                 .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
                 .setRetryHandler(StandardHttpRequestRetryHandler())
