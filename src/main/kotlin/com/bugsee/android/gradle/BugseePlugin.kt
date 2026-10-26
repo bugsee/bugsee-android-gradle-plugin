@@ -747,7 +747,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * ([releaseLike]): `installDebug`, `connectedDebugAndroidTest` and
      * `packageDebug` must not start uploading (e.g. unstripped native libs) on
      * every developer/CI device run. `assemble`/`bundle` keep finalizing for
-     * every variant as before.
+     * every variant as before. Consequences of the gate: a build type that is
+     * debuggable (even if minified) gets no package/sign finalizers, and with
+     * `testBuildType = "release"` a `connectedReleaseAndroidTest` run (which
+     * packages the release APK) does upload; duplicates are treated as success.
      *
      * Known trade-off: a finalizer also runs when the finalized task fails
      * (e.g. signing fails after R8), so symbols can be stored for a build id
