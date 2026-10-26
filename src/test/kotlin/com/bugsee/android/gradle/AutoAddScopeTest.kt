@@ -115,7 +115,97 @@ class AutoAddScopeTest {
         }
         val added = prefer.autoAdded()
         assertFalse("bugsee-android" in added, "file sdkAutoLoad=false wins")
-        assertTrue("bugsee-android-leak" in added, "file leak.enabled=true wins")
+        assertFalse("bugsee-android-leak" in added, "file sdkAutoLoad=false also stops the leak extension (#48)")
+
+        val leakOnly = Harness("plugin.leak.enabled=true\n", declareCore = false) {
+            leak.enabled.set(false)
+            preferSettingsFile.set(true)
+        }
+        assertTrue("bugsee-android-leak" in leakOnly.autoAdded(), "file leak.enabled=true wins")
+    }
+
+    // ── sdkAutoLoad gates every auto-add (issue #48) ────────────────
+
+    private val allTriggers = listOf(
+        "com.squareup.okhttp3:okhttp:4.12.0",
+        "androidx.compose.ui:ui:1.6.0",
+        "io.ktor:ktor-client-core:2.3.0",
+        "io.ktor:ktor-client-core:3.0.0",
+        "org.chromium.net:cronet-api:119.6045.31",
+    )
+
+    private fun BugseePluginExtension.enableOptInModules() {
+        ndk.enabled.set(true)
+        leak.enabled.set(true)
+        feedback.set(true)
+    }
+
+    private fun Harness.declareAllTriggers() = allTriggers.forEach { declare(it) }
+
+    @Test
+    fun sdkAutoLoadFalseAddsNothingForAnyTrigger() {
+        val h = Harness(null, declareCore = false) {
+            sdkAutoLoad.set(false)
+            enableOptInModules()
+        }
+        h.declareAllTriggers()
+        assertEquals(emptySet(), h.autoAdded())
+    }
+
+    @Test
+    fun sdkAutoLoadTrueByDefaultAddsCoreAndAllExtensions() {
+        val h = Harness(null, declareCore = false) { enableOptInModules() }
+        h.declareAllTriggers()
+        assertEquals(
+            setOf(
+                "bugsee-android", "bugsee-android-ndk", "bugsee-android-leak", "bugsee-android-feedback",
+                "bugsee-android-compose", "bugsee-android-okhttp", "bugsee-android-ktor-2",
+                "bugsee-android-ktor-3", "bugsee-android-cronet",
+            ),
+            h.autoAdded(),
+        )
+    }
+
+    @Test
+    fun sdkAutoLoadFalseViaPropertiesFileAddsNothing() {
+        val h = Harness(
+            "plugin.sdkAutoLoad=false\nplugin.ndk.enabled=true\nplugin.feedback=true\nplugin.leak.enabled=true\n",
+            declareCore = false,
+        )
+        h.declareAllTriggers()
+        assertEquals(emptySet(), h.autoAdded())
+    }
+
+    @Test
+    fun sdkAutoLoadFalseKeepsExplicitlyDeclaredModules() {
+        val h = Harness(null, declareCore = false) { sdkAutoLoad.set(false) }
+        h.declare("com.bugsee:bugsee-android:$SDK_VERSION")
+        h.declare("com.bugsee:bugsee-android-okhttp:$SDK_VERSION")
+        h.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(emptySet(), h.autoAdded())
+        val names = h.project.configurations.getByName("implementation").dependencies.map { it.name }
+        assertTrue("bugsee-android-okhttp" in names && "bugsee-android" in names)
+    }
+
+    @Test
+    fun sdkAutoLoadDslBeatsFileUnlessPreferSettingsFile() {
+        // DSL false, file true -> DSL wins: nothing added.
+        val dslOff = Harness("plugin.sdkAutoLoad=true\n", declareCore = false) { sdkAutoLoad.set(false) }
+        dslOff.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(emptySet(), dslOff.autoAdded())
+
+        // DSL true, file false -> DSL wins: core and okhttp added.
+        val dslOn = Harness("plugin.sdkAutoLoad=false\n", declareCore = false) { sdkAutoLoad.set(true) }
+        dslOn.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(setOf("bugsee-android", "bugsee-android-okhttp"), dslOn.autoAdded())
+
+        // preferSettingsFile flips it: the file's false stops the extension too.
+        val prefer = Harness("plugin.sdkAutoLoad=false\n", declareCore = false) {
+            sdkAutoLoad.set(true)
+            preferSettingsFile.set(true)
+        }
+        prefer.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(emptySet(), prefer.autoAdded())
     }
 
     // ── Backward compatibility (no per-variant input) ───────────────

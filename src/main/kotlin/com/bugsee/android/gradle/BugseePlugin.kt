@@ -1413,6 +1413,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * Checks both Maven coordinates (`com.bugsee:{artifactName}`) and
      * project dependencies (`:${projectName}`) to avoid duplicates. Scans
      * all configurations on the consuming project, not just `implementation`.
+     *
+     * Every extension add funnels through here, so this is the single place
+     * where `sdkAutoLoad=false` (DSL or `plugin.sdkAutoLoad` in bugsee.properties,
+     * resolved by the same global-scope rule as the core SDK add) stops the
+     * auto-add of ALL modules, not just the core. Modules the user declared
+     * explicitly are never touched either way.
      */
     private fun autoAddModule(
         project: Project,
@@ -1422,6 +1428,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         isDebug: Boolean,
         sdkVersion: String
     ) {
+        if (!settingsResolver().globalValue(SDK_AUTO_LOAD)) return
         val alreadyPresent = project.configurations.any { config ->
             config.dependencies.any { dep ->
                 (dep.group == BUGSEE_GROUP && dep.name == artifactName) ||

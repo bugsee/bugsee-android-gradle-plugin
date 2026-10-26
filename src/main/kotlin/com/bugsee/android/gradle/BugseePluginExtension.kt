@@ -221,8 +221,14 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * configs, …), the auto-add is skipped regardless of this setting:
      * the user-declared version always wins.
      *
-     * Set to `false` to opt out of the auto-pull behaviour entirely —
-     * useful when shipping the core SDK via a local classpath path or
+     * Set to `false` to opt out of the auto-pull behaviour entirely: the plugin
+     * then adds NO Bugsee module on its own — neither the core SDK nor any
+     * extension (`bugsee-android-okhttp`, `-compose`, `-ktor-2/3`, `-cronet`,
+     * `-ndk`, `-leak`, `-feedback`). Every module you want must be declared
+     * explicitly. Instrumentation and the NDK/feedback/leak settings keep
+     * working on modules you declared yourself; they just no longer pull
+     * the module in. Also settable as `plugin.sdkAutoLoad` in bugsee.properties
+     * (global-only; the DSL wins unless `preferSettingsFile` is set). Useful when shipping the core SDK via a local classpath path or
      * a locally-published artefact, where the dynamic version range
      * would conflict with the user-managed declaration.
      *

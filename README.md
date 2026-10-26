@@ -148,6 +148,7 @@ dotted-path form as the DSL field names.
 | `plugin.endpoint` | String | `https://api.bugsee.com` | `bugsee { endpoint.set(…) }` |
 | `plugin.debug` | Boolean | `false` | `bugsee { debug.set(…) }` |
 | `plugin.feedback` | Boolean | `false` | `bugsee { feedback.set(…) }` |
+| `plugin.sdkAutoLoad` | Boolean | `true` | `bugsee { sdkAutoLoad.set(…) }` |
 | `plugin.optimizeExtensionsLoading` | Boolean | `true` | `bugsee { optimizeExtensionsLoading.set(…) }` |
 
 ### NDK integration
@@ -424,6 +425,12 @@ the upload tasks skip with a single info-level message instead of failing or war
 
 ### Notes and limitations
 
+- **`sdkAutoLoad=false` disables ALL dependency auto-add.** With the default
+  (`true`) the plugin adds the core SDK and the extension modules it detects
+  (okhttp, compose, ktor, cronet, ndk, leak, feedback). With `false`
+  (`bugsee { sdkAutoLoad.set(false) }` or `plugin.sdkAutoLoad=false`) it adds
+  none of them; declare every Bugsee module yourself. Modules you declared are
+  never removed, and instrumentation of them is unaffected. Global-only setting.
 - **Dependency auto-add is decided before variants exist.** The NDK runtime and
   the okhttp / compose / ktor / cronet modules are added when the feature is
   enabled globally or in any variant scope (DSL block or `variant.*` key). A
