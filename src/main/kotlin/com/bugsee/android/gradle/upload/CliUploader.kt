@@ -287,6 +287,7 @@ internal object CliUploader {
             execOps.exec { spec ->
                 spec.executable = cliBinary.absolutePath
                 spec.args = argv
+                spec.environment(proxyEnvForCli())
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }.exitValue
@@ -361,6 +362,9 @@ internal object CliUploader {
             val result = execOps.exec { spec ->
                 spec.executable = cliBinary.absolutePath
                 spec.args = argv
+                // bugsee-cli reads proxies from the environment only; derive them from the JVM
+                // proxy system properties (gradle.properties systemProp.*) unless already set.
+                spec.environment(proxyEnvForCli())
                 // The app token goes in the environment, not on the command line: argv is world-
                 // readable to other local users and processes (ps, /proc/<pid>/cmdline), the
                 // environment of a process is not. bugsee-cli reads BUGSEE_APP_TOKEN (every version).
@@ -414,8 +418,9 @@ internal object CliUploader {
             }
             else -> {
                 // Substantive failure (bad token / network / server). The Kotlin
-                // uploader would hit the same error, so don't waste a second
-                // round-trip.
+                // uploader would hit the same error (it applies the same proxy
+                // configuration via the JVM system properties, and the CLI gets it as
+                // HTTPS_PROXY/NO_PROXY), so don't waste a second round-trip.
                 logger.warn(
                     "Bugsee: bugsee-cli exited with $exitCode (substantive failure); " +
                         "the Kotlin uploader would hit the same error so no fallback is attempted.",

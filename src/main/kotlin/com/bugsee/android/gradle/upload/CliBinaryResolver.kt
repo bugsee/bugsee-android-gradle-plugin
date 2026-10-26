@@ -401,6 +401,7 @@ internal object CliBinaryResolver {
             execOps.exec { spec ->
                 spec.executable = binary.absolutePath
                 spec.args = listOf("update", "--max-age", "12h")
+                spec.environment(proxyEnvForCli())
                 spec.isIgnoreExitValue = true
             }
         } catch (e: Throwable) {

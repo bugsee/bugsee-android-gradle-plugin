@@ -577,9 +577,31 @@ An empty root `app_token=` warns once, when the root token is actually consulted
 (not when a DSL token already won). An empty `variant.<name>.app_token=` warns
 when the file is parsed.
 
+<<<<<<< HEAD
 Symbol (mapping and native) upload failures never fail the build: with the Kotlin uploader an
 unreachable endpoint, a timeout or a server error is a `warn` naming the variant, after up to 3
 attempts for transient errors (I/O errors, 429, 5xx; a read timeout is not retried).
+=======
+## Behind a proxy
+
+The uploads honour the standard JVM proxy system properties. Set them in
+`gradle.properties`:
+
+```properties
+systemProp.https.proxyHost=proxy.corp.example
+systemProp.https.proxyPort=3128
+systemProp.http.proxyHost=proxy.corp.example
+systemProp.http.proxyPort=3128
+systemProp.http.nonProxyHosts=localhost|*.corp.example
+```
+
+The JDK reads only `http.nonProxyHosts` for both schemes;
+`systemProp.https.nonProxyHosts` has no effect.
+
+The `bugsee-cli` path reads proxies from the environment only, so the plugin
+derives `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` from the properties above.
+Variables you already set in the environment are never overridden.
+>>>>>>> 97e326b (fix(upload): derive HTTPS_PROXY/HTTP_PROXY/NO_PROXY for bugsee-cli from JVM proxy properties (#52))
 
 ## Example
 
