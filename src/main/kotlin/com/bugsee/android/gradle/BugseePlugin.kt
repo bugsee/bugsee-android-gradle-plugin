@@ -750,7 +750,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         extra.set(key, true)
         project.logger.lifecycle(
             "Bugsee: native symbols are uploaded only for non-debuggable build types " +
-                "(skipped: ${variant.buildType ?: variant.name}, and any other with isDebuggable = true); " +
+                "(e.g. skipped: ${variant.buildType ?: variant.name}; every build type with isDebuggable = true); " +
                 "set ndk.allBuildTypes=true to include them"
         )
     }
