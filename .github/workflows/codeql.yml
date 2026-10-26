@@ -4,8 +4,10 @@ name: CodeQL
 # java-kotlin autobuild failed (`:compose-compiler-plugin:compileKotlin`) and
 # left the repository with a permanent "CodeQL exited with errors" banner, so
 # Kotlin is built explicitly here with the same JDK and Gradle setup as pr.yml.
-# Turn the default setup off (Settings -> Code security) once this is on main,
-# otherwise both run and upload duplicate analyses.
+# The default setup must be switched off (Settings -> Code security -> CodeQL
+# analysis) BEFORE this runs: GitHub rejects advanced-configuration uploads
+# while the default setup is enabled ("CodeQL analyses from advanced
+# configurations cannot be processed when the default setup is enabled").
 on:
   pull_request:
     branches: [main, release]
@@ -45,6 +47,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The build needs no authenticated git access, so do not leave the
+          # token in .git/config while repository-controlled Gradle code runs.
+          persist-credentials: false
 
       # JDK 11 for `jvmToolchain(11)` (not auto-provisioned), 17 as JAVA_HOME
       # to run Gradle, as in pr.yml.
@@ -70,12 +76,31 @@ jobs:
       # not part of the scanned code and are covered by pr.yml. The CodeQL tracer
       # adds heap pressure: the default Kotlin daemon heap ran out of memory in
       # :compose-compiler-plugin:compileKotlin ("GC overhead limit exceeded").
+      # The Kotlin extractor only sees compilers started inside the traced
+      # process tree, so compile in-process (not in the long-lived Kotlin
+      # daemon) and force every task to run (no build cache, no up-to-date skip),
+      # otherwise the Kotlin database can end up empty with a green job.
       - name: Build plugin
         if: matrix.language == 'java-kotlin'
         run: >
-          ./gradlew --no-daemon assemble -x test
+          ./gradlew --no-daemon --no-build-cache --rerun-tasks
+          -Pkotlin.compiler.execution.strategy=in-process
+          assemble -x test
           -Dorg.gradle.jvmargs=-Xmx3g
-          -Pkotlin.daemon.jvmargs=-Xmx3g
+
+      # Fail loudly instead of publishing an empty Kotlin database: the
+      # extractor copies every source file it extracted into its source archive.
+      - name: Verify Kotlin extraction
+        if: matrix.language == 'java-kotlin'
+        run: |
+          src="$CODEQL_EXTRACTOR_JAVA_SOURCE_ARCHIVE_DIR"
+          kt=$(find "$src" -name '*.kt' | wc -l)
+          java=$(find "$src" -name '*.java' | wc -l)
+          echo "Extracted into the CodeQL source archive: $kt Kotlin, $java Java files"
+          if [ "$kt" -eq 0 ]; then
+            echo "::error::CodeQL extracted no Kotlin sources; the Kotlin compiler did not run under the CodeQL tracer"
+            exit 1
+          fi
 
       - uses: github/codeql-action/analyze@v4
         with:
