@@ -60,6 +60,7 @@ internal class MockBuildsServer(
     private val symbolMetadataBodies = ConcurrentLinkedQueue<ByteArray>()
     // Body captured by the presigned-symbol PUT (the symbol zip).
     @Volatile private var symbolPutBody: ByteArray? = null
+    private val symbolPutBodies = ConcurrentLinkedQueue<ByteArray>()
     // When true, the symbol metadata POST replies with the appserver's nested
     // DuplicateSymbolsFoundError envelope (code 16004) instead of signing a presigned URL — so a test can
     // exercise the already-exists short-circuit (no PUT performed).
@@ -128,6 +129,9 @@ internal class MockBuildsServer(
      * artefact each.
      */
     fun storedSymbolPut(): ByteArray? = symbolPutBody
+
+    /** Every presigned-symbol PUT body, in arrival order (one per uploaded symbol). */
+    fun storedSymbolPuts(): List<ByteArray> = symbolPutBodies.toList()
 
     /**
      * Make the next symbol metadata POST reply with the appserver's nested
@@ -336,6 +340,7 @@ internal class MockBuildsServer(
      *  presigned flow uploads after the metadata POST signs a URL. */
     private fun handleSymbolPut(exchange: HttpExchange, body: ByteArray) {
         symbolPutBody = body
+        symbolPutBodies.add(body)
         sendString(exchange, 200, "")
     }
 

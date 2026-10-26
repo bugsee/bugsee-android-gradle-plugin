@@ -61,6 +61,41 @@ jobs:
       - name: Build and test
         run: bash -xe ./scripts/build.sh --full
 
+      # The real-binary CLI contract test (CliUploaderRealBinaryTest) only runs
+      # when BUGSEE_CLI_BIN is set, so without this it is skipped everywhere and
+      # drifts from the CLI unnoticed (issue #14). Fetch the CLI version the plugin
+      # itself pins (CliBinaryResolver.DEFAULT_VERSION) from the same mirror and
+      # with a SHA-256 sidecar check matching the plugin's own verification (it
+      # guards against corruption, not tampering: the sidecar shares the tarball's
+      # origin), then run just that test class with it. BUGSEE_CLI_BIN is scoped
+      # to this step. It runs after the main build, and still on its failure, so neither
+      # masks the other's result.
+      - name: Real-binary bugsee-cli contract test
+        if: success() || failure()
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/.*DEFAULT_VERSION: String = "\([^"]*\)".*/\1/p' \
+            src/main/kotlin/com/bugsee/android/gradle/upload/CliBinaryResolver.kt)
+          [ -n "$version" ] || { echo "could not read DEFAULT_VERSION" >&2; exit 1; }
+          name=bugsee-cli-x86_64-unknown-linux-gnu.tar.xz
+          dir="$RUNNER_TEMP/bugsee-cli"
+          mkdir -p "$dir"
+          base="https://download.bugsee.com/cli/v$version"
+          curl -fsSL --retry 3 -o "$dir/$name" "$base/$name"
+          curl -fsSL --retry 3 -o "$dir/$name.sha256" "$base/$name.sha256"
+          expected=$(cut -d' ' -f1 "$dir/$name.sha256")
+          echo "$expected  $dir/$name" | sha256sum -c -
+          tar -xf "$dir/$name" -C "$dir" --strip-components=1
+          "$dir/bugsee-cli" --version
+          BUGSEE_CLI_BIN="$dir/bugsee-cli" ./gradlew :test --tests '*CliUploaderRealBinaryTest*'
+          # Every test in the class Assume-skips without the binary, and a skip is green:
+          # fail unless the class actually ran.
+          report=build/test-results/test/TEST-com.bugsee.android.gradle.upload.CliUploaderRealBinaryTest.xml
+          if ! grep -q 'skipped="0"' "$report" || grep -q 'tests="0"' "$report"; then
+            echo "real-binary tests were skipped or did not run" >&2
+            exit 1
+          fi
+
       # Only on failure, and kept briefly: the org's Actions artifact storage is
       # shared across every repo and capped, and a green run needs no reports.
       - name: Upload test reports

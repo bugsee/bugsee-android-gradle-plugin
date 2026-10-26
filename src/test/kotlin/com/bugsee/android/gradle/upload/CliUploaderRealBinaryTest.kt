@@ -663,82 +663,223 @@ class CliUploaderRealBinaryTest {
         }
     }
 
-    // ── i. uploadElf presigned symbol round-trip ─────────────────────
+    // ── i. uploadElf: per-library, build-id keyed symbols ────────────
+    //
+    // Current bugsee-cli contract (>= 0.7.12; directory input >= 0.8.0): the CLI
+    // reads each library's GNU build-id, SKIPS libraries without one, and uploads
+    // each remaining library as its OWN symbol keyed by that build-id
+    // (transform=breakpad). The supplied --uuid is no longer the identity, and the
+    // input zip is not PUT as a blob: every library is re-packed into its own
+    // single-entry zip.
+
+    /**
+     * Builds a minimal but real ELF64 (little-endian, x86-64 shared object) that
+     * the CLI's ELF reader accepts: one PT_NOTE program header plus a
+     * `.note.gnu.build-id` section carrying [buildId]. A null [buildId] yields an
+     * otherwise identical ELF with no note at all. [seed] only varies the
+     * trailing bytes so two libraries differ.
+     */
+    private fun minimalElf(buildId: ByteArray?, seed: Int = 0): ByteArray {
+        val note = buildId?.let {
+            java.nio.ByteBuffer.allocate(12 + 4 + it.size).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply {
+                putInt(4); putInt(it.size); putInt(3) // namesz, descsz, NT_GNU_BUILD_ID
+                put("GNU\u0000".toByteArray(Charsets.US_ASCII)); put(it)
+            }.array()
+        } ?: ByteArray(0)
+        // Without a build-id the string table names only .shstrtab, so the no-id ELF
+        // has no section called .note.gnu.build-id at all.
+        val shstrText = if (buildId != null) "\u0000.note.gnu.build-id\u0000.shstrtab\u0000" else "\u0000.shstrtab\u0000"
+        val shstr = shstrText.toByteArray(Charsets.US_ASCII)
+        val shstrtabName = shstrText.indexOf(".shstrtab")
+        val phnum = if (buildId != null) 1 else 0
+        val phOff = 64
+        val noteOff = phOff + 56 * phnum
+        val strOff = noteOff + note.size
+        val shOff = (strOff + shstr.size + 7) and 7.inv()
+        val shnum = if (buildId != null) 3 else 2
+        val total = shOff + 64 * shnum + 8
+        val b = java.nio.ByteBuffer.allocate(total).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        // e_ident: magic, ELFCLASS64, little-endian, EV_CURRENT, SysV ABI
+        b.put(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte(), 2, 1, 1, 0))
+        b.position(16)
+        b.putShort(3); b.putShort(62); b.putInt(1) // ET_DYN, EM_X86_64, EV_CURRENT
+        b.putLong(0); b.putLong(phOff.toLong()); b.putLong(shOff.toLong()) // entry, phoff, shoff
+        b.putInt(0); b.putShort(64); b.putShort(56); b.putShort(phnum.toShort())
+        b.putShort(64); b.putShort(shnum.toShort()); b.putShort((shnum - 1).toShort())
+        if (buildId != null) {
+            b.position(phOff)
+            b.putInt(4); b.putInt(4) // PT_NOTE, PF_R
+            b.putLong(noteOff.toLong()); b.putLong(noteOff.toLong()); b.putLong(noteOff.toLong())
+            b.putLong(note.size.toLong()); b.putLong(note.size.toLong()); b.putLong(4)
+            b.position(noteOff); b.put(note)
+        }
+        b.position(strOff); b.put(shstr)
+        b.position(shOff + 64) // section 0 is the all-zero null header
+        if (buildId != null) {
+            b.putInt(1); b.putInt(7) // name ".note.gnu.build-id", SHT_NOTE
+            b.putLong(2); b.putLong(noteOff.toLong()); b.putLong(noteOff.toLong()) // SHF_ALLOC
+            b.putLong(note.size.toLong()); b.putInt(0); b.putInt(0); b.putLong(4); b.putLong(0)
+        }
+        b.putInt(shstrtabName); b.putInt(3) // ".shstrtab", SHT_STRTAB
+        b.putLong(0); b.putLong(0); b.putLong(strOff.toLong()); b.putLong(shstr.size.toLong())
+        b.putInt(0); b.putInt(0); b.putLong(1); b.putLong(0)
+        b.position(total - 8); b.putLong(seed.toLong())
+        return b.array()
+    }
+
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+    private fun sha1(b: ByteArray) = hex(java.security.MessageDigest.getInstance("SHA-1").digest(b))
+
+    private val idOne = ByteArray(20) { (0x10 + it).toByte() }
+    private val idTwo = ByteArray(20) { (0x80 + it).toByte() }
+
+    private fun runElfUpload(server: MockBuildsServer, input: File): CliUploadResult =
+        CliUploader.uploadElf(
+            execOps = realExecOps(),
+            cliBinary = requireBinary(),
+            symbolsZip = input,
+            appToken = "tok",
+            endpoint = server.baseUrl,
+            version = "1.2.3",
+            build = "456",
+            // The build UUID is NOT the native symbol identity any more; a
+            // distinct value proves the CLI ignores it for keying.
+            uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            logger = logger,
+            debug = true,
+        )
+
+    /**
+     * Asserts one metadata POST per expected library (keyed by build-id,
+     * transform=breakpad) and that each POST's zip PUT carries that library:
+     * the PUT body hashes to the POST's `hash`, and its single entry has the
+     * library's name, size and CRC-32. (The CLI zstd-compresses entries, which
+     * `java.util.zip` cannot read, so the entry is verified by its recorded CRC.)
+     */
+    private fun assertPerLibraryUploads(server: MockBuildsServer, expected: Map<String, Pair<String, ByteArray>>) {
+        val recorded = server.recordedRequests()
+        val posts = recorded.filter { it.method == "POST" && it.path == "/apps/tok/symbols" }
+        assertEquals(
+            expected.size,
+            posts.size,
+            "one metadata POST per library expected; got: " + recorded.joinToString { "${it.method} ${it.path}" },
+        )
+        val puts = server.storedSymbolPuts()
+        assertEquals(expected.size, puts.size, "one symbol PUT per library expected")
+        val putsBySha1 = puts.associateBy { sha1(it) }
+        val seen = mutableSetOf<String>()
+        for (post in posts) {
+            val meta = JSONObject(String(post.body, Charsets.UTF_8))
+            val id = meta.optString("uuid")
+            val (name, lib) = assertNotNull(expected[id], "unexpected symbol identity; meta=$meta")
+            assertTrue(seen.add(id), "build-id registered twice: $id")
+            assertEquals("breakpad", meta.optString("transform"), "elf metadata must carry transform=breakpad; meta=$meta")
+            assertEquals("1.2.3", meta.optString("version"), "meta=$meta")
+            assertEquals("456", meta.optString("build"), "meta=$meta")
+            val put = assertNotNull(putsBySha1[meta.optString("hash")], "no PUT body hashes to meta.hash; meta=$meta")
+            val entries = zipEntryInfo(put)
+            assertEquals(setOf(name), entries.keys, "the symbol zip must hold exactly the library '$name'")
+            // Declared CRC/size from the zip central directory, not the decompressed bytes:
+            // the CLI writes zstd entries and the test has no zstd dependency to inflate them.
+            val (crc, size) = entries.getValue(name)
+            assertEquals(lib.size.toLong(), size, "PUT entry size must equal the library size")
+            assertEquals(java.util.zip.CRC32().apply { update(lib) }.value, crc, "PUT entry must carry the library bytes")
+        }
+    }
+
+    /** Skips unless the binary is a bugsee-cli that accepts a directory for `--type elf`. */
+    private fun requireElfDirectorySupport() {
+        val cliVersion = ProcessBuilder(requireBinary().absolutePath, "--version")
+            .redirectErrorStream(true).start().let { p ->
+                p.inputStream.bufferedReader().readText().also { p.waitFor() }
+            }.trim().substringAfterLast(' ')
+        assumeTrue(
+            "directory input needs bugsee-cli >= ${CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION}; got '$cliVersion'",
+            CliBinaryResolver.versionAtLeast(cliVersion, CliBinaryResolver.ELF_DIRECTORY_MIN_VERSION),
+        )
+    }
 
     @Test
-    fun `uploadElf POSTs elf symbol metadata with breakpad transform and PUTs the symbols zip`() {
-        val bin = requireBinary()
+    fun `uploadElf registers each zip library under its own build-id with breakpad transform`() {
+        requireBinary()
         val tmp = Files.createTempDirectory("bugsee-upload-elf").toFile()
         val server = MockBuildsServer(appToken = "tok")
         server.start()
         try {
-            // The CLI requires --type elf inputs to be a pre-built zip (AGP's
-            // native-debug-symbols.zip), which NativeUploadTask supplies. Build a
-            // small but valid zip with a fake .so entry.
+            val one = minimalElf(idOne, seed = 1)
+            val two = minimalElf(idTwo, seed = 2)
+            val noId = minimalElf(null, seed = 3)
             val symbolsZip = File(tmp, "native-debug-symbols.zip")
             ZipOutputStream(symbolsZip.outputStream()).use { zos ->
-                zos.putNextEntry(ZipEntry("libfake.so"))
-                zos.write("ELF fake native debug symbols".toByteArray())
-                zos.closeEntry()
+                for ((n, bytes) in listOf("arm64-v8a/libone.so" to one, "x86_64/libtwo.so" to two, "x86_64/libnoid.so" to noId)) {
+                    zos.putNextEntry(ZipEntry(n)); zos.write(bytes); zos.closeEntry()
+                }
             }
-            assertTrue(symbolsZip.length() > 0L, "precondition: the symbols zip must be non-empty")
-
-            // The resolved BUILD_UUID NativeUploadTask passes as --uuid.
-            val uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-
-            val result = CliUploader.uploadElf(
-                execOps = realExecOps(),
-                cliBinary = bin,
-                symbolsZip = symbolsZip,
-                appToken = "tok",
-                endpoint = server.baseUrl,
-                version = "1.2.3",
-                build = "456",
-                uuid = uuid,
-                logger = logger,
-                debug = true,
-            )
-
+            val result = runElfUpload(server, symbolsZip)
             assertTrue(result.success, "uploadElf must succeed against the mock; result=$result")
-            assertEquals(0, result.exitCode, "a successful CLI run exits 0; result=$result")
-            assertFalse(result.shouldFallback, "success must not request a fallback; result=$result")
+            assertEquals(0, result.exitCode, "result=$result")
+            assertFalse(result.shouldFallback, "result=$result")
+            // The library without a build-id is skipped: only two POSTs.
+            assertPerLibraryUploads(
+                server,
+                mapOf(hex(idOne) to ("libone.so" to one), hex(idTwo) to ("libtwo.so" to two)),
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
 
+    @Test
+    fun `uploadElf accepts a directory of libraries and registers each under its build-id`() {
+        requireElfDirectorySupport()
+        val tmp = Files.createTempDirectory("bugsee-upload-elf-dir").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        server.start()
+        try {
+            val one = minimalElf(idOne, seed = 1)
+            val two = minimalElf(idTwo, seed = 2)
+            val dir = File(tmp, "libs").apply { mkdirs() }
+            File(dir, "arm64-v8a").mkdirs(); File(dir, "x86_64").mkdirs()
+            File(dir, "arm64-v8a/libone.so").writeBytes(one)
+            File(dir, "x86_64/libtwo.so").writeBytes(two)
+            File(dir, "x86_64/libnoid.so").writeBytes(minimalElf(null, seed = 3))
+            File(dir, "x86_64/readme.txt").writeText("not a library")
+
+            val result = runElfUpload(server, dir)
+            assertTrue(result.success, "directory input must succeed; result=$result")
+            assertEquals(0, result.exitCode, "result=$result")
+            assertPerLibraryUploads(
+                server,
+                mapOf(hex(idOne) to ("libone.so" to one), hex(idTwo) to ("libtwo.so" to two)),
+            )
+        } finally {
+            server.stop()
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `uploadElf skips a library without a GNU build-id and makes no requests`() {
+        requireElfDirectorySupport()
+        val tmp = Files.createTempDirectory("bugsee-upload-elf-noid").toFile()
+        val server = MockBuildsServer(appToken = "tok")
+        server.start()
+        try {
+            val dir = File(tmp, "libs").apply { mkdirs() }
+            File(dir, "libnoid.so").writeBytes(minimalElf(null))
+            // Not an ELF at all (the old stale fixture): also has no build-id.
+            File(dir, "libfake.so").writeText("ELF fake native debug symbols")
+
+            val result = runElfUpload(server, dir)
+            assertTrue(result.success, "skipping build-id-less libraries is not an error; result=$result")
+            assertEquals(0, result.exitCode, "result=$result")
             val recorded = server.recordedRequests()
-            val metaPosts = recorded.filter {
-                it.method == "POST" && it.path == "/apps/tok/symbols"
-            }
-            assertEquals(
-                1,
-                metaPosts.size,
-                "exactly one symbol metadata POST to /apps/tok/symbols expected; got: " +
-                    recorded.joinToString { "${it.method} ${it.path}" },
+            assertTrue(
+                recorded.none { it.path == "/apps/tok/symbols" },
+                "no symbol POST expected; got: " + recorded.joinToString { "${it.method} ${it.path}" },
             )
-            val meta = JSONObject(String(metaPosts.single().body, Charsets.UTF_8))
-            assertEquals(uuid, meta.optString("uuid"), "metadata uuid must be the supplied --uuid; meta=$meta")
-            assertEquals("1.2.3", meta.optString("version"), "metadata version mismatch; meta=$meta")
-            assertEquals("456", meta.optString("build"), "metadata build mismatch; meta=$meta")
-            assertEquals(
-                40,
-                meta.optString("hash").length,
-                "metadata must carry a 40-char SHA-1 content hash; meta=$meta",
-            )
-            // ELF symbols are uploaded with the breakpad transform marker (this is
-            // the field that routes them through the native-symbol pipeline).
-            assertEquals(
-                "breakpad",
-                meta.optString("transform"),
-                "elf metadata must carry transform=breakpad; meta=$meta",
-            )
-
-            // Stage 2: the symbols zip PUT landed verbatim (elf is a pass-through —
-            // the CLI PUTs the input zip as-is, no re-pack).
-            val symPut = server.storedSymbolPut()
-            assertNotNull(symPut, "the presigned symbol PUT body must have been captured")
-            assertContentEquals(
-                symbolsZip.readBytes(),
-                symPut,
-                "elf upload is a pass-through; the PUT body must equal the input zip verbatim",
-            )
+            assertTrue(server.storedSymbolPuts().isEmpty())
         } finally {
             server.stop()
             tmp.deleteRecursively()
@@ -791,6 +932,23 @@ class CliUploaderRealBinaryTest {
                 val clen = u16(data, p + 32)
                 val name = String(data, p + 46, nlen, Charsets.UTF_8)
                 out[name] = method
+                p += 46 + nlen + elen + clen
+            }
+            return out
+        }
+
+        /** Entry name to (CRC-32, uncompressed size), from the central directory. */
+        fun zipEntryInfo(data: ByteArray): Map<String, Pair<Long, Long>> {
+            val eocd = findEocd(data)
+            val total = u16(data, eocd + 10)
+            var p = u32(data, eocd + 16).toInt()
+            val out = LinkedHashMap<String, Pair<Long, Long>>(total)
+            repeat(total) {
+                require(u32(data, p) == CDH_SIG) { "bad central-directory header at $p" }
+                val nlen = u16(data, p + 28)
+                val elen = u16(data, p + 30)
+                val clen = u16(data, p + 32)
+                out[String(data, p + 46, nlen, Charsets.UTF_8)] = u32(data, p + 16) to u32(data, p + 24)
                 p += 46 + nlen + elen + clen
             }
             return out
