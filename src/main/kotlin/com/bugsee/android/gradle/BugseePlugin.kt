@@ -291,7 +291,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // has debug + release) and independent of `onVariants`, so it also fires when `beforeVariants`
         // disables every variant. The plugin skips library variants below, so without it the misapplied
         // plugin is silent unless `debug=true`.
-        if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension) {
+        // Bugsee's own SDK modules (:library, :ndk, ...) are libraries on purpose; same name-only
+        // exemption as the auto-add guard above (`group` may not be set yet at apply() time).
+        if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension &&
+            !isBugseeInternalModule(project.name)
+        ) {
             project.logger.warn(libraryModuleMessage(project.path, project == project.rootProject, project.name))
         }
 
@@ -1911,5 +1915,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "ktor-3",
             "cronet"
         )
+
+        internal fun isBugseeInternalModule(name: String): Boolean = name in BUGSEE_INTERNAL_MODULE_NAMES
     }
 }

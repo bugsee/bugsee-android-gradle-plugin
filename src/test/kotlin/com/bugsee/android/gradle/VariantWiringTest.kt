@@ -363,6 +363,13 @@ class VariantWiringTest {
     }
 
     @Test
+    fun bugseeInternalModulesAreExemptFromLibraryWarning() {
+        assertTrue(BugseePlugin.isBugseeInternalModule("library"))
+        assertTrue(BugseePlugin.isBugseeInternalModule("okhttp"))
+        assertTrue(!BugseePlugin.isBugseeInternalModule("lib"))
+    }
+
+    @Test
     fun libraryModuleMessage_namesModuleAndRootProject() {
         val sub = BugseePlugin.libraryModuleMessage(":feature:lib", false, "lib")
         assertTrue(sub.startsWith("Bugsee: :feature:lib is a library module. "), sub)
