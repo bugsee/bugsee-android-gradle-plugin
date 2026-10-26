@@ -1,6 +1,8 @@
 package com.bugsee.android.gradle.upload
 
 import org.apache.http.client.config.RequestConfig
+import org.apache.http.client.methods.HttpUriRequest
+import org.apache.http.impl.client.CloseableHttpClient
 import org.apache.http.client.methods.HttpPost
 import org.apache.http.client.methods.HttpPut
 import org.apache.http.conn.ssl.DefaultHostnameVerifier
@@ -14,11 +16,16 @@ import org.apache.http.util.EntityUtils
 import org.gradle.api.logging.Logger
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 
 internal object SymbolUploader {
 
     private const val CONNECT_TIMEOUT_MS = 30_000
     private const val SOCKET_TIMEOUT_MS = 120_000
+
+    /** Attempts per request (1 try + 2 retries); the backoff before retry N is `N * RETRY_BACKOFF_MS`. */
+    private const val MAX_ATTEMPTS = 3
+    private const val RETRY_BACKOFF_MS = 500L
 
     /**
      * Two-stage upload:
@@ -52,6 +59,70 @@ internal object SymbolUploader {
         logger: Logger,
         debug: Boolean,
         uploaderTag: String = "kotlin",
+        retryBackoffMs: Long = RETRY_BACKOFF_MS,
+    ): Boolean = try {
+        doUpload(file, json, appToken, endpoint, logger, debug, uploaderTag, retryBackoffMs)
+    } catch (e: IOException) {
+        warnTransportFailure(e, appToken, logger)
+        false
+    } catch (e: RuntimeException) {
+        warnTransportFailure(e, appToken, logger)
+        false
+    }
+
+    /**
+     * A transport failure (connection refused, DNS, timeout, TLS, ...) must not fail the build: like an
+     * HTTP-status failure it is a warning and the upload is skipped. The message is masked: it can carry
+     * the request URL, and the app token is part of the metadata path.
+     */
+    private fun warnTransportFailure(e: Exception, appToken: String, logger: Logger) {
+        val message = (e.message ?: "").replace(appToken, BundleUploader.maskAppToken(appToken))
+        logger.warn("Bugsee upload failed: ${e.javaClass.simpleName}: $message")
+    }
+
+    /**
+     * Run [request], retrying I/O errors and transient statuses ([isRetryable]) up to [MAX_ATTEMPTS]
+     * times with a linear backoff. Permanent statuses (4xx, notably 401/403/404) are returned at once.
+     * The last attempt's reply is returned (or its I/O error thrown) when the attempts run out.
+     * Both entities used here ([StringEntity], [FileEntity]) are repeatable, so the request can be re-sent.
+     */
+    private fun executeWithRetry(
+        client: CloseableHttpClient,
+        request: HttpUriRequest,
+        step: String,
+        logger: Logger,
+        backoffMs: Long,
+    ): Reply {
+        for (attempt in 1..MAX_ATTEMPTS) {
+            val last = attempt == MAX_ATTEMPTS
+            try {
+                val reply = client.execute(request).use { response ->
+                    Reply(response.statusLine.statusCode, response.entity?.let { EntityUtils.toString(it, "utf-8") })
+                }
+                if (!isRetryable(reply.status) || last) return reply
+                logger.warn("Bugsee: $step returned status ${reply.status}, retrying (attempt $attempt of $MAX_ATTEMPTS)")
+            } catch (e: IOException) {
+                if (last) throw e
+                logger.warn("Bugsee: $step failed (${e.javaClass.simpleName}), retrying (attempt $attempt of $MAX_ATTEMPTS)")
+            }
+            if (backoffMs > 0) Thread.sleep(backoffMs * attempt)
+        }
+        error("unreachable")
+    }
+
+    private fun isRetryable(status: Int): Boolean = status == 429 || status in 500..599
+
+    private class Reply(val status: Int, val body: String?)
+
+    private fun doUpload(
+        file: File,
+        json: String,
+        appToken: String,
+        endpoint: String,
+        logger: Logger,
+        debug: Boolean,
+        uploaderTag: String,
+        retryBackoffMs: Long,
     ): Boolean {
         if (debug) logger.warn("Bugsee: Starting upload. Body: $json")
 
@@ -78,8 +149,8 @@ internal object SymbolUploader {
             .build()
 
         return httpClient.use { client ->
-            val response = client.execute(httpPost)
-            val statusCode = response.statusLine.statusCode
+            val reply = executeWithRetry(client, httpPost, "metadata request", logger, retryBackoffMs)
+            val statusCode = reply.status
 
             // Accept the full 2xx range. S3 and CDN proxies routinely
             // normalize successful responses to 201 Created or 204 No
@@ -90,19 +161,17 @@ internal object SymbolUploader {
             // 200..299 range; this aligns the two.
             if (statusCode !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$statusCode): " +
-                        EntityUtils.toString(response.entity, "utf-8"),
+                    "Bugsee upload failed (status=$statusCode): ${reply.body.orEmpty()}",
                 )
                 return@use false
             }
 
-            val resEntity = response.entity
-            if (resEntity == null) {
+            val contentText = reply.body
+            if (contentText == null) {
                 logger.warn("Bugsee upload failed: no response from server")
                 return@use false
             }
 
-            val contentText = EntityUtils.toString(resEntity, "utf-8")
             if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText)}")
 
             // Parse the body defensively. The 2xx range covers
@@ -158,18 +227,17 @@ internal object SymbolUploader {
             if (debug) logger.warn("Bugsee: Uploading to endpoint: ${BundleUploader.redactPresignedUrl(presignedEndpoint)}")
             val httpPut = HttpPut(presignedEndpoint)
             httpPut.entity = FileEntity(file)
-            val putResponse = client.execute(httpPut)
+            val putReply = executeWithRetry(client, httpPut, "file upload", logger, retryBackoffMs)
 
             // Same 2xx-range relaxation as the POST step above —
             // presigned-URL PUTs land on S3 (or whichever CDN the
             // appserver minted), and those return 200/201/204
             // interchangeably depending on multipart vs single-PUT
             // and storage-class settings.
-            val putStatus = putResponse.statusLine.statusCode
+            val putStatus = putReply.status
             if (putStatus !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$putStatus): " +
-                        EntityUtils.toString(putResponse.entity, "utf-8"),
+                    "Bugsee upload failed (status=$putStatus): ${putReply.body.orEmpty()}",
                 )
                 return@use false
             }

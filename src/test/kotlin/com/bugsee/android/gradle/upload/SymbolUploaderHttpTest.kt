@@ -108,6 +108,85 @@ class SymbolUploaderHttpTest {
         assertTrue(line.contains("/presigned/blob?…<redacted>"), "must keep the path, drop the query; got: $line")
     }
 
+    // ── transport errors and transient 5xx (#40) ─────────────────────
+
+    private fun upload(endpoint: String = server.baseUrl) = SymbolUploader.uploadData(
+        file = tempFile(),
+        json = sampleJson,
+        appToken = appToken,
+        endpoint = endpoint,
+        logger = logger,
+        debug = false,
+        retryBackoffMs = 0,
+    )
+
+    @Test fun `502 then 502 then 200 on the POST succeeds after three requests`() {
+        server.scriptPostStatuses(502, 502)
+        assertTrue(upload(), "warns: ${logger.warnMessages}")
+        assertEquals(3, server.postCallCount())
+        assertEquals(1, server.putCallCount())
+    }
+
+    @Test fun `persistent 503 on the POST gives up after three requests with false`() {
+        server.setPostStatus(503)
+        assertFalse(upload())
+        assertEquals(3, server.postCallCount())
+        assertEquals(0, server.putCallCount())
+        assertTrue(logger.warnMessages.any { it.contains("status=503") }, "final warning; got: ${logger.warnMessages}")
+    }
+
+    @Test fun `429 on the POST is retried`() {
+        server.scriptPostStatuses(429)
+        assertTrue(upload())
+        assertEquals(2, server.postCallCount())
+    }
+
+    @Test fun `4xx on the POST is not retried`() {
+        server.setPostStatus(401)
+        assertFalse(upload())
+        assertEquals(1, server.postCallCount())
+    }
+
+    @Test fun `ApplicationNotFoundError is not retried`() {
+        server.setPostBody("""{"ok":false,"error":{"type":"ApplicationNotFoundError"}}""")
+        assertFalse(upload())
+        assertEquals(1, server.postCallCount())
+    }
+
+    @Test fun `DuplicateSymbolsFoundError in the nested envelope is a success without a PUT`() {
+        server.setPostBody("""{"ok":false,"error":{"type":"DuplicateSymbolsFoundError","code":16004}}""")
+        assertTrue(upload())
+        assertEquals(1, server.postCallCount())
+        assertEquals(0, server.putCallCount())
+    }
+
+    @Test fun `503 then 200 on the PUT succeeds after two PUTs`() {
+        server.scriptPutStatuses(503)
+        assertTrue(upload(), "warns: ${logger.warnMessages}")
+        assertEquals(2, server.putCallCount())
+        assertEquals(1, server.postCallCount())
+    }
+
+    @Test fun `persistent 500 on the PUT gives up after three PUTs with false`() {
+        server.setPutStatus(500)
+        assertFalse(upload())
+        assertEquals(3, server.putCallCount())
+    }
+
+    @Test fun `403 on the PUT is not retried`() {
+        server.setPutStatus(403)
+        assertFalse(upload())
+        assertEquals(1, server.putCallCount())
+    }
+
+    @Test fun `closed port returns false without throwing and masks the token`() {
+        val dead = java.net.ServerSocket(0).use { it.localPort }
+        assertFalse(upload("http://127.0.0.1:$dead"))
+        val line = logger.warnMessages.lastOrNull { it.contains("Bugsee upload failed") }
+        assertNotNull(line, "must warn; got: ${logger.warnMessages}")
+        assertFalse(logger.warnMessages.any { it.contains(appToken) }, "token must not be logged; got: ${logger.warnMessages}")
+    }
+
     // ── POST-metadata status handling ────────────────────────────────
 
     @Test fun `POST returning 200 succeeds (baseline)`() {
@@ -619,6 +698,15 @@ internal class MockSymbolServer(private val appToken: String) {
     fun setPutBody(body: String) { putBody = body }
     fun putCallCount(): Int = putAttempts.get()
 
+    private val postAttempts = AtomicInteger(0)
+    private val postScript = ConcurrentLinkedQueue<Int>()
+    private val putScript = ConcurrentLinkedQueue<Int>()
+    fun postCallCount(): Int = postAttempts.get()
+
+    /** Statuses served to the first POSTs / PUTs, in order; afterwards the configured status applies. */
+    fun scriptPostStatuses(vararg statuses: Int) { postScript.addAll(statuses.toList()) }
+    fun scriptPutStatuses(vararg statuses: Int) { putScript.addAll(statuses.toList()) }
+
     fun start() {
         server.executor = Executors.newSingleThreadExecutor()
         // Symbol POST endpoint.
@@ -641,6 +729,8 @@ internal class MockSymbolServer(private val appToken: String) {
         // Capture request headers BEFORE the response is sent — tests assert
         // on telemetry headers like X-Bugsee-Uploader.
         lastPostHeaders = exchange.requestHeaders
+        postAttempts.incrementAndGet()
+        val scripted = postScript.poll()
         // Drain the body so the client can read the response.
         exchange.requestBody.use { it.readBytes() }
         val body = postBody ?: JSONObject().apply {
@@ -648,7 +738,7 @@ internal class MockSymbolServer(private val appToken: String) {
         }.toString()
         val bytes = body.toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.add("Content-Type", "application/json")
-        exchange.sendResponseHeaders(postStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
+        exchange.sendResponseHeaders(scripted ?: postStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
         if (bytes.isNotEmpty()) {
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -656,11 +746,12 @@ internal class MockSymbolServer(private val appToken: String) {
 
     private fun handlePut(exchange: HttpExchange) {
         putAttempts.incrementAndGet()
+        val scripted = putScript.poll()
         // Drain the body.
         val bos = ByteArrayOutputStream()
         exchange.requestBody.use { it.copyTo(bos) }
         val bytes = putBody.toByteArray(Charsets.UTF_8)
-        exchange.sendResponseHeaders(putStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
+        exchange.sendResponseHeaders(scripted ?: putStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
         if (bytes.isNotEmpty()) {
             exchange.responseBody.use { it.write(bytes) }
         }
