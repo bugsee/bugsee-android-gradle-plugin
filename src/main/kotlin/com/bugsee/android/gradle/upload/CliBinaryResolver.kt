@@ -242,33 +242,77 @@ internal object CliBinaryResolver {
     }
 
     /**
+     * In-JVM mutexes keyed by canonical lock path. `FileChannel.lock` is a
+     * cross-PROCESS lock: a second lock on the same file from the same JVM
+     * throws [OverlappingFileLockException] instead of blocking, so tasks
+     * sharing one Gradle daemon must be serialized here first.
+     */
+    private val jvmLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
+
+    /** Poll interval while another holder in this JVM owns the file lock. */
+    private const val OVERLAP_RETRY_MS = 50L
+
+    /**
      * Runs [body] while holding the exclusive lock on [lockFile]. The lock
      * serializes all cache mutation for one triple (download + self-replace)
      * across parallel tasks in one JVM and across separate builds sharing
      * the per-user cache root. A second entrant blocks here, then re-checks
      * the cache inside [body].
      *
-     * Lock acquisition is itself best-effort: if the lock file can't be
-     * opened/locked (e.g. a read-only or exotic filesystem where
-     * `FileChannel.lock` is unsupported), [body] still runs UNLOCKED rather
-     * than failing resolution — an un-serialized self-update is degraded but
+     * Two layers: an in-JVM mutex keyed by the canonical lock path (so
+     * parallel tasks in one daemon queue up), then the cross-process
+     * `FileChannel` lock. [OverlappingFileLockException] means another holder
+     * in this JVM (e.g. a copy of this class from a different plugin
+     * classloader) owns the file lock — that is "wait and retry", never "run
+     * unlocked".
+     *
+     * Acquiring the FILE lock is best-effort: if it can't be opened/locked
+     * for any other reason (e.g. a read-only or exotic filesystem where
+     * `FileChannel.lock` is unsupported), [body] still runs, protected by the
+     * in-JVM mutex only — cross-process serialization is degraded but
      * acceptable, and the CLI's own `--max-age` throttle still collapses the
      * redundant work.
      */
-    private fun <T> withTripleLock(lockFile: File, body: () -> T): T {
+    internal fun <T> withTripleLock(lockFile: File, body: () -> T): T {
         lockFile.parentFile?.mkdirs()
-        val raf = try {
-            java.io.RandomAccessFile(lockFile, "rw")
-        } catch (e: Throwable) {
-            return body()
+        val key = try {
+            lockFile.canonicalPath
+        } catch (e: IOException) {
+            lockFile.absolutePath
         }
-        raf.use {
-            val lock = try {
-                it.channel.lock()
+        val jvmLock = jvmLocks.computeIfAbsent(key) { java.util.concurrent.locks.ReentrantLock() }
+        // Re-entrant call on a thread that already holds the lock: the file
+        // lock is held too, and a second FileChannel lock would only ever
+        // throw OverlappingFileLockException.
+        if (jvmLock.isHeldByCurrentThread) return body()
+        jvmLock.lock()
+        try {
+            val raf = try {
+                java.io.RandomAccessFile(lockFile, "rw")
             } catch (e: Throwable) {
                 return body()
             }
-            lock.use { return body() }
+            raf.use {
+                val lock = acquireFileLock(it.channel) ?: return body()
+                lock.use { return body() }
+            }
+        } finally {
+            jvmLock.unlock()
+        }
+    }
+
+    /** Takes the exclusive file lock, or returns null if locking is unsupported. */
+    private fun acquireFileLock(channel: java.nio.channels.FileChannel): java.nio.channels.FileLock? {
+        while (true) {
+            try {
+                return channel.lock()
+            } catch (e: java.nio.channels.OverlappingFileLockException) {
+                Thread.sleep(OVERLAP_RETRY_MS)
+            } catch (e: InterruptedException) {
+                throw e
+            } catch (e: Throwable) {
+                return null
+            }
         }
     }
 
