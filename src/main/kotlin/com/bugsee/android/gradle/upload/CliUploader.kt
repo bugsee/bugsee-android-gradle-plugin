@@ -14,7 +14,7 @@ import java.io.File
  *     the Kotlin uploader is given a chance to take over.
  *   - negative, 126, 127 or >= 128 → the binary did not run (not executable,
  *     not found, loader failure, killed by a signal); fall back as well.
- *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40+) →
+ *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40–125) →
  *     substantive failure; the Kotlin uploader would hit the same error,
  *     so we do NOT retry and the caller surfaces the failure as-is.
  *
@@ -137,7 +137,8 @@ internal object CliUploader {
      * At least one of [depsJsonFile] / [timingsJsonFile] must be non-null
      * (the CLI rejects an empty bundle with a config error). Returns the
      * same [CliUploadResult] contract as the symbol uploads — a
-     * structural failure (exit 1/2, binary missing) signals the caller to
+     * structural failure (exit 1/2, exit < 0 / 126 / 127 / >= 128,
+     * binary missing) signals the caller to
      * fall back to the legacy per-blob gzip PUTs.
      *
      * Requires `bugsee-cli` >= 0.2.0 (the version that introduced the
@@ -179,7 +180,7 @@ internal object CliUploader {
      * retries, telemetry).
      *
      * Returns the [CliUploadResult] contract: a structural failure (exit 1/2,
-     * binary missing) signals the caller to fall back to the native
+     * exit < 0 / 126 / 127 / >= 128, binary missing) signals the caller to fall back to the native
      * Bundle/ChunkedBundleUploader path; a substantive failure (bad token /
      * server / transport) propagates without fallback since the native path
      * would hit the same error.
@@ -377,18 +378,14 @@ internal object CliUploader {
             )
             shouldFallback(exitCode) -> {
                 logger.warn(
-                    "Bugsee: bugsee-cli exited with $exitCode (structural failure); " +
+                    "Bugsee: bugsee-cli ${describeFallback(exitCode)}; " +
                         "falling back to the Kotlin uploader.",
                 )
                 CliUploadResult(
                     success = false,
                     exitCode = exitCode,
                     shouldFallback = true,
-                    fallbackReason = if (binaryDidNotRun(exitCode)) {
-                        "exit-$exitCode-binary-did-not-run"
-                    } else {
-                        "exit-$exitCode"
-                    },
+                    fallbackReason = fallbackReason(exitCode),
                 )
             }
             else -> {
@@ -591,4 +588,26 @@ internal object CliUploader {
      */
     internal fun binaryDidNotRun(exitCode: Int): Boolean =
         exitCode < 0 || exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode >= EXIT_SIGNAL_BASE
+
+    /**
+     * `X-Bugsee-Uploader` fallback reason for a fallback [exitCode]: `exit-1` /
+     * `exit-2` (structural), `exit-<n>-not-runnable` (126, 127), `exit-<n>-signal-<sig>`
+     * (>= 128), or `exit-0x<HEX>-not-runnable` for negative codes (unsigned hex avoids
+     * a double hyphen).
+     *
+     * Visible for testing.
+     */
+    internal fun fallbackReason(exitCode: Int): String = when {
+        exitCode < 0 -> "exit-0x${Integer.toHexString(exitCode).uppercase()}-not-runnable"
+        exitCode >= EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND -> "exit-$exitCode-not-runnable"
+        else -> "exit-$exitCode"
+    }
+
+    private fun describeFallback(exitCode: Int): String = when {
+        exitCode < 0 -> "could not be run (exit 0x${Integer.toHexString(exitCode).uppercase()})"
+        exitCode >= EXIT_SIGNAL_BASE -> "was killed by signal ${exitCode - EXIT_SIGNAL_BASE} (exit $exitCode)"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND -> "could not be run (exit $exitCode)"
+        else -> "exited with $exitCode (structural failure)"
+    }
 }

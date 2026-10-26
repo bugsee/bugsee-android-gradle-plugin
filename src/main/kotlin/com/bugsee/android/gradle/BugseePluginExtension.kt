@@ -124,7 +124,8 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      *
      * - [UploaderStrategy.CLI] (default): exec the `bugsee-cli` binary at
      *   [cliPath] (or the auto-downloaded pinned version); on a structural
-     *   failure (exit codes 1 or 2 per the CLI's contract, or an unresolvable
+     *   failure (exit codes 1 or 2 per the CLI's contract, a binary that did not
+     *   run or was killed: exit < 0, 126, 127 or >= 128, or an unresolvable
      *   binary), fall back to the in-process Kotlin uploader.
      * - [UploaderStrategy.KOTLIN]: force the in-process Kotlin uploader.
      *

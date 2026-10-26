@@ -382,12 +382,12 @@ class CliUploaderTest {
     }
 
     @Test fun `binary-did-not-run exit codes trigger fallback`() {
-        listOf(126, 127, 128, 134, 137, 139, -1, -1073741701, -1073741515).forEach { code ->
+        listOf(126, 127, 128, 134, 137, 139, 255, -1, -1073741701, -1073741515, Int.MIN_VALUE).forEach { code ->
             assertTrue(CliUploader.shouldFallback(code), "exit $code means the binary did not run")
         }
     }
 
-    @Test fun `reserved exit codes in 40+ range do NOT trigger fallback`() {
+    @Test fun `substantive and reserved exit codes 3 and 40 to 125 do NOT trigger fallback`() {
         // Defensive: any future addition to the CLI's exit-code enum lands
         // in a non-fallback bucket by default. A new code that SHOULD trigger
         // fallback must be added explicitly to `CliUploader.shouldFallback`.
@@ -638,12 +638,32 @@ class CliUploaderTest {
         assertEquals("exit-2", result.fallbackReason)
     }
 
-    @Test fun `verifyAndExec maps exit 127 to fallback with binary-did-not-run reason`() {
+    @Test fun `verifyAndExec maps exit 127 to fallback with not-runnable reason`() {
         val result = runUploadMapping(FakeExec(cliExitValue = 127), executableCliStub())
         assertFalse(result.success)
         assertEquals(127, result.exitCode)
         assertTrue(result.shouldFallback)
-        assertEquals("exit-127-binary-did-not-run", result.fallbackReason)
+        assertEquals("exit-127-not-runnable", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 137 to fallback with signal reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 137), executableCliStub())
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-137-signal-9", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec renders a negative exit code as unsigned hex in the reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = -1073741819), executableCliStub())
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-0xC0000005-not-runnable", result.fallbackReason)
+    }
+
+    @Test fun `fallbackReason formats every fallback bucket`() {
+        assertEquals("exit-1", CliUploader.fallbackReason(1))
+        assertEquals("exit-2", CliUploader.fallbackReason(2))
+        assertEquals("exit-126-not-runnable", CliUploader.fallbackReason(126))
+        assertEquals("exit-139-signal-11", CliUploader.fallbackReason(139))
+        assertEquals("exit-0xFFFFFFFF-not-runnable", CliUploader.fallbackReason(-1))
     }
 
     @Test fun `verifyAndExec maps exit 3 to no-fallback failure`() {
