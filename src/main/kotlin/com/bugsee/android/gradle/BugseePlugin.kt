@@ -3,6 +3,7 @@ package com.bugsee.android.gradle
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.android.build.api.variant.LibraryVariant
 import com.bugsee.android.gradle.config.BUGSEE_PROPERTIES_FILENAME
 import com.bugsee.android.gradle.config.PluginPropertiesApplier
 import com.bugsee.android.gradle.config.SettingDef
@@ -287,6 +288,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
 
+        var warnedLibraryModule = false
         androidComponents.onVariants { variant ->
             val globalDebug = settingsResolver().globalValue(DEBUG)
             val variantName = variant.name
@@ -318,6 +320,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // plugin side-effect to `ApplicationVariant`, which is
             // also what the README has always documented.
             if (variant !is ApplicationVariant) {
+                // One default-level warning per library module (not per variant: a library has
+                // debug + release), so the misapplied plugin is not silent without `debug=true`.
+                if (variant is LibraryVariant && !warnedLibraryModule) {
+                    warnedLibraryModule = true
+                    project.logger.warn(libraryModuleMessage(project.path))
+                }
                 if (globalDebug) {
                     project.logger.warn(
                         "Bugsee: skipping plugin wiring for non-application variant " +
@@ -1764,6 +1772,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 ?: return null
             return method.invoke(target)
         }
+
+        /** Default-level warning for a library module that applies the plugin (which only wires application modules). */
+        internal fun libraryModuleMessage(projectPath: String): String =
+            "Bugsee: $projectPath is a library module. Bugsee configures application modules only; " +
+                "apply the plugin to the application module."
 
         /** The per-variant debug summary. [token] is masked; it is never printed in full. */
         internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =

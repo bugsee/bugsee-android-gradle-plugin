@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.integration
 import com.bugsee.android.gradle.integration.harness.FixtureProject
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -147,6 +148,35 @@ class BugseeLibraryVariantGatingTest {
         // on the manifest-task absence.).
     }
 
+    @Test
+    fun library_module_warns_once_at_default_level_not_per_variant() {
+        // Default log level (no `debug`, no --info). The fixture library has debug + release
+        // variants, so a per-variant warning would print twice.
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-warn"))
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks").output
+
+        val expected = "Bugsee configures application modules only; apply the plugin to the application module."
+        assertEquals(
+            "expected exactly one library-module warning. Output:\n$output",
+            1,
+            Regex(Regex.escape(expected)).findAll(output).count(),
+        )
+        assertTrue("warning must name the module path", output.contains("Bugsee: :lib is a library module."))
+    }
+
+    @Test
+    fun application_module_does_not_get_the_library_warning() {
+        val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("app-nowarn"))
+
+        val output = runTasks(fixture.projectDir, ":app:tasks").output
+
+        assertFalse(
+            "application modules must not get the library-module warning. Output:\n$output",
+            output.contains("Bugsee configures application modules only"),
+        )
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     @Test
@@ -176,6 +206,19 @@ class BugseeLibraryVariantGatingTest {
         )
         assertFalse(result.output.contains("AndroidComponentsExtension not found"))
     }
+
+    private fun runTasks(projectDir: File, vararg tasks: String): org.gradle.testkit.runner.BuildResult =
+        GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withArguments(
+                *tasks,
+                "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
+                "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
+                "--stacktrace",
+            )
+            .withEnvironment(testKitEnvironment())
+            .forwardOutput()
+            .build()
 
     private fun buildLibAssembleDebug(projectDir: File): org.gradle.testkit.runner.BuildResult {
         // Pure helper — assembles the library AAR. Doesn't go through
