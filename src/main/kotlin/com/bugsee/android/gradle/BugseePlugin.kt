@@ -3,7 +3,6 @@ package com.bugsee.android.gradle
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.AndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
-import com.android.build.api.variant.LibraryVariant
 import com.bugsee.android.gradle.config.BUGSEE_PROPERTIES_FILENAME
 import com.bugsee.android.gradle.config.PluginPropertiesApplier
 import com.bugsee.android.gradle.config.SettingDef
@@ -288,7 +287,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
 
-        var warnedLibraryModule = false
+        // One default-level warning per library module, emitted here rather than per variant (a library
+        // has debug + release) and independent of `onVariants`, so it also fires when `beforeVariants`
+        // disables every variant. The plugin skips library variants below, so without it the misapplied
+        // plugin is silent unless `debug=true`.
+        if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension) {
+            project.logger.warn(libraryModuleMessage(project.path, project == project.rootProject, project.name))
+        }
+
         androidComponents.onVariants { variant ->
             val globalDebug = settingsResolver().globalValue(DEBUG)
             val variantName = variant.name
@@ -320,12 +326,6 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // plugin side-effect to `ApplicationVariant`, which is
             // also what the README has always documented.
             if (variant !is ApplicationVariant) {
-                // One default-level warning per library module (not per variant: a library has
-                // debug + release), so the misapplied plugin is not silent without `debug=true`.
-                if (variant is LibraryVariant && !warnedLibraryModule) {
-                    warnedLibraryModule = true
-                    project.logger.warn(libraryModuleMessage(project.path, project.path == ":", project.name))
-                }
                 if (globalDebug) {
                     project.logger.warn(
                         "Bugsee: skipping plugin wiring for non-application variant " +

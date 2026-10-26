@@ -166,6 +166,19 @@ class BugseeLibraryVariantGatingTest {
     }
 
     @Test
+    fun library_module_warns_even_when_every_variant_is_disabled() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-warn-novariants"))
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureDisableAllVariants=true").output
+
+        assertEquals(
+            "expected exactly one library-module warning with all variants disabled. Output:\n$output",
+            1,
+            Regex(Regex.escape("Bugsee: :lib is a library module.")).findAll(output).count(),
+        )
+    }
+
+    @Test
     fun application_module_does_not_get_the_library_warning() {
         val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("app-nowarn"))
 

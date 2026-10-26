@@ -34,3 +34,10 @@ bugsee {
         enabled.set(false)
     }
 }
+
+// Opt-in: disable every variant so `onVariants` never fires (the warning must still appear).
+if (project.findProperty("bugseeFixtureDisableAllVariants")?.toString() == "true") {
+    androidComponents {
+        beforeVariants { it.enable = false }
+    }
+}
