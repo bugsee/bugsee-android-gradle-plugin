@@ -214,7 +214,7 @@ internal object SymbolUploader {
             // 200..299 range; this aligns the two.
             if (statusCode !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$statusCode): ${reply.body.orEmpty()}",
+                    "Bugsee upload failed (status=$statusCode): ${BundleUploader.redactBodyForLog(reply.body, appToken)}",
                 )
                 return@use false
             }
@@ -247,7 +247,7 @@ internal object SymbolUploader {
             } catch (e: Exception) {
                 logger.warn(
                     "Bugsee upload failed: response body is not valid JSON " +
-                        "(status=$statusCode, ${contentText.length} chars): ${e.message}",
+                        "(status=$statusCode, ${contentText.length} chars)",
                 )
                 return@use false
             }
@@ -267,7 +267,7 @@ internal object SymbolUploader {
                     if (errorType == "ApplicationNotFoundError") {
                         logger.warn("App token is invalid: ${BundleUploader.maskAppToken(appToken)}")
                     } else {
-                        logger.warn("Bugsee upload failed with error: $error")
+                        logger.warn("Bugsee upload failed with error: ${BundleUploader.redactBodyForLog(error.toString(), appToken)}")
                     }
                 } else {
                     logger.warn("Bugsee upload failed: null endpoint")
@@ -290,7 +290,7 @@ internal object SymbolUploader {
             val putStatus = putReply.status
             if (putStatus !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$putStatus): ${putReply.body.orEmpty()}",
+                    "Bugsee upload failed (status=$putStatus): ${BundleUploader.redactBodyForLog(putReply.body, appToken)}",
                 )
                 return@use false
             }

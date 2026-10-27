@@ -643,7 +643,7 @@ internal object CliBinaryResolver {
         conn.instanceFollowRedirects = true
         conn.requestMethod = "GET"
         if (conn.responseCode !in 200..299) {
-            val body = conn.errorStream?.bufferedReader()?.readText()?.take(200).orEmpty()
+            val body = conn.errorStream?.bufferedReader()?.readText().let { BundleUploader.redactBodyForLog(it) }.orEmpty()
             throw IOException("GET $url returned ${conn.responseCode}: $body")
         }
         return conn
