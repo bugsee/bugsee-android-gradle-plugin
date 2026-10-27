@@ -5,7 +5,18 @@ import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.URI
+import java.nio.channels.ClosedByInterruptException
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.FileLockInterruptionException
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 import java.security.MessageDigest
 
 /**
@@ -208,18 +219,24 @@ internal object CliBinaryResolver {
             // under the same per-triple lock the download path uses —
             // otherwise two parallel tasks (or builds) can self-replace the
             // same file while a third execs it. See [withTripleLock].
-            return withTripleLock(lockFile) {
+            return withTripleLock(lockFile, logger) {
                 maybeSelfUpdate(cachedBinary, autoUpdate, execOps, logger, debug)
             }
         }
 
         return try {
-            withTripleLock(lockFile) {
+            withTripleLock(lockFile, logger) {
                 val binary = downloadAndExtract(
                     version, triple, cacheRoot, binaryName, logger, debug,
-                ) { execOps.exec(it) }
+                    exec = { execOps.exec(it) },
+                )
                 maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
             }
+        } catch (e: InterruptedException) {
+            // Build cancellation is not a download failure: do not fall back
+            // to the Kotlin uploader on a cancelled thread.
+            Thread.currentThread().interrupt()
+            throw e
         } catch (e: Throwable) {
             logger.warn(
                 "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
@@ -242,33 +259,112 @@ internal object CliBinaryResolver {
     }
 
     /**
+     * In-JVM mutexes keyed by canonical lock path. `FileChannel.lock` is a
+     * cross-PROCESS lock: a second lock on the same file from the same JVM
+     * throws [OverlappingFileLockException] instead of blocking, so tasks
+     * sharing one Gradle daemon must be serialized here first.
+     */
+    private val jvmLocks = java.util.concurrent.ConcurrentHashMap<String, ReentrantLock>()
+
+    /** Poll interval while another holder in this JVM owns the file lock. */
+    private const val OVERLAP_RETRY_MS = 50L
+
+    /** Log once if the file lock is still held by someone else after this long. */
+    private const val LOCK_WAIT_LOG_MS = 30_000L
+
+    /**
      * Runs [body] while holding the exclusive lock on [lockFile]. The lock
      * serializes all cache mutation for one triple (download + self-replace)
      * across parallel tasks in one JVM and across separate builds sharing
      * the per-user cache root. A second entrant blocks here, then re-checks
      * the cache inside [body].
      *
-     * Lock acquisition is itself best-effort: if the lock file can't be
-     * opened/locked (e.g. a read-only or exotic filesystem where
-     * `FileChannel.lock` is unsupported), [body] still runs UNLOCKED rather
-     * than failing resolution — an un-serialized self-update is degraded but
+     * Two layers: an in-JVM mutex keyed by the canonical lock path (so
+     * parallel tasks in one daemon queue up), then the cross-process
+     * `FileChannel` lock. [OverlappingFileLockException] means another holder
+     * in this JVM (e.g. a copy of this class from a different plugin
+     * classloader) owns the file lock — that is "wait and retry", never "run
+     * unlocked".
+     *
+     * Acquiring the FILE lock is best-effort: if it can't be opened/locked
+     * for any other reason (e.g. a read-only or exotic filesystem where
+     * `FileChannel.lock` is unsupported), [body] still runs, protected by the
+     * in-JVM mutex only — cross-process serialization is degraded but
      * acceptable, and the CLI's own `--max-age` throttle still collapses the
      * redundant work.
      */
-    private fun <T> withTripleLock(lockFile: File, body: () -> T): T {
+    internal fun <T> withTripleLock(lockFile: File, logger: Logger? = null, body: () -> T): T {
         lockFile.parentFile?.mkdirs()
-        val raf = try {
-            java.io.RandomAccessFile(lockFile, "rw")
-        } catch (e: Throwable) {
-            return body()
+        val key = try {
+            lockFile.canonicalPath
+        } catch (e: IOException) {
+            lockFile.absolutePath
         }
-        raf.use {
-            val lock = try {
-                it.channel.lock()
+        val jvmLock = jvmLocks.computeIfAbsent(key) { ReentrantLock() }
+        // Re-entrant call on a thread that already holds the lock: the file
+        // lock is held too, and a second FileChannel lock would only ever
+        // throw OverlappingFileLockException.
+        if (jvmLock.isHeldByCurrentThread) return body()
+        // Interruptible so queued tasks respond to build cancellation.
+        try {
+            jvmLock.lockInterruptibly()
+        } catch (e: InterruptedException) {
+            throw interrupted(e)
+        }
+        try {
+            val raf = try {
+                RandomAccessFile(lockFile, "rw")
             } catch (e: Throwable) {
                 return body()
             }
-            lock.use { return body() }
+            raf.use {
+                val lock = acquireFileLock(it.channel, logger) ?: return body()
+                lock.use { return body() }
+            }
+        } finally {
+            jvmLock.unlock()
+        }
+    }
+
+    /**
+     * Takes the exclusive file lock, or returns null if locking is
+     * unsupported. An interrupt while waiting is NOT "unsupported": it is
+     * surfaced as [InterruptedException] (flag restored) so the body never
+     * runs without a lock another process may still hold.
+     */
+    private fun acquireFileLock(channel: FileChannel, logger: Logger?): FileLock? {
+        val started = System.nanoTime()
+        var logged = false
+        while (true) {
+            try {
+                return channel.lock()
+            } catch (e: OverlappingFileLockException) {
+                if (!logged && (System.nanoTime() - started) / 1_000_000 >= LOCK_WAIT_LOG_MS) {
+                    logged = true
+                    logger?.warn(
+                        "Bugsee: still waiting for the bugsee-cli cache lock held by another " +
+                            "plugin copy or build in this JVM.",
+                    )
+                }
+                try {
+                    Thread.sleep(OVERLAP_RETRY_MS)
+                } catch (ie: InterruptedException) {
+                    throw interrupted(ie)
+                }
+            } catch (e: FileLockInterruptionException) {
+                throw interrupted(e)
+            } catch (e: ClosedByInterruptException) {
+                throw interrupted(e)
+            } catch (e: Throwable) {
+                return null
+            }
+        }
+    }
+
+    private fun interrupted(cause: Throwable): InterruptedException {
+        Thread.currentThread().interrupt()
+        return InterruptedException("interrupted while waiting for the bugsee-cli cache lock").also {
+            it.initCause(cause)
         }
     }
 
@@ -363,7 +459,7 @@ internal object CliBinaryResolver {
      * subsequent self-update self-replace of the same binary. [exec] is the
      * lock-free shim used to run `tar`.
      */
-    private fun downloadAndExtract(
+    internal fun downloadAndExtract(
         version: String,
         triple: String,
         cacheRoot: File,
@@ -371,6 +467,8 @@ internal object CliBinaryResolver {
         logger: Logger,
         debug: Boolean,
         exec: (org.gradle.api.Action<in org.gradle.process.ExecSpec>) -> org.gradle.process.ExecResult,
+        fetchFile: (url: String, dest: File) -> Unit = ::downloadToFile,
+        fetchString: (url: String) -> String = ::downloadAsString,
     ): File {
         cacheRoot.mkdirs()
 
@@ -382,53 +480,84 @@ internal object CliBinaryResolver {
             return cachedBinary
         }
 
+        // Leftovers of a previous run that was killed mid-download/extract.
+        // Safe to remove: we hold the per-triple lock.
+        cacheRoot.listFiles { f -> f.name.startsWith(TMP_PREFIX) }?.forEach { it.deleteRecursively() }
+
         val artifactUrl = artifactUrl(version, triple)
         val sha256Url = "$artifactUrl.sha256"
         val tarballName = artifactUrl.substringAfterLast('/')
-        val tarballFile = File(cacheRoot, tarballName)
+        // Download and extract in a private temp dir, then move the result
+        // into place: a failed or killed tar can never leave a (partial)
+        // executable at `cachedBinary`, which both cache checks would accept
+        // forever.
+        val tmpDir = File(cacheRoot, TMP_PREFIX + UUID.randomUUID())
+        tmpDir.mkdirs()
+        try {
+            val tarballFile = File(tmpDir, tarballName)
 
-        logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
-        downloadToFile(artifactUrl, tarballFile)
+            logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
+            fetchFile(artifactUrl, tarballFile)
 
-        val expectedSha = parseSha256Sidecar(downloadAsString(sha256Url))
-        val actualSha = sha256Hex(tarballFile)
-        if (!expectedSha.equals(actualSha, ignoreCase = true)) {
-            tarballFile.delete()
-            throw IOException(
-                "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
-            )
+            val expectedSha = parseSha256Sidecar(fetchString(sha256Url))
+            val actualSha = sha256Hex(tarballFile)
+            if (!expectedSha.equals(actualSha, ignoreCase = true)) {
+                throw IOException(
+                    "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
+                )
+            }
+
+            // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
+            // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
+            // (`bugsee-cli-<triple>/...`) so the binary lands directly in the temp dir.
+            val extractDir = File(tmpDir, "extract")
+            extractDir.mkdirs()
+            val extractResult = exec { spec ->
+                spec.executable = "tar"
+                spec.args = listOf(
+                    "-xf",
+                    tarballFile.absolutePath,
+                    "-C",
+                    extractDir.absolutePath,
+                    "--strip-components=1",
+                )
+                spec.isIgnoreExitValue = true
+            }
+            if (extractResult.exitValue != 0) {
+                throw IOException(
+                    "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
+                )
+            }
+
+            val extractedBinary = File(extractDir, binaryName)
+            if (!extractedBinary.isFile) {
+                throw IOException(
+                    "extraction completed but $binaryName not found in the archive",
+                )
+            }
+            extractedBinary.setExecutable(true)
+            // Companion files first, the binary LAST: the cache checks key on it.
+            extractDir.listFiles()?.filter { it != extractedBinary }?.forEach {
+                moveIntoPlace(it, File(cacheRoot, it.name))
+            }
+            moveIntoPlace(extractedBinary, cachedBinary)
+        } finally {
+            tmpDir.deleteRecursively()
         }
-
-        // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
-        // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
-        // (`bugsee-cli-<triple>/...`) so the binary lands directly in cacheRoot.
-        val extractResult = exec { spec ->
-            spec.executable = "tar"
-            spec.args = listOf(
-                "-xf",
-                tarballFile.absolutePath,
-                "-C",
-                cacheRoot.absolutePath,
-                "--strip-components=1",
-            )
-            spec.isIgnoreExitValue = true
-        }
-        if (extractResult.exitValue != 0) {
-            throw IOException(
-                "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
-            )
-        }
-
-        tarballFile.delete()
-
-        if (!cachedBinary.isFile) {
-            throw IOException(
-                "extraction completed but $binaryName not found in $cacheRoot",
-            )
-        }
-        cachedBinary.setExecutable(true)
         logger.warn("Bugsee: bugsee-cli v$version installed at ${cachedBinary.absolutePath}")
         return cachedBinary
+    }
+
+    /** Prefix of the per-attempt extraction directory under the cache root. */
+    private const val TMP_PREFIX = ".tmp-"
+
+    private fun moveIntoPlace(src: File, dest: File) {
+        if (dest.isDirectory) dest.deleteRecursively()
+        try {
+            Files.move(src.toPath(), dest.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(src.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     /**
