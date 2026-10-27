@@ -29,6 +29,41 @@ internal object DependencyDetector {
 
     private const val BUGSEE_GROUP = "com.bugsee"
 
+    private val PRODUCTION_SUFFIX = Regex("^(implementation|api|runtimeOnly)$|(Implementation|Api|RuntimeOnly)$")
+
+    // A camelCase word `test`/`Test` (testImplementation, testDebugImplementation,
+    // androidTestImplementation, debugUnitTestImplementation, commonTestImplementation,
+    // testFixturesApi). Not a substring match: a flavor named `testing` or `latest` stays production.
+    private val TEST_WORD = Regex("(^test|Test)(?=[A-Z]|$)")
+
+    /**
+     * Whether a configuration named [name] feeds the production (app) runtime
+     * classpath: `implementation`, `api`, `runtimeOnly` and their build-type,
+     * flavor, variant and KMP-source-set equivalents (`debugImplementation`,
+     * `freeReleaseApi`, `androidMainImplementation`, ...). Excluded: test,
+     * androidTest, unitTest, testFixtures configurations, `compileOnly` /
+     * `compileOnlyApi`, and anything else (lint, annotationProcessor, kapt, ksp,
+     * `*CompileClasspath`, ...), none of which ship in the app.
+     *
+     * A `debugImplementation`-only dependency DOES count: it is on the debug
+     * runtime classpath, and the extension module is added project-wide (the
+     * auto-add runs before variants exist), exactly as for the core SDK.
+     */
+    fun isProductionConfiguration(name: String): Boolean =
+        PRODUCTION_SUFFIX.containsMatchIn(name) &&
+            !name.contains("compileOnly", ignoreCase = true) &&
+            !TEST_WORD.containsMatchIn(name)
+
+    /**
+     * Whether any dependency declared directly on a production-classpath configuration of
+     * [project] (see [isProductionConfiguration]) matches [predicate]. Shared by every
+     * third-party library detector so they cannot drift apart.
+     */
+    fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean =
+        project.configurations.any { config ->
+            isProductionConfiguration(config.name) && config.dependencies.any(predicate)
+        }
+
     /**
      * Returns `true` if [project] — or any project it depends on, transitively —
      * declares a dependency matching the given [artifactPrefix] (external deps)

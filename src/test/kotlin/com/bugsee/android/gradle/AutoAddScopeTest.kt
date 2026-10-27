@@ -4,6 +4,7 @@ import com.bugsee.android.gradle.config.RecordingLogger
 import com.bugsee.android.gradle.config.SettingDefinitions
 import com.bugsee.android.gradle.config.SettingsFileParser
 import com.bugsee.android.gradle.config.SettingsResolver
+import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
 import org.gradle.api.provider.Property
@@ -116,6 +117,95 @@ class AutoAddScopeTest {
         val added = prefer.autoAdded()
         assertFalse("bugsee-android" in added, "file sdkAutoLoad=false wins")
         assertTrue("bugsee-android-leak" in added, "file leak.enabled=true wins")
+    }
+
+    // ── Detector scope: production configurations only (#47) ────────
+
+    @Test
+    fun detectorsIgnoreLibrariesOutsideProductionConfigurations() {
+        val nonProduction = listOf(
+            "testImplementation", "androidTestImplementation", "testFixturesApi", "compileOnly",
+            "compileOnlyApi", "lintChecks", "annotationProcessor", "kapt", "ksp",
+            "testDebugImplementation", "debugUnitTestImplementation", "debugAndroidTestImplementation",
+            "androidTestUtil", "commonTestImplementation",
+        )
+        for (conf in nonProduction) {
+            val h = Harness(null)
+            h.project.configurations.maybeCreate(conf)
+            h.declareOn(conf, "com.squareup.okhttp3:okhttp:4.12.0")
+            h.declareOn(conf, "androidx.compose.ui:ui:1.6.0")
+            h.declareOn(conf, "io.ktor:ktor-client-core:2.3.0")
+            h.declareOn(conf, "io.ktor:ktor-client-core:3.0.0")
+            h.declareOn(conf, "org.chromium.net:cronet-api:119.6045.31")
+            assertEquals(emptySet(), h.autoAdded(), "$conf must not trigger any auto-add")
+        }
+    }
+
+    @Test
+    fun detectorsCountProductionConfigurations() {
+        for (conf in listOf("api", "runtimeOnly", "debugImplementation", "freeReleaseApi", "androidMainImplementation", "stagingImplementation", "debugCompilationImplementation")) {
+            val h = Harness(null)
+            h.project.configurations.maybeCreate(conf)
+            h.declareOn(conf, "com.squareup.okhttp3:okhttp:4.12.0")
+            assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded(), conf)
+        }
+    }
+
+    @Test
+    fun isProductionConfigurationClassifiesRealNames() {
+        val production = listOf(
+            "implementation", "api", "runtimeOnly", "debugImplementation", "releaseApi", "stagingImplementation",
+            "freeReleaseRuntimeOnly", "androidMainImplementation", "commonMainApi", "debugCompilationImplementation",
+        )
+        val other = listOf(
+            "releaseApiElements", "debugCompileOnlyApi", "debugRuntimeClasspath", "screenshotTestImplementation",
+            "androidUnitTestImplementation", "jvmTestCompilationImplementation", "compileOnly", "testImplementation",
+            "androidTestImplementation", "testFixturesImplementation", "lintChecks", "kapt", "debugAnnotationProcessor",
+        )
+        production.forEach { assertTrue(DependencyDetector.isProductionConfiguration(it), "$it is production") }
+        other.forEach { assertFalse(DependencyDetector.isProductionConfiguration(it), "$it is not production") }
+    }
+
+    /**
+     * KNOWN LIMITATION (documented in the README): the rule is name-based, so a flavor or build type
+     * whose name ends in a capitalised `Test` word (`latestTest`, `uiTest`) has its configurations
+     * (`latestTestImplementation`) classified as test configurations and its libraries are not
+     * detected. A name-only rule cannot tell it from `testImplementation`-style names; the fix is to
+     * use the variants' configuration hierarchy once variants exist (tracked with #50).
+     */
+    @Test
+    fun knownLimitationFlavorNameEndingInTestIsNotDetected() {
+        val h = Harness(null)
+        h.project.configurations.maybeCreate("latestTestImplementation")
+        h.declareOn("latestTestImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(emptySet(), h.autoAdded())
+    }
+
+    /**
+     * `hasComposeDependency` is the first gate of `isApplicable` (the Kotlin compiler plugin), so
+     * test-only Compose must not apply it. `isApplicable` itself cannot be driven end to end here:
+     * it also needs a real Kotlin Gradle plugin to report the consumer's Kotlin version, and
+     * returns false without one whatever the dependencies are.
+     */
+    @Test
+    fun composeGateOfCompilerPluginIgnoresTestOnlyCompose() {
+        val h = Harness(null)
+        h.project.configurations.maybeCreate("testImplementation")
+        h.declareOn("testImplementation", "androidx.compose.ui:ui:1.6.0")
+        val plugin = h.project.plugins.getPlugin(BugseePlugin::class.java)
+        assertFalse(plugin.hasComposeDependency(h.project), "test-only Compose")
+
+        h.declare("androidx.compose.ui:ui:1.6.0")
+        assertTrue(plugin.hasComposeDependency(h.project), "Compose in implementation")
+    }
+
+    @Test
+    fun okhttpInTestAndImplementationStillAdds() {
+        val h = Harness(null)
+        h.project.configurations.maybeCreate("testImplementation")
+        h.declareOn("testImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        h.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded())
     }
 
     // ── Backward compatibility (no per-variant input) ───────────────
@@ -247,6 +337,12 @@ class AutoAddScopeTest {
         fun declare(coordinate: String) {
             project.dependencies.add("implementation", coordinate)
             before += coordinate.split(":")[1]
+        }
+
+        /** Declares [coordinate] on [configuration] without counting it as pre-existing. */
+        fun declareOn(configuration: String, coordinate: String) {
+            project.dependencies.add(configuration, coordinate)
+            if (configuration == "implementation") before += coordinate.split(":")[1]
         }
 
         /** A resolver over the same extension and file, as the plugin builds it. */
