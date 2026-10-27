@@ -117,7 +117,7 @@ internal object BugseeSdkDeclarations {
      *    see [DependencyDetector.isProductionConfiguration]);
      * 2. `bugsee-android` declared by a project [project] depends on (production
      *    configurations only, see [inDependencyProjects]);
-     * 3. any `bugsee-android-*` extension declared on [project];
+     * 3. any `bugsee-android-*` extension declared on [project] (same configurations as tier 1);
      * 4. any extension declared by a dependency project.
      *
      * A library's pin can therefore take the core BELOW MIN_SDK_VERSION, exactly as an

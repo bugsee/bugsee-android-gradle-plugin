@@ -96,14 +96,12 @@ class CoreSdkDeclaredInProjectsTest {
     }
 
     @Test
-    fun testScopedAppPinDoesNotSetTheAutoAddedVersion() {
-        // #114: the auto-added core follows the library's production pin, not a newer pin the app
-        // declares only for tests.
+    fun testScopedAppExtensionPinDoesNotSetTheAutoAddedVersion() {
+        // #114: no core declared anywhere; a newer extension pin the app declares only for tests
+        // must not become the auto-added core's version.
         val b = Build()
-        b.lib.dependencies.add("implementation", "com.bugsee:bugsee-android:7.0.0")
-        b.dependOn(b.app, "implementation", b.lib)
         b.app.dependencies.add("testImplementation", "com.bugsee:bugsee-android-okhttp:7.5.0")
-        assertEquals(setOf("bugsee-android:7.0.0"), b.autoAdded(setOf("bugsee-android-okhttp:7.5.0")))
+        assertEquals(setOf("bugsee-android:$range"), b.autoAdded(setOf("bugsee-android-okhttp:7.5.0")))
     }
 
     @Test

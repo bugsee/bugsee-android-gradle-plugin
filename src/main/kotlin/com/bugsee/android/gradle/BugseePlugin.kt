@@ -341,8 +341,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // Same resolver as the auto-add, so gate and auto-added version cannot disagree.
             // Scope (#114): the app's own pins are read from production configurations only
             // (debugImplementation counts; test / compileOnly do not). Accepted limit: a pin
-            // only on a dependency project's debug* edge is not seen (null => strip), because
-            // counting it would instead break the release auto-add.
+            // only on a debug* edge toward a dependency project, or on a dependency project's own
+            // debug* configuration, is not seen (null => strip), because counting it would instead
+            // break the release auto-add. Also, app debug* pins count for every variant, so a
+            // release-only older pin can be masked by a newer debugImplementation pin.
             val declaredSdkVersionRaw = BugseeSdkDeclarations.declaredCoreSdkVersion(project)
             val declaredSdkVersion = BugseeSdkVersion.parse(declaredSdkVersionRaw)
             if (ExtensionStripGate.shouldWarnBelowFloor(
@@ -503,7 +505,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // declared their own core dependency on any configuration (`api`, `compileOnly`, variant
         // configs, …), defer to it rather than layering a dynamic dep on top. Presence is
         // deliberately broader than the version above: a test/compileOnly-only pin suppresses the
-        // auto-add but does not set the version used for auto-added extensions. Opt-out via
+        // auto-add but does not set the version used for auto-added extensions (compileOnly is an
+        // intended deferral; a test-only pin suppressing it is tracked in #124). Opt-out via
         // `bugsee { sdkAutoLoad.set(false) }`.
         if (!isCoreSdkPresent(project, ignore, inDeps)) {
             if (isDebug) notes.add("Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion")
