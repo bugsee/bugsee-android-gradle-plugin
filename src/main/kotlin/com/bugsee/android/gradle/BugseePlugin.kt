@@ -34,6 +34,7 @@ import org.gradle.api.artifacts.Dependency
 import org.gradle.api.artifacts.DependencySet
 import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.TaskProvider
 import org.gradle.build.event.BuildEventsListenerRegistry
 import org.jetbrains.kotlin.gradle.plugin.KotlinBasePlugin
 import org.jetbrains.kotlin.gradle.plugin.KotlinCompilation
@@ -693,12 +694,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
         }
 
-        // Finalize after assemble and bundle tasks
-        project.tasks.configureEach { t ->
-            if (t.name == "assemble$capitalizedVariant" || t.name == "bundle$capitalizedVariant") {
-                t.finalizedBy(mappingUploadTaskProvider)
-            }
-        }
+        // Finalize after assemble/bundle and the packaging/signing tasks below them
+        finalizeAfter(
+            project,
+            apkAndBundleEntryTaskNames(capitalizedVariant, isReleaseLikeVariant(project, variant)),
+            mappingUploadTaskProvider,
+        )
     }
 
     private fun registerNativeUploadTask(
@@ -770,11 +771,70 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        // Finalize after assemble and bundle tasks
+        // Finalize after assemble/bundle and the packaging/signing tasks below them
+        finalizeAfter(
+            project,
+            apkAndBundleEntryTaskNames(capitalizedVariant, isReleaseLikeVariant(project, variant)),
+            nativeUploadTaskProvider,
+        )
+    }
+
+    /**
+     * Names of the AGP tasks a build pipeline may request for [capitalizedVariant]
+     * instead of `assemble`/`bundle`: `package<V>` (APK; also what `install<V>`
+     * depends on), `package<V>Bundle` and `sign<V>Bundle` (AAB; what Gradle Play
+     * Publisher's `publish<V>Bundle` depends on). The uploads must follow these
+     * too, otherwise an artifact is produced from a mapping that is never
+     * uploaded. The bundle (size-analysis) upload follows only `bundle<V>` and
+     * `sign<V>Bundle`, the tasks that yield the signed AAB it reads;
+     * `package<V>Bundle` finalizes the mapping/native uploads only. A task absent in a given AGP version is simply never matched.
+     *
+     * The package/sign tasks are included only for release-like variants
+     * ([releaseLike]): `installDebug`, `connectedDebugAndroidTest` and
+     * `packageDebug` must not start uploading (e.g. unstripped native libs) on
+     * every developer/CI device run. `assemble`/`bundle` keep finalizing for
+     * every variant as before. Consequences of the gate: a build type that is
+     * debuggable (even if minified) gets no package/sign finalizers, and with
+     * `testBuildType = "release"` a `connectedReleaseAndroidTest` run (which
+     * packages the release APK) does upload; duplicates are treated as success.
+     *
+     * Known trade-off: a finalizer also runs when the finalized task fails
+     * (e.g. signing fails after R8), so symbols can be stored for a build id
+     * that never produced an artifact. Harmless apart from storage/noise;
+     * skipping would need the finalized task's state at execution time, which
+     * is not configuration-cache friendly.
+     */
+    private fun apkAndBundleEntryTaskNames(capitalizedVariant: String, releaseLike: Boolean): Set<String> =
+        bundleEntryTaskNames(capitalizedVariant, releaseLike) +
+            setOfNotNull(
+                "assemble$capitalizedVariant",
+                "package$capitalizedVariant".takeIf { releaseLike },
+                // Writes only the unsigned intermediary bundle: fine for the mapping/native
+                // uploads (they do not read the bundle), but NOT for the bundle upload, which
+                // consumes the signed SingleArtifact.BUNDLE and would drag sign<V>Bundle (and
+                // a signing config) into a stage that deliberately stops unsigned.
+                "package${capitalizedVariant}Bundle".takeIf { releaseLike },
+            )
+
+    /** Entry tasks that finalize the bundle upload: those that produce the signed AAB. */
+    private fun bundleEntryTaskNames(capitalizedVariant: String, releaseLike: Boolean): Set<String> = setOfNotNull(
+        "bundle$capitalizedVariant",
+        "sign${capitalizedVariant}Bundle".takeIf { releaseLike },
+    )
+
+    /**
+     * Lazily make every task named in [names] be finalized by [upload]. Uses
+     * `configureEach` (no realization) so a missing task is a no-op, and a
+     * finalizer runs at most once per build however many of [names] are in
+     * the graph.
+     */
+    private fun finalizeAfter(
+        project: Project,
+        names: Set<String>,
+        upload: TaskProvider<*>,
+    ) {
         project.tasks.configureEach { t ->
-            if (t.name == "assemble$capitalizedVariant" || t.name == "bundle$capitalizedVariant") {
-                t.finalizedBy(nativeUploadTaskProvider)
-            }
+            if (t.name in names) t.finalizedBy(upload)
         }
     }
 
@@ -941,11 +1001,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        project.tasks.configureEach { t ->
-            if (t.name == "bundle$capitalizedVariant") {
-                t.finalizedBy(bundleUploadTaskProvider)
-            }
-        }
+        val releaseLike = isReleaseLikeVariant(project, variant)
+        finalizeAfter(project, bundleEntryTaskNames(capitalizedVariant, releaseLike), bundleUploadTaskProvider)
 
         // APK upload task — wired to APK output
         val apkUploadTaskProvider = project.tasks.register(
@@ -1014,11 +1071,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             )
         }
 
-        project.tasks.configureEach { t ->
-            if (t.name == "assemble$capitalizedVariant") {
-                t.finalizedBy(apkUploadTaskProvider)
-            }
-        }
+        finalizeAfter(
+            project,
+            setOfNotNull("assemble$capitalizedVariant", "package$capitalizedVariant".takeIf { releaseLike }),
+            apkUploadTaskProvider,
+        )
     }
 
     // --- KotlinCompilerPluginSupportPlugin ---
