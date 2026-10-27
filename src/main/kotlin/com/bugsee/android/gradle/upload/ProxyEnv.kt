@@ -65,7 +65,8 @@ private fun enc(v: String): String = java.net.URLEncoder.encode(v, "UTF-8").repl
 /**
  * One JDK `http.nonProxyHosts` pattern (`*` allowed only at the start or end) to a NO_PROXY entry.
  * NO_PROXY has no globs: exact host, domain suffix (`.b`) or CIDR. Returns null (dropped) for a
- * pattern that cannot be expressed.
+ * pattern that cannot be expressed. Note `*.b` -> `.b` may additionally bypass the apex `b` on
+ * clients such as reqwest (JDK: subdomains only); the opposite (narrower) direction is used elsewhere.
  */
 private fun nonProxyEntryToNoProxy(p: String): String? = when {
     p == "*" -> "*"

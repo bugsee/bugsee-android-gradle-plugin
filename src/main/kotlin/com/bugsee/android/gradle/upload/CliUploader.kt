@@ -418,9 +418,11 @@ internal object CliUploader {
             }
             else -> {
                 // Substantive failure (bad token / network / server). The Kotlin
-                // uploader would hit the same error (it applies the same proxy
-                // configuration via the JVM system properties, and the CLI gets it as
-                // HTTPS_PROXY/NO_PROXY), so don't waste a second round-trip.
+                // uploader would normally hit the same error: the CLI's proxy settings
+                // (incl. credentials) are derived from the same JVM properties. If the
+                // user set HTTPS_PROXY/NO_PROXY in the environment themselves, the two
+                // paths can differ, but exit codes cannot isolate proxy failures, so no
+                // fallback is attempted (fallback policy is tracked in #45).
                 logger.warn(
                     "Bugsee: bugsee-cli exited with $exitCode (substantive failure); " +
                         "the Kotlin uploader would hit the same error so no fallback is attempted.",
