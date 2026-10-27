@@ -514,6 +514,22 @@ the upload tasks skip with a single info-level message instead of failing or war
   (for example `bugsee-android-okhttp`) explicitly. For Compose, the compiler
   plugin additionally needs a direct Compose dependency in such a configuration:
   declaring `bugsee-android-compose` alone does not enable it.
+
+- **Another plugin reading `implementation` before the `bugsee { }` block.** Gradle fires the
+  auto-add the first time the `implementation` dependency set is read through `incoming.dependencies`
+  or a resolution (`allDependencies`, `dependencies.all { }` and `configureEach { }` do not trigger
+  it). If a plugin or the build script does that before the `bugsee { }` block, the auto-add is
+  first decided on defaults and then re-checked when AGP finalizes the DSL (`finalizeDsl`, before
+  any variant callback). Only the difference is applied: auto-added modules the final DSL no longer
+  wants (for example after `sdkAutoLoad.set(false)`) are removed, newly wanted ones are added.
+  Limits: the early reader itself sees the provisional dependency set, and a copy or snapshot it
+  took (`implementation.copy()`) keeps it. If a configuration extending `implementation` was
+  already resolved by then, Gradle forbids the change; the plugin then leaves the set untouched and
+  logs a warning that names the differing settings. Values set after AGP finalizes the DSL (for
+  example in a later `afterEvaluate { }`) are not seen by the auto-add. An explicit
+  `com.bugsee:bugsee-android` declaration with exactly the auto-add version range, made after the
+  early read, cannot be told apart from the auto-added one: use a different version or declare it
+  before the early read.
 - **Compose limitation.** The Compose Kotlin compiler-plugin gate is
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
