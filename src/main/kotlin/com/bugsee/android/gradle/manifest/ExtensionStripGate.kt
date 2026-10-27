@@ -49,8 +49,8 @@ internal object ExtensionStripGate {
     /** Warning for the otherwise silent no-strip in [shouldStrip] when the declared SDK is below the floor. */
     fun belowFloorWarning(declaredVersion: String?): String =
         "Bugsee gradle plugin: extension provider stripping (optimizeExtensionsLoading) requires " +
-            "Bugsee SDK (`com.bugsee:bugsee-android`) $MIN_SDK_VERSION_WITH_EXTENSIONS_INIT or newer " +
-            "(found $declaredVersion). Leaving the extension providers in the manifest, so " +
+            "Bugsee SDK $MIN_SDK_VERSION_WITH_EXTENSIONS_INIT or newer " +
+            "(declared Bugsee SDK version: $declaredVersion). Leaving the extension providers in the manifest, so " +
             "startup is not optimised. Upgrade the SDK or set optimizeExtensionsLoading = false " +
             "to silence this."
 
