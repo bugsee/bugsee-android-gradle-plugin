@@ -324,6 +324,7 @@ abstract class MappingUploadTask : DefaultTask() {
                         logger = logger,
                         debug = isDebug,
                     )
+                    if (!cliResult.success) HttpRetry.throwIfInterrupted()
                     when {
                         cliResult.success -> return
                         !cliResult.shouldFallback -> { // already logged

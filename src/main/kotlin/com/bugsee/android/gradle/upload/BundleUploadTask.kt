@@ -673,7 +673,8 @@ abstract class BundleUploadTask : DefaultTask() {
             // structural CLI failure / unavailable binary falls through to the
             // native Bundle/ChunkedBundleUploader path below; a substantive
             // failure (bad token / server) is NOT retried natively — the native
-            // path would hit the same error.
+            // path would hit the same error. A cancelled build (interrupt) never falls
+            // back: it is rethrown, flag intact.
             var uploadHandled = false
             // Set when the build registration did not complete; failOnUploadError then fails the task
             // after the size check below (a failed upload must not hide a size-check verdict).
@@ -699,6 +700,7 @@ abstract class BundleUploadTask : DefaultTask() {
                             logger = logger,
                             debug = isDebug,
                         )
+                        if (!result.success) HttpRetry.throwIfInterrupted()
                         uploadHandled = result.success || !result.shouldFallbackForBuildRegistration
                         if (!result.success && uploadHandled) uploadFailed = true
                         if (!result.success && result.shouldFallback && uploadHandled) {
@@ -708,7 +710,11 @@ abstract class BundleUploadTask : DefaultTask() {
                                     "uploader is NOT attempted to avoid a duplicate registration.",
                             )
                         }
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.warn(
                             "Bugsee: bugsee-cli upload build threw — falling back to " +
                                 "the native uploader. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}",
@@ -754,6 +760,7 @@ abstract class BundleUploadTask : DefaultTask() {
                         }
                         logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
                 }
@@ -789,6 +796,7 @@ abstract class BundleUploadTask : DefaultTask() {
                         logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                         uploadFailed = true
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                         uploadFailed = true
                     }
@@ -1107,20 +1115,30 @@ abstract class BundleUploadTask : DefaultTask() {
         // ANY CLI failure falls through to the
         // native packer, which always produces a valid (if larger) ZIP —
         // writeNormalizedUploadZip truncates zipTemp, discarding a partial CLI
-        // write — so a CLI hiccup never breaks the build.
+        // write — so a CLI hiccup never breaks the build. A cancelled build (interrupt)
+        // is the exception: it is rethrown, never a fallback.
         if (mapping != null && !legacyGzip && cliSupportsPack()) {
-            val cli = resolveCli()
-            if (cli != null && CliUploader.packUploadZip(
-                    execOps = execOps,
-                    cliBinary = cli,
-                    artifactFile = bundle,
-                    mappingFile = mapping,
-                    outZip = zipTemp,
-                    logger = logger,
-                    debug = isDebug,
-                )
-            ) {
-                return zipTemp
+            // A failed or cancelled pack abandons the partial zip: the lazy never completes, so the
+            // task's `finally` cannot delete it.
+            try {
+                val cli = resolveCli()
+                if (cli != null && CliUploader.packUploadZip(
+                        execOps = execOps,
+                        cliBinary = cli,
+                        artifactFile = bundle,
+                        mappingFile = mapping,
+                        outZip = zipTemp,
+                        logger = logger,
+                        debug = isDebug,
+                    )
+                ) {
+                    return zipTemp
+                }
+                // A cancelled pack must not fall through to the native packer.
+                HttpRetry.throwIfInterrupted()
+            } catch (e: Throwable) {
+                zipTemp.delete()
+                throw e
             }
         }
 

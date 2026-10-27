@@ -471,6 +471,8 @@ internal object BundleUploader {
                     if (debug) logger.warn("Bugsee: build-info bundle uploaded via bugsee-cli.")
                     return
                 }
+                // A cancelled build must not fall back to the legacy PUTs.
+                HttpRetry.throwIfInterrupted()
                 // Any failure → fall back to the independent legacy PUTs.
                 logger.warn(
                     "Bugsee: build-info bundle upload failed " +
