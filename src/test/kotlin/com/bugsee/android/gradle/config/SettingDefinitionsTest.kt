@@ -91,4 +91,14 @@ class SettingDefinitionsTest {
         assertSame(ext.endpoint, def("endpoint").property(ext))
         assertSame(ext.buildInfo.sizeCheck.failBytes, def("buildInfo.sizeCheck.failBytes").property(ext))
     }
+
+    @Test
+    fun `cliPath file value resolves against the file dir, other strings are untouched`() {
+        val dir = java.io.File("/some/root")
+        val cli = def("cliPath")
+        assertEquals(java.io.File(dir, "tools/cli").path, cli.parseFileValue(" tools/cli ", dir))
+        assertEquals("/abs/x/../cli", cli.parseFileValue("/abs/x/../cli", dir))
+        assertEquals("tools/cli", cli.parseFileValue("tools/cli", null))
+        assertEquals("https://x/y", def("endpoint").parseFileValue("https://x/y", dir))
+    }
 }

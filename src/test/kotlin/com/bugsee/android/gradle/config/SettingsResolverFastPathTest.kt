@@ -108,5 +108,5 @@ class SettingsResolverFastPathTest {
         }
 
     private fun resolver(global: BugseePluginExtension, text: String?) =
-        SettingsResolver(global, SettingsFileParser.parse(text, RecordingLogger()), project.objects, logger)
+        SettingsResolver(global, SettingsFileParser.parse(text, RecordingLogger()), project.objects, logger, null)
 }

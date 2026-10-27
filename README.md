@@ -377,6 +377,12 @@ setting, so `variant("x") { feedback true }`, `leak { … }`, `appToken { … }`
 | Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
 | Global, DSL only | `instrumentation.excludes` (no `plugin.*` file key) |
 
+`cliPath` may be relative. In the DSL (`cliPath.set("../tools/bugsee-cli")`) it is relative
+to the module applying the plugin; in `bugsee.properties` (`plugin.cliPath=tools/bugsee-cli`) it
+is relative to the directory of that file (the root project). It never depends on the Gradle
+daemon's working directory. Absolute paths are used as written; `~` and environment variables are
+not expanded. A path that is not an executable file logs a warning and falls back to the Kotlin uploader.
+
 A `variant.<name>.plugin.<key>` file key for a global-only setting is ignored
 with a warning. `instrumentation.excludes` is not a file key at all: a
 `plugin.instrumentation.excludes` or `variant.<name>.plugin.instrumentation.excludes`

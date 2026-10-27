@@ -52,6 +52,8 @@ internal class SettingsResolver(
     private val file: SettingsFile,
     private val objects: ObjectFactory,
     private val logger: Logger,
+    /** Directory of `bugsee.properties` (the root project); relative path values from the file resolve against it. */
+    private val fileDir: java.io.File?,
 ) {
 
     private val warnedShadowKeys = HashSet<String>()
@@ -387,7 +389,7 @@ internal class SettingsResolver(
 
     private fun <T : Any> parse(def: SettingDef<T>, fileKey: String, raw: String, warn: Boolean): T? =
         try {
-            def.parse(raw)
+            def.parseFileValue(raw, fileDir)
         } catch (e: IllegalArgumentException) {
             if (warn && warnedMalformedKeys.add(fileKey)) logger.warn("Bugsee: ignoring $fileKey=$raw — ${e.message}")
             null

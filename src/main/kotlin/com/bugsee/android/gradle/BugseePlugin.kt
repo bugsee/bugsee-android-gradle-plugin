@@ -457,7 +457,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             project.logger
         }
         val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
-        SettingsResolver(extension, parsed, project.objects, project.logger)
+        SettingsResolver(extension, parsed, project.objects, project.logger, root.layout.projectDirectory.asFile)
     }.also { settingsResolver = it }
 
     private fun registerManifestTask(
@@ -656,7 +656,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // optional (lets developers point at a locally-built binary);
             // when unset, the task auto-downloads `cliVersion` from
             // download.bugsee.com into the per-user Gradle cache.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             // Gradle user home wired CC-safely as a File (eagerly captured).
@@ -730,7 +730,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // wiring on MappingUploadTask. Same auto-download story: when
             // `cliPath` is unset, the task downloads `cliVersion` from
             // download.bugsee.com into the per-user Gradle cache.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
@@ -986,7 +986,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // otherwise the task auto-downloads `cliVersion` into the
             // per-user Gradle cache. `gradleUserHomeDir` is that cache
             // root, captured CC-safely as a File.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
@@ -1056,7 +1056,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // otherwise the task auto-downloads `cliVersion` into the
             // per-user Gradle cache. `gradleUserHomeDir` is that cache
             // root, captured CC-safely as a File.
-            task.cliPath.set(extension.cliPath)
+            task.cliPath.set(projectRelativeCliPath(project, extension))
             task.cliVersion.set(extension.cliVersion)
             task.cliAutoUpdate.set(extension.cliAutoUpdate)
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
@@ -1635,6 +1635,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         /** Android plugins whose application wires the variants (see [apply]). */
         private val ANDROID_PLUGIN_IDS = listOf("com.android.application", "com.android.library")
+
+        /**
+         * [BugseePluginExtension.cliPath] with a relative DSL value resolved against [project]'s directory
+         * (the module applying the plugin). A relative value from `bugsee.properties` was already made
+         * absolute against the root project directory when it was read, so it passes through here. Without
+         * this a relative path would resolve against the Gradle daemon's working directory. Absolute and
+         * blank values are returned byte-for-byte (no `..` normalisation, no URI parsing). Lazy: the DSL
+         * value is not read until the task input is queried.
+         */
+        internal fun projectRelativeCliPath(project: Project, extension: BugseePluginExtension): Provider<String> {
+            val projectDir = project.layout.projectDirectory.asFile
+            return extension.cliPath.map { raw -> SettingDefinitions.resolvePath(raw, projectDir) }
+        }
 
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =

@@ -4,6 +4,7 @@ import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.provider.Property
+import java.io.File
 
 /** Whether a setting may differ per variant or is project-wide. */
 internal enum class SettingScope { GLOBAL, VARIANT }
@@ -17,15 +18,29 @@ internal class SettingDef<T : Any>(
     val key: String,
     val scope: SettingScope,
     val property: (BugseePluginExtension) -> Property<T>,
+    /** A string setting holding a filesystem path: a relative file value resolves against the settings file's directory. */
+    val pathLike: Boolean = false,
     val parse: (String) -> T,
-)
+) {
+    /**
+     * [parse] of a value read from `bugsee.properties`. A relative [pathLike] value is made absolute
+     * against [fileDir] (the directory of the settings file) so every module sees the same path;
+     * a null [fileDir] leaves it as written.
+     */
+    fun parseFileValue(raw: String, fileDir: File?): T {
+        val value = parse(raw)
+        if (!pathLike || fileDir == null || value !is String) return value
+        @Suppress("UNCHECKED_CAST")
+        return SettingDefinitions.resolvePath(value, fileDir) as T
+    }
+}
 
 /** Single registry of settings that `bugsee.properties` can bind. */
 internal object SettingDefinitions {
 
     val all: List<SettingDef<*>> = listOf(
         stringDef("endpoint", SettingScope.VARIANT) { it.endpoint },
-        stringDef("cliPath", SettingScope.GLOBAL) { it.cliPath },
+        stringDef("cliPath", SettingScope.GLOBAL, pathLike = true) { it.cliPath },
         stringDef("cliVersion", SettingScope.GLOBAL) { it.cliVersion },
         boolDef("cliAutoUpdate", SettingScope.GLOBAL) { it.cliAutoUpdate },
         enumDef("uploader", SettingScope.GLOBAL, UploaderStrategy::class.java) { it.uploader },
@@ -102,8 +117,20 @@ internal object SettingDefinitions {
             )
         }
 
-    private fun stringDef(key: String, scope: SettingScope, property: (BugseePluginExtension) -> Property<String>) =
-        SettingDef(key, scope, property) { raw ->
+    /**
+     * [raw] unchanged when blank or absolute, else [base] + [raw]. Plain `java.io.File` on purpose: no
+     * `..` normalisation (symlinks stay valid) and no URI parsing of the value.
+     */
+    fun resolvePath(raw: String, base: File): String =
+        if (raw.isBlank() || File(raw).isAbsolute) raw else File(base, raw).path
+
+    private fun stringDef(
+        key: String,
+        scope: SettingScope,
+        pathLike: Boolean = false,
+        property: (BugseePluginExtension) -> Property<String>,
+    ) =
+        SettingDef(key, scope, property, pathLike) { raw ->
             // Trim incidental whitespace; the value itself may contain
             // spaces. An empty value is a user error (half-deleted
             // line): the default holds rather than an empty endpoint

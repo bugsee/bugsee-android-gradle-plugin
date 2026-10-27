@@ -243,6 +243,77 @@ class VariantWiringTest {
     }
 
     @Test
+    fun relativeDslCliPathResolvesAgainstProjectDir() {
+        val h = Harness(null)
+        h.extension.cliPath.set("tools/fake-cli.sh")
+        h.runVariant("release")
+
+        assertEquals(
+            File(h.project.projectDir, "tools/fake-cli.sh").path,
+            h.mappingTask("Release").cliPath.get(),
+        )
+    }
+
+    @Test
+    fun relativeFileCliPathResolvesAgainstSettingsFileDirNotModule() {
+        val h = Harness("plugin.cliPath=tools/fake-cli.sh\n", moduleName = "app")
+        h.runVariant("release")
+
+        assertEquals(
+            File(h.root.projectDir, "tools/fake-cli.sh").path,
+            h.mappingTask("Release").cliPath.get(),
+        )
+    }
+
+    @Test
+    fun twoModulesOfOneBuildShareTheRootFileValue() {
+        val root = ProjectBuilder.builder().build()
+        File(root.projectDir, "bugsee.properties").writeText("plugin.cliPath=tools/cli.sh\n")
+        val paths = listOf("app", "app2").map { name ->
+            val child = ProjectBuilder.builder().withParent(root).withName(name).build()
+            val ext = child.extensions.create("bugsee", BugseePluginExtension::class.java)
+            com.bugsee.android.gradle.config.PluginPropertiesApplier.applyTo(child, ext)
+            BugseePlugin.projectRelativeCliPath(child, ext).get()
+        }
+        assertEquals(File(root.projectDir, "tools/cli.sh").path, paths[0])
+        assertEquals(paths[0], paths[1])
+    }
+
+    @Test
+    fun relativeDslCliPathStaysModuleRelativeWithRootFileValueSet() {
+        val h = Harness("plugin.cliPath=tools/from-file.sh\n", moduleName = "app")
+        h.extension.cliPath.set("tools/from-dsl.sh")
+        h.runVariant("release")
+
+        assertEquals(
+            File(h.project.projectDir, "tools/from-dsl.sh").path,
+            h.mappingTask("Release").cliPath.get(),
+        )
+    }
+
+    @Test
+    fun absoluteAndBlankCliPathPassThroughByteForByte() {
+        val tmp = System.getProperty("java.io.tmpdir")
+        for (raw in listOf(
+            File(tmp, "bugsee-cli").absolutePath,
+            File(tmp, "linkdir/../bugsee-cli").absolutePath,
+            "  ",
+            "C:\\tools\\bugsee-cli.exe",
+        )) {
+            val h = Harness(null)
+            h.extension.cliPath.set(raw)
+            h.runVariant("release")
+            // `C:\\...` is relative on non-Windows: must not throw (no URI parsing); on Windows it is absolute.
+            val expected = if (raw.startsWith("C:")) {
+                if (File(raw).isAbsolute) raw else File(h.project.projectDir, raw).path
+            } else {
+                raw
+            }
+            assertEquals(expected, h.mappingTask("Release").cliPath.get(), "cliPath '$raw'")
+        }
+    }
+
+    @Test
     fun rootFileTokenUsedWhenDslHasNone() {
         val h = Harness("app_token=root-file-token\n")
         h.runVariant("release")
@@ -325,13 +396,19 @@ class VariantWiringTest {
 
     // ── Harness ─────────────────────────────────────────────────────
 
-    private class Harness(propertiesText: String?, configure: BugseePluginExtension.() -> Unit = {}) {
-        val project: Project = ProjectBuilder.builder().build()
+    private class Harness(
+        propertiesText: String?,
+        moduleName: String? = null,
+        configure: BugseePluginExtension.() -> Unit = {},
+    ) {
+        val root: Project = ProjectBuilder.builder().build()
+        val project: Project =
+            moduleName?.let { ProjectBuilder.builder().withParent(root).withName(it).build() } ?: root
         private val callbacks = mutableListOf<(Variant) -> Unit>()
         val extension: BugseePluginExtension
 
         init {
-            propertiesText?.let { File(project.projectDir, "bugsee.properties").writeText(it) }
+            propertiesText?.let { File(root.projectDir, "bugsee.properties").writeText(it) }
             project.configurations.create("implementation")
             project.dependencies.add("implementation", "com.bugsee:bugsee-android:$SDK_VERSION")
             @Suppress("UNCHECKED_CAST")

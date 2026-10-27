@@ -57,7 +57,7 @@ internal object PluginPropertiesApplier {
         val file = project.rootProject.layout.projectDirectory
             .file(BUGSEE_PROPERTIES_FILENAME)
         val text = project.providers.fileContents(file).asText.orNull
-        applyText(text, extension, project.logger)
+        applyText(text, extension, project.logger, project.rootProject.layout.projectDirectory.asFile)
     }
 
     /**
@@ -68,7 +68,7 @@ internal object PluginPropertiesApplier {
      * log-level + message-content contracts that would otherwise
      * disappear into the real Gradle logger.
      */
-    internal fun applyText(text: String?, extension: BugseePluginExtension, logger: Logger) {
+    internal fun applyText(text: String?, extension: BugseePluginExtension, logger: Logger, fileDir: java.io.File? = null) {
         val props = PluginPropertiesLoader.load(text, logger)
         if (props.isEmpty()) return
 
@@ -77,7 +77,7 @@ internal object PluginPropertiesApplier {
         // logged. If the key isn't in the file, default to quiet.
         val verbose = parseBooleanOrNull(props["debug"]) == true
 
-        val bindings = bindings(extension)
+        val bindings = bindings(extension, fileDir)
         val knownKeys = bindings.mapTo(HashSet()) { it.key }
 
         for (binding in bindings) {
@@ -117,11 +117,11 @@ internal object PluginPropertiesApplier {
      */
     private class Binding(val key: String, val apply: (String) -> Unit)
 
-    private fun bindings(ext: BugseePluginExtension): List<Binding> =
-        SettingDefinitions.all.map { def -> bind(def, ext) }
+    private fun bindings(ext: BugseePluginExtension, fileDir: java.io.File?): List<Binding> =
+        SettingDefinitions.all.map { def -> bind(def, ext, fileDir) }
 
-    private fun <T : Any> bind(def: SettingDef<T>, ext: BugseePluginExtension) =
-        Binding(def.key) { raw -> def.property(ext).convention(def.parse(raw)) }
+    private fun <T : Any> bind(def: SettingDef<T>, ext: BugseePluginExtension, fileDir: java.io.File?) =
+        Binding(def.key) { raw -> def.property(ext).convention(def.parseFileValue(raw, fileDir)) }
 
     private fun parseBooleanOrNull(raw: String?): Boolean? = SettingDefinitions.parseBooleanOrNull(raw)
 }

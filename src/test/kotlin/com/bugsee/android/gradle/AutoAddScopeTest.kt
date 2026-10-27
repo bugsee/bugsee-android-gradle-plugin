@@ -515,6 +515,7 @@ class AutoAddScopeTest {
             SettingsFileParser.parse(propertiesText, RecordingLogger(), reportMalformedFile = false),
             project.objects,
             RecordingLogger(),
+            null,
         )
 
         /** Runs the `implementation` dependency actions; returns the module names they added. */
