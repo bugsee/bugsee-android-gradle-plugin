@@ -578,9 +578,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // and orders the task graph accordingly — no manual
         // `dependsOn(:minifyXxxWithR8)`, which would be fragile across
         // AGP versions and configurations like DexGuard.
-        variant.artifacts.use(resolveTaskProvider)
-            .wiredWith(BugseeBuildIdResolveTask::mappingFile)
-            .toListenTo(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+        //
+        // Only registered for variants that can produce a mapping: with no
+        // producer AGP prints "... will never be invoked" on every build
+        // (#53), and the task's `mappingFile` is optional, so it simply stays
+        // unset and the fallback derivation applies. See [mayProduceMapping].
+        if (mayProduceMapping(variant, project.extensions.findByName("android"))) {
+            variant.artifacts.use(resolveTaskProvider)
+                .wiredWith(BugseeBuildIdResolveTask::mappingFile)
+                .toListenTo(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+        }
 
         // Asset injection task — copies AGP's merged assets, drops
         // our build-id file in. The `resolvedBuildIdFile` input creates
@@ -643,6 +650,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // Gradle user home wired CC-safely as a File (eagerly captured).
             task.gradleUserHomeDir.fileValue(project.gradle.gradleUserHomeDir)
             task.uploader.set(extension.uploader)
+            task.mappingListenerRegistered.set(
+                mayProduceMapping(variant, project.extensions.findByName("android"))
+            )
             task.group = "bugsee"
             task.description = "Uploads ProGuard/R8 mapping file for $capitalizedVariant"
 
@@ -1546,6 +1556,68 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
             VariantContext(variant.name, variant.productFlavors.map { it.second }, variant.buildType)
+
+        /**
+         * Whether R8 may publish `OBFUSCATION_MAPPING_FILE` for [variant], i.e. whether
+         * the build-id resolve task should listen for it (#53).
+         *
+         *  - `isMinifyEnabled` true: yes.
+         *  - AGP 9 `optimization.enable` on the variant's build type or any of its product
+         *    flavors (AGP merges them with OR; `buildTypes.<type>.optimization.enable`, needs
+         *    `android.r8.gradual.support=true`) runs R8 and emits a mapping while the variant's
+         *    `isMinifyEnabled` stays false; `CanMinifyCode` does not expose it (it is DSL-only),
+         *    so it is read reflectively from [androidExtension] (the `android` DSL object; the
+         *    plugin compiles against AGP 8.6). No `getOptimization` or no `getEnable` (AGP 8.x,
+         *    where R8 is minify-driven): no. Present but unreadable: yes, because wrongly
+         *    skipping the listener silently degrades the build id to the manifest-derived one,
+         *    which does not change with the code.
+         *  - Not a [com.android.build.api.variant.CanMinifyCode]: yes. The `?: true` is
+         *    dead for the `ApplicationVariant`s the plugin wires today; it only preserves
+         *    the old behaviour should a non-minifiable variant kind ever reach here.
+         *
+         * Residual gap: a third-party R8 replacement (e.g. DexGuard) with minify off may
+         * still publish a mapping; `MappingUploadTask` warns when it finds one.
+         */
+        internal fun mayProduceMapping(
+            variant: com.android.build.api.variant.Variant,
+            androidExtension: Any?,
+        ): Boolean {
+            val minifiable = variant as? com.android.build.api.variant.CanMinifyCode ?: return true
+            if (minifiable.isMinifyEnabled) return true
+            val extension = androidExtension ?: return false
+            return try {
+                // AGP merges `optimization.enable` across build type and flavors with OR.
+                optimizationEnabled(extension, "getBuildTypes", variant.buildType) ||
+                    variant.productFlavors.any { optimizationEnabled(extension, "getProductFlavors", it.second) }
+            } catch (_: Exception) {
+                true
+            }
+        }
+
+        /** `android.<containerGetter>.<name>.optimization.enable`; false when any link is absent. */
+        private fun optimizationEnabled(extension: Any, containerGetter: String, name: String?): Boolean {
+            if (name == null) return false
+            val container = callNoArg(extension, containerGetter) as? org.gradle.api.NamedDomainObjectCollection<*>
+                ?: return false
+            val dsl = container.findByName(name) ?: return false
+            // AGP 8.x: no `optimization` or no `enable` -> R8 is minify-driven there.
+            val optimization = callNoArg(dsl, "getOptimization") ?: return false
+            return callNoArg(optimization, "getEnable") as? Boolean ?: false
+        }
+
+        /**
+         * Calls a no-arg getter reflectively; null when it does not exist. DSL impl classes may
+         * not be public, so a method declared by a public type is preferred and otherwise access
+         * is forced (a method that exists but cannot be called throws, which the caller treats as
+         * "keep the listener").
+         */
+        private fun callNoArg(target: Any, name: String): Any? {
+            val candidates = target.javaClass.methods.filter { it.name == name && it.parameterCount == 0 }
+            val method = candidates.firstOrNull { java.lang.reflect.Modifier.isPublic(it.declaringClass.modifiers) }
+                ?: candidates.firstOrNull()?.also { it.isAccessible = true }
+                ?: return null
+            return method.invoke(target)
+        }
 
         /** The per-variant debug summary. [token] is masked; it is never printed in full. */
         internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =

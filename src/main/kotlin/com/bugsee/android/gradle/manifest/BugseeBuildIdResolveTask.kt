@@ -14,7 +14,9 @@ import org.gradle.api.tasks.TaskAction
  * Resolves the final BUILD_UUID for a variant after R8 has had a
  * chance to produce its mapping file.
  *
- * Wired into AGP via:
+ * Wired into AGP, only for variants where R8 may run
+ * (`BugseePlugin.mayProduceMapping`: `isMinifyEnabled`, or AGP 9
+ * `optimization.enable`), via:
  *
  * ```kotlin
  * variant.artifacts.use(taskProvider)
@@ -22,9 +24,12 @@ import org.gradle.api.tasks.TaskAction
  *     .toListenTo(SingleArtifact.OBFUSCATION_MAPPING_FILE)
  * ```
  *
+ * The listener is skipped otherwise because AGP prints "will never be
+ * invoked" for a listener with no producer (#53).
+ *
  * `toListenTo` (AGP 8.3+) places this task downstream of R8 *if R8 is
- * running for the variant*, without forcing R8 to run. When R8 is off
- * (`isMinifyEnabled = false`, debug variants by default), the
+ * running for the variant*, without forcing R8 to run. When no listener
+ * is registered or R8 is off (debug variants by default), the
  * `mappingFile` property is absent and we fall back to the same
  * deterministic-from-manifest derivation that [BugseeManifestTask]
  * already wrote into the manifest meta-data.
