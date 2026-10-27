@@ -6,7 +6,8 @@ plugins {
 
 // Mirror the root group so the auto-install short-circuit treats
 // this as a Bugsee internal.
-group = "com.bugsee.testfixture"
+// Tests of the library-module warning override it with a customer-like group.
+group = project.findProperty("bugseeFixtureGroup")?.toString() ?: "com.bugsee.testfixture"
 
 android {
     namespace = "com.example.libfixture"
@@ -32,5 +33,12 @@ bugsee {
     // library-variant scope.
     buildInfo {
         enabled.set(false)
+    }
+}
+
+// Opt-in: disable every variant so `onVariants` never fires (the warning must still appear).
+if (project.findProperty("bugseeFixtureDisableAllVariants")?.toString() == "true") {
+    androidComponents {
+        beforeVariants { it.enable = false }
     }
 }

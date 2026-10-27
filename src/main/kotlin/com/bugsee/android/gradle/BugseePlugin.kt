@@ -287,6 +287,23 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
 
+        // One default-level warning per library module, emitted here rather than per variant (a library
+        // has debug + release) and independent of `onVariants`, so it also fires when `beforeVariants`
+        // disables every variant. The plugin skips library variants below, so without it the misapplied
+        // plugin is silent unless `debug=true`.
+        // Bugsee's own SDK modules are libraries on purpose and are exempt. Identified by group only, never
+        // by bare module name: `:library` / `:compose` / `:okhttp` are common names in customer builds.
+        // Evaluated in afterEvaluate because `group` is often assigned after the plugin is applied.
+        if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension) {
+            project.afterEvaluate {
+                if (!isBugseeSdkGroup(project.group?.toString().orEmpty())) {
+                    project.logger.warn(
+                        libraryModuleMessage(project.path, project.path == ":", project.name)
+                    )
+                }
+            }
+        }
+
         androidComponents.onVariants { variant ->
             val globalDebug = settingsResolver().globalValue(DEBUG)
             val variantName = variant.name
@@ -323,7 +340,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                         "Bugsee: skipping plugin wiring for non-application variant " +
                             "$variantName (${variant.javaClass.simpleName}). " +
                             "The bugsee plugin only configures application modules; " +
-                            "see README on consuming the SDK in a library module."
+                            "see the README, \"Library modules\"."
                     )
                 }
                 return@onVariants
@@ -1765,6 +1782,16 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return method.invoke(target)
         }
 
+        /**
+         * Default-level warning for a library module that applies the plugin. [isRoot] is true for a
+         * single-module build, whose path is just ":" and so is named by [name] instead.
+         */
+        internal fun libraryModuleMessage(projectPath: String, isRoot: Boolean, name: String): String =
+            "Bugsee: ${if (isRoot) "root project '$name'" else projectPath} is a library module. " +
+                "Bugsee registers upload tasks for application modules only; apply the plugin to the " +
+                "application module (in a convention plugin, apply it under " +
+                "pluginManager.withPlugin(\"com.android.application\")). See the README, \"Library modules\"."
+
         /** The per-variant debug summary. [token] is masked; it is never printed in full. */
         internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =
             "Bugsee: variant $variantName resolved: " +
@@ -1893,5 +1920,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "ktor-3",
             "cronet"
         )
+
+        /** True for Bugsee's own SDK subprojects: group `com.bugsee` or a `com.bugsee.` subgroup (not `com.bugseeapp`). */
+        internal fun isBugseeSdkGroup(group: String): Boolean = group == "com.bugsee" || group.startsWith("com.bugsee.")
     }
 }

@@ -568,6 +568,12 @@ bugsee { instrumentation { excludes.add("a.b") } }
 The other instrumentations still fail the build with an attributed `InstrumentationException`
 that names the class and suggests the same `excludes.add(...)`.
 
+## Library modules
+
+Apply the plugin to the application module only; a library module logs a warning and gets no
+Bugsee upload tasks. In a convention plugin shared by all Android modules, apply it under
+`pluginManager.withPlugin("com.android.application")`.
+
 ## Diagnostics
 
 The plugin logs `bugsee.properties` issues at the most-appropriate
