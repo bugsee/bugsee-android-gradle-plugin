@@ -245,7 +245,7 @@ abstract class MappingUploadTask : DefaultTask() {
 
         if (appToken == null) {
             if (placeholderSeen) {
-                AppTokenResolver.logPlaceholderSkip(logger, "mapping")
+                AppTokenResolver.logPlaceholderSkip(logger, "mapping", variantName.get())
             } else {
                 logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping mapping upload.")
             }

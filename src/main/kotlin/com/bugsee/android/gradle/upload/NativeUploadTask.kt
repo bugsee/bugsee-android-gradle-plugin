@@ -218,9 +218,9 @@ abstract class NativeUploadTask : DefaultTask() {
 
         if (appToken == null) {
             if (placeholderSeen) {
-                AppTokenResolver.logPlaceholderSkip(logger, "native")
+                AppTokenResolver.logPlaceholderSkip(logger, "native", variantName.get())
             } else {
-                logger.warn("Bugsee: Could not resolve appToken. Skipping native upload.")
+                logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping native upload.")
             }
             return
         }
@@ -229,7 +229,7 @@ abstract class NativeUploadTask : DefaultTask() {
         val versionName = ManifestModifier.getVersionName(manifest)
         val versionCode = ManifestModifier.getVersionCode(manifest)
         if (versionCode == null) {
-            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml")
+            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml for variant ${variantName.get()}. Skipping native upload.")
             return
         }
 
@@ -239,7 +239,7 @@ abstract class NativeUploadTask : DefaultTask() {
         // every R8-minified build, breaking NDK symbolication.
         val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
         if (buildUUID.isEmpty()) {
-            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping native upload.")
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty for variant ${variantName.get()}. Skipping native upload.")
             return
         }
 

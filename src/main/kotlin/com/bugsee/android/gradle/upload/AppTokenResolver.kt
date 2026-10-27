@@ -50,8 +50,9 @@ internal object AppTokenResolver {
     }
 
     /** The info line an upload task logs, instead of the missing-token warning, when a placeholder was ignored. */
-    internal fun logPlaceholderSkip(logger: Logger, what: String) {
-        logger.info("Bugsee: Placeholder app token configured; skipping $what upload.")
+    internal fun logPlaceholderSkip(logger: Logger, what: String, variantName: String? = null) {
+        val forVariant = if (variantName != null) " for variant $variantName" else ""
+        logger.info("Bugsee: Placeholder app token configured; skipping $what upload$forVariant.")
     }
 
     internal fun maskToken(token: String): String {
