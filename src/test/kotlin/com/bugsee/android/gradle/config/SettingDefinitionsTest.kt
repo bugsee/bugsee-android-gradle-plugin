@@ -13,7 +13,7 @@ import kotlin.test.assertSame
 class SettingDefinitionsTest {
 
     private val expectedKeys = listOf(
-        "endpoint", "cliPath", "cliVersion", "cliAutoUpdate", "uploader", "debug",
+        "endpoint", "cliPath", "cliVersion", "cliAutoUpdate", "uploader", "debug", "failOnUploadError",
         "feedback", "optimizeExtensionsLoading", "sdkAutoLoad",
         "ndk.enabled", "ndk.allBuildTypes", "ndk.forceDebugSymbolsUpload", "ndk.useMergedNativeLibs",
         "leak.enabled",

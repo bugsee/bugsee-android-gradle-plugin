@@ -177,6 +177,8 @@ internal object BundleUploader {
      *             (build-info-only). When `true` it's an error.
      * @param logger Gradle logger.
      * @param debug Whether debug logging is enabled.
+     * @return `false` when the artefact PUT (size-analysis path) did not complete; it is only logged
+     *         here, so the caller can apply `failOnUploadError`. Registration failures throw.
      */
     fun uploadData(
         file: File,
@@ -199,7 +201,8 @@ internal object BundleUploader {
         depsJsonFile: File? = null,
         timingsJsonFile: File? = null,
         legacyBuildInfoGzip: Boolean = false,
-    ) {
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
+    ): Boolean {
         if (debug) logger.warn("Bugsee: Starting bundle upload. Body: $json")
 
         val httpPost = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken))
@@ -225,23 +228,23 @@ internal object BundleUploader {
             .setRetryHandler(StandardHttpRequestRetryHandler())
             .build()
 
-        httpClient.use { client ->
-            val response = client.execute(httpPost)
-            val statusCode = response.statusLine.statusCode
+        return httpClient.use { client ->
+            var artifactUploaded = true
+            // The registration POST creates a record, so only the statuses that mean "not processed"
+            // (429/502/503) are retried; see HttpRetry.
+            val reply = HttpRetry.execute(client, httpPost, "bundle upload step 1", logger, retryPolicy, idempotent = false)
+            val statusCode = reply.status
 
             // 2xx is success; some reverse proxies normalise to 201/204.
             // Anything outside that is a hard failure — surface it rather
             // than quietly returning and letting the Gradle task report
             // green while the backend never saw the build.
             if (statusCode !in 200..299) {
-                val body = EntityUtils.toString(response.entity, "utf-8")
-                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): ${redactBodyForLog(body, appToken)}")
+                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): ${redactBodyForLog(reply.body, appToken)}")
             }
 
-            val resEntity = response.entity
+            val contentText = reply.body
                 ?: throw RuntimeException("Bugsee bundle upload step 1: no response body")
-
-            val contentText = EntityUtils.toString(resEntity, "utf-8")
             // NEVER log `contentText` verbatim — the response contains
             // presigned PUT URLs that grant 7-day arbitrary-write
             // access to known S3 keys. See `redactedResponseSummary`.
@@ -337,18 +340,38 @@ internal object BundleUploader {
                     )
                     val httpPut = HttpPut(presignedEndpoint)
                     httpPut.entity = FileEntity(file)
-                    val putResponse = client.execute(httpPut)
+                    // A PUT to a fixed presigned URL is safe to repeat (FileEntity is repeatable). HttpRetry owns
+                    // the retries, so it runs on a client without automatic retries (the shared one would
+                    // multiply the attempts of a large body).
+                    val putReply = HttpClients.custom()
+                        .useSystemProperties()
+                        .setDefaultRequestConfig(requestConfig)
+                        .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
+                        .disableAutomaticRetries()
+                        .build()
+                        .use { putClient -> HttpRetry.execute(putClient, httpPut, "bundle upload step 2", logger, retryPolicy) }
 
-                    if (putResponse.statusLine.statusCode !in 200..299) {
-                        val body = EntityUtils.toString(putResponse.entity, "utf-8")
+                    if (putReply.status !in 200..299) {
+                        artifactUploaded = false
                         logger.warn(
                             "Bugsee: bundle upload step 2 failed " +
-                            "(status=${putResponse.statusLine.statusCode}): ${redactBodyForLog(body, appToken)}"
+                            "(status=${putReply.status}): ${redactBodyForLog(putReply.body, appToken)}"
                         )
                     } else if (debug) {
                         logger.warn("Bugsee: Bundle upload complete.")
                     }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                } catch (e: java.io.IOException) {
+                    if (HttpRetry.isInterruption(e)) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    }
+                    artifactUploaded = false
+                    logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 } catch (e: Exception) {
+                    artifactUploaded = false
                     logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 }
             }
@@ -377,6 +400,7 @@ internal object BundleUploader {
                 logger = logger,
                 debug = debug,
             )
+            artifactUploaded
         }
     }
 
@@ -544,6 +568,12 @@ internal object BundleUploader {
             } else if (debug) {
                 logger.warn("Bugsee: $label upload complete.")
             }
+        } catch (e: java.io.IOException) {
+            if (HttpRetry.isInterruption(e)) {
+                Thread.currentThread().interrupt()
+                throw e
+            }
+            logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         } catch (e: Exception) {
             logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         }

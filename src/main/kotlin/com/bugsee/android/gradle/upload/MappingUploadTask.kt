@@ -54,6 +54,14 @@ abstract class MappingUploadTask : DefaultTask() {
     @get:Input
     abstract val debug: Property<Boolean>
 
+    /**
+     * Fail the task when the upload does not complete. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.failOnUploadError] (default `false`: warn only).
+     */
+    @get:Input
+    @get:Optional
+    abstract val failOnUploadError: Property<Boolean>
+
     @get:Input
     abstract val variantName: Property<String>
 
@@ -318,7 +326,10 @@ abstract class MappingUploadTask : DefaultTask() {
                     )
                     when {
                         cliResult.success -> return
-                        !cliResult.shouldFallback -> return // already logged
+                        !cliResult.shouldFallback -> { // already logged
+                            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the mapping for variant ${variantName.get()}")
+                            return
+                        }
                         else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
                     }
                 }
@@ -351,6 +362,7 @@ abstract class MappingUploadTask : DefaultTask() {
             )
             if (!uploaded) {
                 logger.warn("Bugsee: the mapping for variant ${variantName.get()} was not uploaded (see the warning above).")
+                UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the mapping for variant ${variantName.get()}")
             }
         } finally {
             zipTemp.delete()

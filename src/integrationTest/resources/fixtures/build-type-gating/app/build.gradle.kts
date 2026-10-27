@@ -100,6 +100,8 @@ bugsee {
         appToken("fixture-token-0123456789")
         uploader.set(com.bugsee.android.gradle.upload.UploaderStrategy.KOTLIN)
     }
+    // Opt-in (UploadFailOnErrorTest): fail the build when an upload does not complete.
+    project.findProperty("bugseeFixtureFailOnUploadError")?.toString()?.let { failOnUploadError.set(it.toBoolean()) }
 }
 
 // Explicit, to match compileOptions above. The `kotlinOptions { jvmTarget }` it replaces is a hard

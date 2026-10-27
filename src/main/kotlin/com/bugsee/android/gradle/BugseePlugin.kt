@@ -850,6 +850,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             MappingUploadTask::class.java
         ) { task ->
             task.debug.set(extension.debug)
+            task.failOnUploadError.set(extension.failOnUploadError)
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
             // Uploader strategy + bugsee-cli binary path/version. `cliPath` is
@@ -954,6 +955,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             NativeUploadTask::class.java
         ) { task ->
             task.debug.set(extension.debug)
+            task.failOnUploadError.set(extension.failOnUploadError)
             task.variantName.set(variant.name)
             task.endpoint.set(extension.endpoint)
             task.forceUpload.set(extension.ndk.forceDebugSymbolsUpload)
@@ -1177,6 +1179,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             BundleUploadTask::class.java
         ) { task ->
             task.debug.set(extension.debug)
+            task.failOnUploadError.set(extension.failOnUploadError)
             task.variantName.set(variant.name)
             task.buildConfiguration.set(buildConfig)
             task.endpoint.set(extension.endpoint)
@@ -1248,6 +1251,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             BundleUploadTask::class.java
         ) { task ->
             task.debug.set(extension.debug)
+            task.failOnUploadError.set(extension.failOnUploadError)
             task.variantName.set(variant.name)
             task.buildConfiguration.set(buildConfig)
             task.endpoint.set(extension.endpoint)

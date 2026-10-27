@@ -53,6 +53,14 @@ abstract class NativeUploadTask : DefaultTask() {
     @get:Input
     abstract val debug: Property<Boolean>
 
+    /**
+     * Fail the task when the upload does not complete. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.failOnUploadError] (default `false`: warn only).
+     */
+    @get:Input
+    @get:Optional
+    abstract val failOnUploadError: Property<Boolean>
+
     @get:Input
     abstract val variantName: Property<String>
 
@@ -260,6 +268,11 @@ abstract class NativeUploadTask : DefaultTask() {
             null
         }
 
+        // Set when the unstripped-libraries upload failed and fell through to the AGP sources: if none
+        // of those exists either, nothing was uploaded and failOnUploadError must still fire.
+        var dirUploadFailed = false
+        var agpSourceTried = false
+
         // Preferred source: the unstripped libraries, uploaded in place as a
         // directory (bugsee-cli >= 0.8.0). Independent of ndk.debugSymbolLevel.
         // Falls through to the AGP-produced sources below when unavailable.
@@ -299,7 +312,14 @@ abstract class NativeUploadTask : DefaultTask() {
                 // to the directory input continue to the AGP-produced sources:
                 // nothing usable (10), an unreadable directory or a CLI too old to
                 // take one (11), or a structural CLI failure.
-                if (result.success || !(result.shouldFallback || result.exitCode in DIRECTORY_INPUT_EXIT_CODES)) return
+                if (result.success || !(result.shouldFallback || result.exitCode in DIRECTORY_INPUT_EXIT_CODES)) {
+                    if (!result.success) {
+                        UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native libraries for variant ${variantName.get()}")
+                    }
+                    return
+                }
+                // Exit 10 is "nothing usable in the directory", not a failed upload.
+                dirUploadFailed = result.exitCode != 10
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
@@ -312,6 +332,7 @@ abstract class NativeUploadTask : DefaultTask() {
         if (intermediateSymbolsDir.exists()) {
             if (isDebug) logger.warn("Bugsee: Intermediate symbols folder found: ${intermediateSymbolsDir.path}")
 
+            agpSourceTried = true
             val zipTemp = File.createTempFile(buildUUID, ".zip")
             try {
                 ZipUtils.zipDirectory(intermediateSymbolsDir.absolutePath, zipTemp.absolutePath)
@@ -346,6 +367,7 @@ abstract class NativeUploadTask : DefaultTask() {
                 ?.forEach { outputDir ->
                 val symbolsZip = File(outputDir, "native-debug-symbols.zip")
                 if (symbolsZip.exists()) {
+                    agpSourceTried = true
                     if (isDebug) logger.warn("Bugsee: Native symbols file found: ${symbolsZip.path}")
                     uploadOneZip(
                         zip = symbolsZip,
@@ -368,6 +390,9 @@ abstract class NativeUploadTask : DefaultTask() {
         } else {
             logger.warn("Bugsee: NDK upload is enabled but no native symbols found for variant ${variantName.get()}. " +
                 "Ensure your project includes native code and that debugSymbolLevel is configured.")
+        }
+        if (dirUploadFailed && !agpSourceTried) {
+            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native libraries for variant ${variantName.get()}")
         }
     }
 
@@ -433,7 +458,10 @@ abstract class NativeUploadTask : DefaultTask() {
                         SymbolHashCache.put(cacheFile, cacheKey, hash)
                         return
                     }
-                    !cliResult.shouldFallback -> return // already logged
+                    !cliResult.shouldFallback -> { // already logged
+                        UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
+                        return
+                    }
                     else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
                 }
             }
@@ -461,6 +489,7 @@ abstract class NativeUploadTask : DefaultTask() {
             SymbolHashCache.put(cacheFile, cacheKey, hash)
         } else {
             logger.warn("Bugsee: the native symbols for variant ${variantName.get()} were not uploaded (see the warning above).")
+            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
         }
     }
 }

@@ -152,6 +152,22 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
     override val debug: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
+     * Fail the build when an upload to Bugsee does not complete (mapping, native symbols, build
+     * registration and artifact upload): a transport error (connection refused, DNS, timeout, TLS), an HTTP error status that
+     * persists after the bounded retry, or a server rejection such as an invalid app token.
+     *
+     * By default (`false`) the plugin only logs a warning and the build stays green. Turn this on in CI
+     * when a missing symbol or build upload must not go unnoticed. An upload that is skipped (no app token,
+     * nothing to upload) or whose symbols the server already has is not a failure. A failed auxiliary
+     * build-info blob (dependencies, timings) stays a warning with the built-in uploader and for the
+     * build-info-only upload; when size analysis uploads the artifact through `bugsee-cli upload build`
+     * (the default), any failure that command reports, including those blobs, counts.
+     *
+     * Default: `false`
+     */
+    override val failOnUploadError: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
      * NDK integration configuration block — gates the runtime
      * native-crash handler dependency and the per-variant debug-symbol
      * upload task. See [BugseeNdkExtension] for the option surface.

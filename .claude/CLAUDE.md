@@ -181,6 +181,7 @@ moves to the front. Wrappers (React Native) mirror the file lookup.
 bugsee {
     endpoint.set("https://api.bugsee.com")  // API endpoint
     debug.set(false)                         // Enable debug logging
+    failOnUploadError.set(false)             // Fail the build when an upload does not complete (default: warn only)
     ndk.set(false)                           // Enable NDK symbol upload
     instrumentationEnabled.set(true)         // Enable bytecode instrumentation
 

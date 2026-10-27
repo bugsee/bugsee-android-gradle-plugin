@@ -45,6 +45,7 @@ class PluginPropertiesApplierTest {
 
         assertEquals("https://api.bugsee.com", ext.endpoint.get())
         assertEquals(false, ext.debug.get())
+        assertEquals(false, ext.failOnUploadError.get())
         assertEquals(true, ext.optimizeExtensionsLoading.get())
         assertEquals(true, ext.sdkAutoLoad.get())
         assertEquals(true, ext.buildInfo.enabled.get())
@@ -73,6 +74,12 @@ class PluginPropertiesApplierTest {
         assertEquals(true, ext.debug.get())
         assertEquals(false, ext.optimizeExtensionsLoading.get())
         assertEquals(false, ext.buildInfo.enabled.get())
+    }
+
+    @Test
+    fun failOnUploadError_isSettableFromProperties() {
+        writeProperties("plugin.failOnUploadError=true")
+        assertEquals(true, setUpExtension().second.failOnUploadError.get())
     }
 
     // ── Precedence: DSL wins over properties (the critical one) ─────
