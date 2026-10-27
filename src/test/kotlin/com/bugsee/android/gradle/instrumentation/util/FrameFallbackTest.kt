@@ -365,17 +365,30 @@ class FrameFallbackTest {
             f.visitMaxs(0, 0)
             f.visitEnd()
         }
-        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "a", "(Ljava/net/URL;)V", null, null)
+        // Earlier method the lane instruments (Network): it adds the dispatcher's constants to the REAL pool.
+        val b = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "b", "(Lokhttp3/Call;)V", null, null)
+        b.visitCode()
+        b.visitVarInsn(Opcodes.ALOAD, 0)
+        b.visitMethodInsn(Opcodes.INVOKEINTERFACE, "okhttp3/Call", "execute", "()Lokhttp3/Response;", true)
+        b.visitInsn(Opcodes.POP)
+        b.visitInsn(Opcodes.RETURN)
+        b.visitMaxs(0, 0)
+        b.visitEnd()
+        // Later method (Prefs): needs constants the earlier one did not add.
+        val mv = cw.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "a", "(Landroid/content/SharedPreferences\$Editor;)V", null, null,
+        )
         mv.visitCode()
         mv.visitVarInsn(Opcodes.ALOAD, 0)
-        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/net/URL", "openStream", "()Ljava/io/InputStream;", false)
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "android/content/SharedPreferences\$Editor", "commit", "()Z", true)
         mv.visitInsn(Opcodes.POP)
         mv.visitInsn(Opcodes.RETURN)
         mv.visitMaxs(0, 0)
         mv.visitEnd()
-        // Top up so the dispatcher's new constants no longer fit.
+        // Top up the INPUT pool so that `a` fits on top of it alone, but not on top of what the lane
+        // already added for `b`. Only the trial's padding to the real pool's size sees the difference.
         var i = 0
-        while (cw.newUTF8("pad$i") < 0xFFFF - 2) i++
+        while (cw.newUTF8("pad$i") < POOL_TARGET) i++
         cw.visitEnd()
         val original = cw.toByteArray()
 
@@ -387,10 +400,15 @@ class FrameFallbackTest {
 
         val out = opDispatchWithFallback(original, "a.b.p")
 
-        assertFalse(String(out, Charsets.ISO_8859_1).contains("com/bugsee"))
         assertEquals(signature(insns(original, "a")), signature(insns(out, "a")))
         assertEquals(1, reports.size)
         assertTrue(reports[0], reports[0].contains("ClassTooLargeException"))
+        // The earlier method stayed instrumented.
+        assertTrue(String(out, Charsets.ISO_8859_1).contains("BugseeOperationDispatcher"))
+    }
+
+    private companion object {
+        const val POOL_TARGET = 65_515
     }
 
     @Test
