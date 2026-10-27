@@ -347,6 +347,52 @@ class FrameFallbackTest {
         assertTrue(String(out, Charsets.ISO_8859_1).contains("BugseeOperationDispatcher"))
     }
 
+    /**
+     * The pool-overflow case of the known limits: a method whose instrumented form would push the
+     * constant pool past 65,535 is reverted by the padded trial (`ClassTooLargeException` comes from
+     * the trial's `toByteArray`), not left to fail the real writer. Calls the lane installer directly,
+     * i.e. below the whole-class skip that `MinifiedClassSkip.shouldSkip` applies in a real build.
+     */
+    @Test
+    fun `op-dispatch - a method that would overflow the constant pool is left unmodified`() {
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "a/b/p", null, "java/lang/Object", null)
+        for (m in 0 until 4) {
+            val f = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "f$m", "()V", null, null)
+            f.visitCode()
+            repeat(7_900) { f.visitLdcInsn("s${m}_$it"); f.visitInsn(Opcodes.POP) }
+            f.visitInsn(Opcodes.RETURN)
+            f.visitMaxs(0, 0)
+            f.visitEnd()
+        }
+        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "a", "(Ljava/net/URL;)V", null, null)
+        mv.visitCode()
+        mv.visitVarInsn(Opcodes.ALOAD, 0)
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/net/URL", "openStream", "()Ljava/io/InputStream;", false)
+        mv.visitInsn(Opcodes.POP)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        // Top up so the dispatcher's new constants no longer fit.
+        var i = 0
+        while (cw.newUTF8("pad$i") < 0xFFFF - 2) i++
+        cw.visitEnd()
+        val original = cw.toByteArray()
+
+        try {
+            opDispatchPlain(original, "a.b.p")
+            fail("baseline: expected ClassTooLargeException")
+        } catch (expected: org.objectweb.asm.ClassTooLargeException) {
+        }
+
+        val out = opDispatchWithFallback(original, "a.b.p")
+
+        assertFalse(String(out, Charsets.ISO_8859_1).contains("com/bugsee"))
+        assertEquals(signature(insns(original, "a")), signature(insns(out, "a")))
+        assertEquals(1, reports.size)
+        assertTrue(reports[0], reports[0].contains("ClassTooLargeException"))
+    }
+
     @Test
     fun `startup lane - a kind-candidate method whose wrapped form cannot be written falls back to the original`() {
         val src = """

@@ -581,6 +581,11 @@ are short (an exclude disables **all** Bugsee instrumentation for what it matche
 bugsee { instrumentation { excludes.add("a.b") } }
 ```
 
+A whole class can be skipped too, with `Bugsee: a.b.big was left UNINSTRUMENTED: its constant pool
+has N of 65535 entries ...`: its constant pool is already within 4096 entries of the class-file
+limit, so adding instrumentation could fail the build with `ClassTooLargeException`. Again nothing
+needs doing; Bugsee captures nothing in that class.
+
 The other instrumentations still fail the build with an attributed `InstrumentationException`
 that names the class and suggests the same `excludes.add(...)`.
 

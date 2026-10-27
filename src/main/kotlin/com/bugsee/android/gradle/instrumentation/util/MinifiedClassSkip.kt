@@ -37,8 +37,15 @@ internal object MinifiedClassSkip {
 
     fun shouldSkip(nextClassVisitor: ClassVisitor): Boolean {
         val reader = findClassReader(nextClassVisitor) ?: return false
+        // Each check fails open on its own: one throwing must not disable the other.
+        val minified = try {
+            MinifiedClassDetector.isMinified(reader)
+        } catch (t: Throwable) {
+            false
+        }
+        if (minified) return true
         return try {
-            MinifiedClassDetector.isMinified(reader) || isPoolNearLimit(reader)
+            isPoolNearLimit(reader)
         } catch (t: Throwable) {
             false
         }

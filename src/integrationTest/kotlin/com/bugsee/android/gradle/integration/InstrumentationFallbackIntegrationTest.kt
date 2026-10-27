@@ -117,6 +117,7 @@ class InstrumentationFallbackIntegrationTest {
             .joinToString("\n") { String(it.readBytes(), Charsets.ISO_8859_1) }
         assertTrue("merged external dex not found in $dexDir", text.isNotEmpty())
         assertTrue("the too-large class must be in the dex", text.contains("La/b/e;"))
+        assertTrue("the skipped class must be in the dex", text.contains("La/b/big;"))
         assertTrue("the sibling class must be in the dex", text.contains("La/b/ok;"))
         assertTrue("the sibling must still be instrumented", text.contains("onPrefsOperationStart"))
     }
