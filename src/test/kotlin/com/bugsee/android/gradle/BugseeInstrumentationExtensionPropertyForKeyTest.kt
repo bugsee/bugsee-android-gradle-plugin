@@ -94,6 +94,10 @@ class BugseeInstrumentationExtensionPropertyForKeyTest {
         assertSame(extension.composeInput, extension.propertyForKey("composeInput"))
     }
 
+    @Test fun `composeInTests key resolves to composeInTests property`() {
+        assertSame(extension.composeInTests, extension.propertyForKey("composeInTests"))
+    }
+
     @Test fun `compose key resolves to compose property`() {
         assertSame(extension.compose, extension.propertyForKey("compose"))
     }
@@ -171,6 +175,7 @@ class BugseeInstrumentationExtensionPropertyForKeyTest {
             "compose",
             "composeSecure",
             "composeInput",
+            "composeInTests",
             "ktor",
             "cronet",
         )

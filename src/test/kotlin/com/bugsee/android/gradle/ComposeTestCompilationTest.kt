@@ -249,4 +249,29 @@ class ComposeTestCompilationTest {
         assertTrue(plugin.isApplicable(stub(p, "freeDeviceTest", siblings = siblings)))
         assertTrue(plugin.isApplicable(stub(p, "debug", siblings = siblings)))
     }
+
+    @Test
+    fun `composeInTests opts test compilations back in without touching production`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java).instrumentation.composeInTests.set(true)
+        val all = listOf("debug", "debugUnitTest", "releaseAndroidTest", "test", "debugTestFixtures")
+        all.forEach { assertTrue(plugin.isApplicable(stub(p, it, siblings = all)), "$it must be applicable") }
+    }
+
+    @Test
+    fun `composeInTests false keeps test compilations skipped`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java).instrumentation.composeInTests.set(false)
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
+
+    @Test
+    fun `composeInTests does not override disabled compose and composeSecure`() {
+        val (p, plugin) = appliedPlugin()
+        val instr = p.extensions.getByType(BugseePluginExtension::class.java).instrumentation
+        instr.composeInTests.set(true)
+        instr.compose.set(false)
+        instr.composeSecure.set(false)
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
 }

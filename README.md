@@ -292,6 +292,7 @@ declare the module yourself; the plugin warns otherwise.
 | `plugin.instrumentation.compose` | Boolean | `true` | Compose tag injection |
 | `plugin.instrumentation.composeSecure` | Boolean | `true` | Compose secure-field auto-detect |
 | `plugin.instrumentation.composeInput` | Boolean | `true` | |
+| `plugin.instrumentation.composeInTests` | Boolean | `false` | Also apply Compose tag/secure wrapping to test compilations (unit, instrumented, fixtures); off by default because the wraps can change test matchers |
 | `plugin.instrumentation.ktor` | Boolean | `true` | |
 | `plugin.instrumentation.cronet` | Boolean | `true` | |
 | `plugin.instrumentation.startupTier` | Enum (`OFF`, `MINIMAL`, `STANDARD`, `DETAILED`, `FULL`) | `STANDARD`¹ | Case-insensitive |

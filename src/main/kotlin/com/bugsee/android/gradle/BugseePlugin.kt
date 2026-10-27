@@ -1352,8 +1352,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             return false
         }
         // Test compilations keep their composables as written: tag/secure wraps add modifier and
-        // semantics nodes that change parent/child matchers in Compose tests (#56).
-        if (ComposeTestCompilation.isTest(kotlinCompilation)) return false
+        // semantics nodes that change parent/child matchers in Compose tests (#56). Opt back in
+        // with `instrumentation.composeInTests` (any scope enabling it keeps tests on, like the
+        // other project-level compiler-plugin switches).
+        if (ComposeTestCompilation.isTest(kotlinCompilation) &&
+            !isCompilerFeatureEnabled(settingsResolver(), INST_COMPOSE_IN_TESTS, default = false)
+        ) return false
 
         // Kotlin compiler-plugin APIs are not stable across Kotlin minor releases, and this
         // plugin is compiled against ONE of them. Loading it into a compiler whose extension
@@ -2031,8 +2035,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
          * (default) when nothing sets it. Without per-variant input this equals the former
          * `!property.isPresent || property.get()`.
          */
-        internal fun isCompilerFeatureEnabled(resolver: SettingsResolver, def: SettingDef<Boolean>): Boolean =
-            resolver.anyScopeValue(def) ?: true
+        internal fun isCompilerFeatureEnabled(
+            resolver: SettingsResolver,
+            def: SettingDef<Boolean>,
+            default: Boolean = true,
+        ): Boolean = resolver.anyScopeValue(def) ?: default
 
         // Settings read at project level (before variants exist).
         private val DEBUG = SettingDefinitions.booleanByKey("debug")
@@ -2043,6 +2050,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         private val INST_COMPOSE = SettingDefinitions.booleanByKey("instrumentation.compose")
         private val INST_COMPOSE_SECURE = SettingDefinitions.booleanByKey("instrumentation.composeSecure")
         private val INST_COMPOSE_INPUT = SettingDefinitions.booleanByKey("instrumentation.composeInput")
+        private val INST_COMPOSE_IN_TESTS = SettingDefinitions.booleanByKey("instrumentation.composeInTests")
         private val INST_OKHTTP = SettingDefinitions.booleanByKey("instrumentation.okhttp")
         private val INST_KTOR = SettingDefinitions.booleanByKey("instrumentation.ktor")
         private val INST_CRONET = SettingDefinitions.booleanByKey("instrumentation.cronet")
