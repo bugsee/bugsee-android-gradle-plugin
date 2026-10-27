@@ -36,6 +36,8 @@ class CatchingMethodVisitorTest {
             assertTrue(e.message!!.contains("com.example.Foo.bar()V"))
             // The actionable workaround is surfaced.
             assertTrue(e.message!!.contains("excludes.add(\"com.example.Foo\")"))
+            // The package-prefix form is offered for short (obfuscated) names.
+            assertTrue(e.message!!.contains("excludes.add(\"com.example\")"))
             // Original cause is preserved (not lost).
             assertSame(boom, e.cause)
         }

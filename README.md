@@ -494,6 +494,25 @@ the upload tasks skip with a single info-level message instead of failing or war
 | String | Trimmed; empty string is rejected (warn — see below) |
 | Enum | Case-insensitive match against the enum's constant names |
 
+## Troubleshooting: "was left UNINSTRUMENTED"
+
+```
+Bugsee: a.b.e.a(Ljava/net/URL;)V was left UNINSTRUMENTED: its instrumented bytecode could not be written (...)
+```
+
+A method (typically a very large one in an obfuscated third-party library) that cannot be
+written once instrumented is emitted unmodified instead of failing your build; Bugsee simply
+captures nothing in that method. The build is fine and nothing needs doing. To stop instrumenting
+the class on purpose, exclude it, or its whole package for obfuscated libraries whose class names
+are short (an exclude disables **all** Bugsee instrumentation for what it matches):
+
+```kotlin
+bugsee { instrumentation { excludes.add("a.b") } }
+```
+
+The other instrumentations still fail the build with an attributed `InstrumentationException`
+that names the class and suggests the same `excludes.add(...)`.
+
 ## Diagnostics
 
 The plugin logs `bugsee.properties` issues at the most-appropriate

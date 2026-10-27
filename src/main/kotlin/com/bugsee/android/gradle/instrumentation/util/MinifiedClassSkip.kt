@@ -37,7 +37,7 @@ internal object MinifiedClassSkip {
         }
     }
 
-    private fun findClassReader(visitor: ClassVisitor): ClassReader? = try {
+    internal fun findClassReader(visitor: ClassVisitor): ClassReader? = try {
         val writer = findClassWriter(visitor)
         writer?.let {
             val symbolTable = readField(it, ClassWriter::class.java, "symbolTable")
@@ -50,7 +50,7 @@ internal object MinifiedClassSkip {
     }
 
     /** Walks the delegate chain (`ClassVisitor.cv`) looking for the terminal writer. */
-    private fun findClassWriter(visitor: ClassVisitor): ClassWriter? {
+    internal fun findClassWriter(visitor: ClassVisitor): ClassWriter? {
         var current: ClassVisitor? = visitor
         // Bounded: a malformed or cyclic chain must not spin the build.
         repeat(MAX_CHAIN_DEPTH) {
