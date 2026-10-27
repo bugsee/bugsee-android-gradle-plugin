@@ -225,7 +225,7 @@ internal object SymbolUploader {
                 return@use false
             }
 
-            if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText)}")
+            if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText, appToken)}")
 
             // Parse the body defensively. The 2xx range covers
             // 201 Created / 202 Accepted / 204 No Content responses
@@ -305,7 +305,8 @@ internal object SymbolUploader {
      * query string is a write credential valid for days, so the query is dropped (at any depth) and
      * credential-looking fields are redacted; see [BundleUploader.redactBodyForLog].
      */
-    internal fun redactedResponseForLog(contentText: String): String = BundleUploader.redactBodyForLog(contentText)
+    internal fun redactedResponseForLog(contentText: String, appToken: String? = null): String =
+        BundleUploader.redactBodyForLog(contentText, appToken)
 
     /**
      * Whether the metadata POST's reply says the server already has this symbol
