@@ -338,6 +338,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // ExtensionsInit injection has, and that injection rewrites a method
             // (`initializeExtensions`) which only exists from a certain SDK release.
             // Same resolver as the auto-add, so gate and auto-added version cannot disagree.
+            // Known limits, shared with the auto-add and tracked in #114: the app's own
+            // configurations are read unscoped (a test-only newer pin can win), and a pin
+            // only on a dependency project's debug* edge is not seen (null => strip).
             val declaredSdkVersion = BugseeSdkVersion.parse(
                 BugseeSdkDeclarations.declaredCoreSdkVersion(project)
             )
