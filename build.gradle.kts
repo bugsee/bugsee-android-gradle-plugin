@@ -299,6 +299,9 @@ tasks.register<Test>("integrationTest") {
 //      `scripts/integration-test.sh` relies on this to make the CI lane real.
 // ============================================================================
 tasks.named<Test>("test") {
+    // BuildHeapPolicyTest reads gradle.properties; keep the test from going stale when it changes.
+    inputs.file("gradle.properties").withPropertyName("gradleProperties")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val cliBin: String? = System.getenv("BUGSEE_CLI_BIN")
         ?: (System.getProperty("bugsee.cli.bin"))
     if (cliBin != null) {
