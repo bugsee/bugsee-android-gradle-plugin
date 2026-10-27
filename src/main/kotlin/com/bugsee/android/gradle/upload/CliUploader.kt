@@ -328,8 +328,10 @@ internal object CliUploader {
         "\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\"\\s*:\\s*\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?",
         RegexOption.IGNORE_CASE,
     )
+    // tracing-subscriber may colour its output even on a pipe; escapes split `key=value` pairs.
+    private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;]*m")
     private val CLI_SECRET_QUERY_PAIR =
-        Regex("\\b(X-Amz-[A-Za-z-]+|Signature|Token|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
+        Regex("\\b(X-Amz-[A-Za-z-]+|[A-Za-z_-]{0,32}(?:Signature|Token)|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
 
     private const val CLI_OUTPUT_KEEP = 2000
 
@@ -351,14 +353,14 @@ internal object CliUploader {
      * XML elements; capped at 4096 chars) plus the CLI-specific patterns above, and is trimmed.
      */
     internal fun scrubCliOutput(text: String, appToken: String? = null): String =
-        BundleUploader.scrubForLog(headAndTail(text), appToken)
+        BundleUploader.scrubForLog(headAndTail(ANSI_ESCAPE.replace(text, "")), appToken)
             .replace(CLI_SECRET_FIELD) { "${it.groupValues[1]}: <redacted>" }
             .replace(CLI_SECRET_JSON_PAIR, "\"$1\":\"<redacted>\"")
             .replace(CLI_SECRET_QUERY_PAIR) { "${it.groupValues[1]}=<redacted>" }
             .trim()
 
     /**
-     * Forwards the CLI's captured stderr (warn) and stdout (lifecycle, its prior visibility) to [logger], scrubbed by [scrubCliOutput].
+     * Forwards the CLI's captured stderr (warn) and stdout (lifecycle) to [logger], scrubbed by [scrubCliOutput].
      * Called on success and failure alike; it has no effect on the exit-code / fallback decision.
      */
     private fun forwardCliOutput(

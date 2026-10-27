@@ -849,6 +849,11 @@ class CliUploaderTest {
         assertTrue(out.contains("Service Unavailable"), out)
     }
 
+    @Test fun `ANSI colour codes and underscored token keys do not defeat the scrubber`() {
+        val out = CliUploader.scrubCliOutput("\u001B[3mtoken\u001B[0m=ANSISECRET upload_token=UNDERSECRET")
+        assertFalse(out.contains("ANSISECRET") || out.contains("UNDERSECRET"), out)
+    }
+
     @Test fun `long output keeps head and tail so the final error line survives`() {
         val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
         val out = CliUploader.scrubCliOutput(text)
