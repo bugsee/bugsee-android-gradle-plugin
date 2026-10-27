@@ -177,6 +177,8 @@ internal object BundleUploader {
      *             (build-info-only). When `true` it's an error.
      * @param logger Gradle logger.
      * @param debug Whether debug logging is enabled.
+     * @return `false` when the artefact PUT (size-analysis path) did not complete; it is only logged
+     *         here, so the caller can apply `failOnUploadError`. Registration failures throw.
      */
     fun uploadData(
         file: File,
@@ -200,7 +202,7 @@ internal object BundleUploader {
         timingsJsonFile: File? = null,
         legacyBuildInfoGzip: Boolean = false,
         retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
-    ) {
+    ): Boolean {
         if (debug) logger.warn("Bugsee: Starting bundle upload. Body: $json")
 
         val httpPost = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken))
@@ -226,7 +228,8 @@ internal object BundleUploader {
             .setRetryHandler(StandardHttpRequestRetryHandler())
             .build()
 
-        httpClient.use { client ->
+        return httpClient.use { client ->
+            var artifactUploaded = true
             // The registration POST creates a record, so only the statuses that mean "not processed"
             // (429/502/503/504) are retried; see HttpRetry.
             val reply = HttpRetry.execute(client, httpPost, "bundle upload step 1", logger, retryPolicy, idempotent = false)
@@ -341,6 +344,7 @@ internal object BundleUploader {
 
                     if (putResponse.statusLine.statusCode !in 200..299) {
                         val body = EntityUtils.toString(putResponse.entity, "utf-8")
+                        artifactUploaded = false
                         logger.warn(
                             "Bugsee: bundle upload step 2 failed " +
                             "(status=${putResponse.statusLine.statusCode}): ${redactBodyForLog(body, appToken)}"
@@ -349,6 +353,7 @@ internal object BundleUploader {
                         logger.warn("Bugsee: Bundle upload complete.")
                     }
                 } catch (e: Exception) {
+                    artifactUploaded = false
                     logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 }
             }
@@ -377,6 +382,7 @@ internal object BundleUploader {
                 logger = logger,
                 debug = debug,
             )
+            artifactUploaded
         }
     }
 

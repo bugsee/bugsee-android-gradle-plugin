@@ -41,9 +41,10 @@ internal object HttpRetry {
     private fun isTransient(status: Int): Boolean = status == 429 || status in 500..599
 
     /**
-     * Statuses worth another attempt of a request that is NOT safe to repeat blindly (a POST that registers
-     * a build): throttling and the gateway codes, which mean the request never reached the application.
-     * A plain 500 may come after the server acted, so it is not repeated.
+     * Statuses worth another attempt of a request that is NOT idempotent on the wire (a POST that registers
+     * a build): throttling and the gateway codes (usually the request never reached the application). A
+     * plain 500 is not repeated. Repeating a registration is still safe because the server replaces a build
+     * registered under the same `uuid` rather than creating a second one.
      */
     private fun isGatewayTransient(status: Int): Boolean = status == 429 || status == 502 || status == 503 || status == 504
 

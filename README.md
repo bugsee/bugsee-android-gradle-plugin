@@ -186,9 +186,10 @@ dotted-path form as the DSL field names.
 `failOnUploadError` makes an upload that does not complete (mapping, native symbols or build
 registration: a network error, an HTTP error that persists after the plugin's bounded retry, or a
 rejection such as an invalid app token) fail the build. By default it only logs a warning and the build
-stays green. Skipped uploads (no app token, nothing to upload), symbols the server already has and
-failures of the auxiliary build-info blobs (dependencies, timings) never fail the build. It can be set
-per variant.
+stays green. Skipped uploads (no app token, nothing to upload) and symbols the server already have never
+fail the build. With the plugin's built-in uploader a failed auxiliary build-info blob (dependencies,
+timings) stays a warning; with `bugsee-cli` (the default) any failure the CLI reports for the build
+upload, including those blobs, fails it. It can be set per variant.
 
 ### NDK integration
 

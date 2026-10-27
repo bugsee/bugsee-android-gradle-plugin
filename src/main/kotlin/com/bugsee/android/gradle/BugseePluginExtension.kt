@@ -158,8 +158,9 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      *
      * By default (`false`) the plugin only logs a warning and the build stays green. Turn this on in CI
      * when a missing symbol or build upload must not go unnoticed. An upload that is skipped (no app token,
-     * nothing to upload) or whose symbols the server already has is not a failure, and neither is a failure
-     * of an auxiliary build-info blob (dependencies, timings), which stays a warning.
+     * nothing to upload) or whose symbols the server already has is not a failure. With the built-in
+     * uploader a failed auxiliary build-info blob (dependencies, timings) stays a warning; with `bugsee-cli`
+     * (the default) any failure the CLI reports for the build upload counts.
      *
      * Default: `false`
      */

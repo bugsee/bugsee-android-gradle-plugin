@@ -139,6 +139,9 @@ internal object BaselineClient {
                         build = if (build.isNull("build")) null else build.optString("build").takeIf { it.isNotEmpty() },
                     )
                 }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw e
         } catch (e: Exception) {
             logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
             null

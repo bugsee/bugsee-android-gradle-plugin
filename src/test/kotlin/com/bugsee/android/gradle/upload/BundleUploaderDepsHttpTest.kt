@@ -338,6 +338,24 @@ class BundleUploaderDepsHttpTest {
         // best-effort posture on the artefact branch survives the 5xx.
     }
 
+    @Test fun `uploadData reports a failed artefact PUT so failOnUploadError can act on it`() {
+        includeArtifactEndpoint = true
+        artifactPutStatus = 500
+        val artifact = freshArtifact()
+        val ok = BundleUploader.uploadData(
+            file = artifact, json = metadataJson(withDepsFlag = false), appToken = appToken,
+            endpoint = baseUrl, requestArtifactUpload = true, logger = logger, debug = false,
+        )
+        assertTrue(!ok, "a failed artefact PUT must be reported")
+
+        artifactPutStatus = 200
+        val ok2 = BundleUploader.uploadData(
+            file = artifact, json = metadataJson(withDepsFlag = false), appToken = appToken,
+            endpoint = baseUrl, requestArtifactUpload = true, logger = logger, debug = false,
+        )
+        assertTrue(ok2)
+    }
+
     // ── 2xx-with-error envelope on the build-info-only path ──────────
 
     @Test fun `build-info-only path throws on a 2xx ApplicationNotFoundError envelope`() {

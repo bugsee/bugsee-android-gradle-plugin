@@ -743,6 +743,9 @@ abstract class BundleUploadTask : DefaultTask() {
                             debug     = isDebug,
                         )
                         chunkedSucceeded = true
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
                     } catch (e: Exception) {
                         logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
@@ -750,7 +753,7 @@ abstract class BundleUploadTask : DefaultTask() {
 
                 if (!chunkedSucceeded) {
                     try {
-                        BundleUploader.uploadData(
+                        val artifactUploaded = BundleUploader.uploadData(
                             file = uploadZip.value,
                             json = json,
                             appToken = appToken,
@@ -766,6 +769,10 @@ abstract class BundleUploadTask : DefaultTask() {
                             logger = logger,
                             debug = isDebug
                         )
+                        if (!artifactUploaded) uploadFailed = true
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
                     } catch (e: Exception) {
                         logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                         uploadFailed = true
