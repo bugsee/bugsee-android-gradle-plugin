@@ -340,9 +340,16 @@ internal object BundleUploader {
                     )
                     val httpPut = HttpPut(presignedEndpoint)
                     httpPut.entity = FileEntity(file)
-                    // A PUT to a fixed presigned URL is safe to repeat (FileEntity is repeatable). The client's
-                    // own handler also retries I/O errors that happen before the request is sent.
-                    val putReply = HttpRetry.execute(client, httpPut, "bundle upload step 2", logger, retryPolicy)
+                    // A PUT to a fixed presigned URL is safe to repeat (FileEntity is repeatable). HttpRetry owns
+                    // the retries, so it runs on a client without automatic retries (the shared one would
+                    // multiply the attempts of a large body).
+                    val putReply = HttpClients.custom()
+                        .useSystemProperties()
+                        .setDefaultRequestConfig(requestConfig)
+                        .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
+                        .disableAutomaticRetries()
+                        .build()
+                        .use { putClient -> HttpRetry.execute(putClient, httpPut, "bundle upload step 2", logger, retryPolicy) }
 
                     if (putReply.status !in 200..299) {
                         artifactUploaded = false

@@ -318,7 +318,8 @@ abstract class NativeUploadTask : DefaultTask() {
                     }
                     return
                 }
-                dirUploadFailed = true
+                // Exit 10 is "nothing usable in the directory", not a failed upload.
+                dirUploadFailed = result.exitCode != 10
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."

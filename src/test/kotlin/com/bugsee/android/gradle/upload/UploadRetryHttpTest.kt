@@ -119,6 +119,13 @@ class UploadRetryHttpTest {
         assertEquals(1, hits.get())
     }
 
+    @Test fun `a refused connection on the registration POST is retried since nothing was sent`() {
+        val closed = java.net.ServerSocket(0).use { "http://127.0.0.1:${it.localPort}" }
+        val logger = RecordingLogger()
+        assertFailsWith<java.io.IOException> { register(logger, endpoint = closed) }
+        assertEquals(2, logger.warnings.count { it.contains("retrying") })
+    }
+
     @Test fun `4xx on the registration POST is not retried`() {
         script("/v2/apps/$appToken/builds", listOf(403, 200), okBuild)
         assertFailsWith<RuntimeException> { register() }

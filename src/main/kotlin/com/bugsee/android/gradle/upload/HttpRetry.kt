@@ -61,7 +61,8 @@ internal object HttpRetry {
      * client must have its own automatic retries disabled, since this loop owns all retries.
      * [idempotent] `false` (a POST that creates a record): only 429/502/503 are retried, and an I/O
      * error is thrown as is, so the client's own handler decides about it (it does not resend a request
-     * that was already fully sent).
+     * that was already fully sent), except a failed connect (refused or timed out), which provably sent
+     * nothing and is retried like an idempotent request.
      */
     fun execute(
         client: CloseableHttpClient,
@@ -88,7 +89,9 @@ internal object HttpRetry {
                 if (elapsedMs() + waitMs >= policy.budgetMs) return reply
                 logger.warn("Bugsee: $step returned status ${reply.status}, retrying (attempt $attempt of $MAX_ATTEMPTS)")
             } catch (e: IOException) {
-                if (!idempotent || last || isInterruption(e) || e is SocketTimeoutException || elapsedMs() + waitMs >= policy.budgetMs) throw e
+                // A refused or timed-out connect happens before any byte is sent, so even a POST may be repeated.
+                val notSent = e is java.net.ConnectException || e is ConnectTimeoutException
+                if ((!idempotent && !notSent) || last || isInterruption(e) || e is SocketTimeoutException || elapsedMs() + waitMs >= policy.budgetMs) throw e
                 logger.warn("Bugsee: $step failed (${e.javaClass.simpleName}), retrying (attempt $attempt of $MAX_ATTEMPTS)")
             }
             if (waitMs > 0) {
