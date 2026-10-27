@@ -286,4 +286,21 @@ class ComposeTestCompilationTest {
         )
         assertTrue(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
     }
+
+    @Test
+    fun `composeInTests set in one variant block applies to every test compilation`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java)
+            .variant("release") { it.instrumentation.composeInTests.set(true) }
+        val all = listOf("debug", "debugUnitTest")
+        assertTrue(plugin.isApplicable(stub(p, "debugUnitTest", siblings = all)))
+    }
+
+    @Test
+    fun `composeInTests false in a variant block falls back to the off default`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java)
+            .variant("release") { it.instrumentation.composeInTests.set(false) }
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
 }
