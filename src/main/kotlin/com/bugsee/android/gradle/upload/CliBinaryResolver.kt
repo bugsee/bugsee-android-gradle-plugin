@@ -250,7 +250,7 @@ internal object CliBinaryResolver {
         } catch (e: Throwable) {
             if (isInterrupt(e)) throw cancelled(e)
             logger.warn(
-                "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
+                "Bugsee: failed to download bugsee-cli v$version for $triple: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
                     "using the Kotlin uploader.",
             )
             null
@@ -446,7 +446,7 @@ internal object CliBinaryResolver {
             // Self-update is strictly best-effort — never let it break
             // resolution. DEBUG only so quiet/offline builds stay quiet.
             if (debug) {
-                logger.warn("Bugsee: bugsee-cli self-update check failed: ${e.message}")
+                logger.warn("Bugsee: bugsee-cli self-update check failed: ${BundleUploader.scrubForLog(e.message ?: "")}")
             }
         }
         return binary

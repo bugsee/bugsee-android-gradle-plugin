@@ -302,19 +302,10 @@ internal object SymbolUploader {
 
     /**
      * The metadata POST's reply as it is safe to log: the `endpoint` field is a presigned PUT URL whose
-     * query string is a write credential valid for days, so only the query is dropped and every other field
-     * stays visible. A body that is not a JSON object is reduced to its length: a proxy or CDN page can echo
-     * anything, including a presigned URL.
+     * query string is a write credential valid for days, so the query is dropped (at any depth) and
+     * credential-looking fields are redacted; see [BundleUploader.redactBodyForLog].
      */
-    internal fun redactedResponseForLog(contentText: String): String = try {
-        val json = JSONObject(contentText)
-        if (json.has("endpoint")) {
-            json.put("endpoint", BundleUploader.redactPresignedUrl(json.optString("endpoint", "")))
-        }
-        json.toString()
-    } catch (e: Exception) {
-        "<not a JSON object, ${contentText.length} chars>"
-    }
+    internal fun redactedResponseForLog(contentText: String): String = BundleUploader.redactBodyForLog(contentText)
 
     /**
      * Whether the metadata POST's reply says the server already has this symbol

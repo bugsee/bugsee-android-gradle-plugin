@@ -62,4 +62,39 @@ class RedactBodyForLogTest {
         )
         assertFalse(out.contains("S1") || out.contains("S3") || out.contains("AKIA2") || out.contains(token), out)
     }
+
+    @Test fun `top-level JSON arrays keep their redacted structure`() {
+        val out = BundleUploader.redactBodyForLog("""[{"signature":"S1","msg":"hi"}]""")
+        assertTrue(out.contains("hi") && !out.contains("S1"), out)
+    }
+
+    @Test fun `JSON keys are scrubbed too`() {
+        val out = BundleUploader.redactBodyForLog("""{"https://h/k?X-Amz-Signature=KEYSIG":"v"}""")
+        assertFalse(out.contains("KEYSIG"), out)
+    }
+
+    @Test fun `Bearer tokens and secret header lines and XML elements in strings are scrubbed`() {
+        val out = BundleUploader.redactBodyForLog(
+            """{"a":"Authorization: Bearer BTOKEN1","b":"use Bearer BTOKEN2 now","c":"<StringToSign>STS9</StringToSign>"}""",
+        )
+        assertFalse(out.contains("BTOKEN") || out.contains("STS9"), out)
+    }
+
+    @Test fun `short plain text and HTML title stay diagnosable`() {
+        assertEquals("<non-JSON body, 24 chars: Request Entity Too Large>", BundleUploader.redactBodyForLog("Request Entity Too Large"))
+        val html = "<html><head><title>502 Bad Gateway</title></head></html>"
+        assertTrue(BundleUploader.redactBodyForLog(html).contains("title=502 Bad Gateway"))
+    }
+
+    @Test fun `plain text prefix is scrubbed`() {
+        val out = BundleUploader.redactBodyForLog("denied: Authorization: Bearer PLAINSECRET")
+        assertFalse(out.contains("PLAINSECRET"), out)
+    }
+
+    @Test fun `huge runs of question marks do not stall the scrubber`() {
+        val start = System.nanoTime()
+        BundleUploader.scrubForLog("?".repeat(1_000_000))
+        BundleUploader.redactBodyForLog("""{"m":"${"?".repeat(1_000_000)}"}""")
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 5_000)
+    }
 }
