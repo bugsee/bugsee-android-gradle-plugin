@@ -347,6 +347,70 @@ class FrameFallbackTest {
         assertTrue(String(out, Charsets.ISO_8859_1).contains("BugseeOperationDispatcher"))
     }
 
+    /**
+     * The pool-overflow case of the known limits: a method whose instrumented form would push the
+     * constant pool past 65,535 is reverted by the padded trial (`ClassTooLargeException` comes from
+     * the trial's `toByteArray`), not left to fail the real writer. Calls the lane installer directly,
+     * i.e. below the whole-class skip that `MinifiedClassSkip.shouldSkip` applies in a real build.
+     */
+    @Test
+    fun `op-dispatch - a method that would overflow the constant pool is left unmodified`() {
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "a/b/p", null, "java/lang/Object", null)
+        for (m in 0 until 4) {
+            val f = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "f$m", "()V", null, null)
+            f.visitCode()
+            repeat(7_900) { f.visitLdcInsn("s${m}_$it"); f.visitInsn(Opcodes.POP) }
+            f.visitInsn(Opcodes.RETURN)
+            f.visitMaxs(0, 0)
+            f.visitEnd()
+        }
+        // Earlier method the lane instruments (Network): it adds the dispatcher's constants to the REAL pool.
+        val b = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "b", "(Lokhttp3/Call;)V", null, null)
+        b.visitCode()
+        b.visitVarInsn(Opcodes.ALOAD, 0)
+        b.visitMethodInsn(Opcodes.INVOKEINTERFACE, "okhttp3/Call", "execute", "()Lokhttp3/Response;", true)
+        b.visitInsn(Opcodes.POP)
+        b.visitInsn(Opcodes.RETURN)
+        b.visitMaxs(0, 0)
+        b.visitEnd()
+        // Later method (Prefs): needs constants the earlier one did not add.
+        val mv = cw.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "a", "(Landroid/content/SharedPreferences\$Editor;)V", null, null,
+        )
+        mv.visitCode()
+        mv.visitVarInsn(Opcodes.ALOAD, 0)
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "android/content/SharedPreferences\$Editor", "commit", "()Z", true)
+        mv.visitInsn(Opcodes.POP)
+        mv.visitInsn(Opcodes.RETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        // Top up the INPUT pool so that `a` fits on top of it alone, but not on top of what the lane
+        // already added for `b`. Only the trial's padding to the real pool's size sees the difference.
+        var i = 0
+        while (cw.newUTF8("pad$i") < POOL_TARGET) i++
+        cw.visitEnd()
+        val original = cw.toByteArray()
+
+        try {
+            opDispatchPlain(original, "a.b.p")
+            fail("baseline: expected ClassTooLargeException")
+        } catch (expected: org.objectweb.asm.ClassTooLargeException) {
+        }
+
+        val out = opDispatchWithFallback(original, "a.b.p")
+
+        assertEquals(signature(insns(original, "a")), signature(insns(out, "a")))
+        assertEquals(1, reports.size)
+        assertTrue(reports[0], reports[0].contains("ClassTooLargeException"))
+        // The earlier method stayed instrumented.
+        assertTrue(String(out, Charsets.ISO_8859_1).contains("BugseeOperationDispatcher"))
+    }
+
+    private companion object {
+        const val POOL_TARGET = 65_515
+    }
+
     @Test
     fun `startup lane - a kind-candidate method whose wrapped form cannot be written falls back to the original`() {
         val src = """
