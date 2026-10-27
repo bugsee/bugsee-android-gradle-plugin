@@ -74,8 +74,10 @@ jobs:
 
       # Compile the plugin only: the tests and the fixture apps' AGP builds are
       # not part of the scanned code and are covered by pr.yml. The CodeQL tracer
-      # adds heap pressure: the default Kotlin daemon heap ran out of memory in
-      # :compose-compiler-plugin:compileKotlin ("GC overhead limit exceeded").
+      # adds heap pressure ("GC overhead limit exceeded" in
+      # :compose-compiler-plugin:compileKotlin at the old default heap). The heap
+      # comes from org.gradle.jvmargs in gradle.properties (compilation is
+      # in-process here); do not add a per-workflow -Xmx.
       # The Kotlin extractor only sees compilers started inside the traced
       # process tree, so compile in-process (not in the long-lived Kotlin
       # daemon) and force every task to run (no build cache, no up-to-date skip),
@@ -86,7 +88,6 @@ jobs:
           ./gradlew --no-daemon --no-build-cache --rerun-tasks
           -Pkotlin.compiler.execution.strategy=in-process
           assemble -x test
-          -Dorg.gradle.jvmargs=-Xmx3g
 
       # Fail loudly instead of publishing an empty Kotlin database: the
       # extractor copies every source file it extracted into its source archive.

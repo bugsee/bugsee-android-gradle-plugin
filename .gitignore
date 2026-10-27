@@ -24,3 +24,6 @@ node-compile-cache/
 .kotlin/
 # Per-developer Claude Code settings (shared guidance lives in .claude/CLAUDE.md and .claude/agents/)
 .claude/settings.local.json
+
+# JVM heap dumps (HeapDumpOnOutOfMemoryError)
+*.hprof
