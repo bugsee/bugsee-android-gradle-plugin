@@ -1109,6 +1109,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         if (!hasComposeDependency(project)) {
             return false
         }
+        // Test compilations keep their composables as written: tag/secure wraps add modifier and
+        // semantics nodes that change parent/child matchers in Compose tests (#56).
+        if (ComposeTestCompilation.isTest(kotlinCompilation)) return false
 
         // Kotlin compiler-plugin APIs are not stable across Kotlin minor releases, and this
         // plugin is compiled against ONE of them. Loading it into a compiler whose extension
