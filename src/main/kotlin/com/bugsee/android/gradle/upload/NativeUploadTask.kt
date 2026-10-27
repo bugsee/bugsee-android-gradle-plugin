@@ -448,6 +448,8 @@ abstract class NativeUploadTask : DefaultTask() {
         )
         if (success) {
             SymbolHashCache.put(cacheFile, cacheKey, hash)
+        } else {
+            logger.warn("Bugsee: the native symbols for variant ${variantName.get()} were not uploaded (see the warning above).")
         }
     }
 }

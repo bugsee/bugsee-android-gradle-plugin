@@ -339,7 +339,7 @@ abstract class MappingUploadTask : DefaultTask() {
             }.toString()
 
             // Upload
-            SymbolUploader.uploadData(
+            val uploaded = SymbolUploader.uploadData(
                 file = zipTemp,
                 json = json,
                 appToken = appToken,
@@ -348,6 +348,9 @@ abstract class MappingUploadTask : DefaultTask() {
                 debug = isDebug,
                 uploaderTag = kotlinFallbackTag,
             )
+            if (!uploaded) {
+                logger.warn("Bugsee: the mapping for variant ${variantName.get()} was not uploaded (see the warning above).")
+            }
         } finally {
             zipTemp.delete()
         }
