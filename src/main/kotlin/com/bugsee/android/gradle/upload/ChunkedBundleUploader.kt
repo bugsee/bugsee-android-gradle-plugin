@@ -275,7 +275,7 @@ internal object ChunkedBundleUploader {
             // omits a charset on its application/json Content-Type).
             val body = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
             if (response.statusLine.statusCode !in 200..299) {
-                throw RuntimeException("chunk-options failed: ${response.statusLine} $body")
+                throw RuntimeException("chunk-options failed: ${response.statusLine} ${BundleUploader.redactBodyForLog(body, appToken)}")
             }
             return ApiEndpoint.unwrapResult(JSONObject(body))
         }
@@ -293,7 +293,7 @@ internal object ChunkedBundleUploader {
         http.execute(post).use { response ->
             val responseBody = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
             if (response.statusLine.statusCode !in 200..299) {
-                throw RuntimeException("chunks/check failed: ${response.statusLine} $responseBody")
+                throw RuntimeException("chunks/check failed: ${response.statusLine} ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
             }
             return ApiEndpoint.unwrapResult(JSONObject(responseBody))
         }
@@ -341,9 +341,9 @@ internal object ChunkedBundleUploader {
                     // 4xx is permanent (auth, expired URL, bad signature);
                     // retrying won't help and just wastes bytes.
                     if (status in 400..499) {
-                        throw RuntimeException("chunk PUT failed (status=$status): $body")
+                        throw RuntimeException("chunk PUT failed (status=$status): ${BundleUploader.redactBodyForLog(body)}")
                     }
-                    throw IOException("chunk PUT status=$status: $body")
+                    throw IOException("chunk PUT status=$status: ${BundleUploader.redactBodyForLog(body)}")
                 }
             } catch (e: IOException) {
                 lastError = e
@@ -372,7 +372,7 @@ internal object ChunkedBundleUploader {
         http.execute(post).use { response ->
             val responseBody = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
             if (response.statusLine.statusCode !in 200..299) {
-                throw RuntimeException("/builds/chunked failed: ${response.statusLine} $responseBody")
+                throw RuntimeException("/builds/chunked failed: ${response.statusLine} ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
             }
             val payload = ApiEndpoint.unwrapResult(JSONObject(responseBody))
             val buildId = if (payload.has("build_id")) payload.optString("build_id", "") else ""
@@ -381,7 +381,7 @@ internal object ChunkedBundleUploader {
                 // submission but didn't tell us what to key on — the
                 // worker pipeline is effectively off the rails. Fail
                 // loud so the caller falls back to single-PUT.
-                throw RuntimeException("/builds/chunked returned 2xx without build_id: $responseBody")
+                throw RuntimeException("/builds/chunked returned 2xx without build_id: ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
             }
             // Optional auxiliary URLs. Empty when the caller didn't
             // ask for them (via `request_*_upload` flags inside

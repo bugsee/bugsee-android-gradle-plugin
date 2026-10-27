@@ -227,6 +227,28 @@ class SymbolUploaderHttpTest {
         assertTrue(logger.warnMessages.any { it.contains("Bugsee upload failed") }, "must still warn; got: ${logger.warnMessages}")
     }
 
+    @Test fun `a failed PUT does not echo the S3 error body's signature fields into the warning`() {
+        server.setPostBody("""{"endpoint":"${server.baseUrl}/presigned/blob"}""")
+        server.setPutStatus(403)
+        server.setPutBody(
+            "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIASECRETKEYID</AWSAccessKeyId>" +
+                "<StringToSign>SECRETSTRINGTOSIGN</StringToSign><SignatureProvided>SECRETSIG</SignatureProvided></Error>",
+        )
+        assertFalse(upload())
+        val all = logger.warnMessages.joinToString("\n")
+        assertTrue(all.contains("status=403") && all.contains("SignatureDoesNotMatch"), "got: $all")
+        assertFalse(all.contains("SECRET") || all.contains("AKIA"), "got: $all")
+    }
+
+    @Test fun `a failed POST does not echo credentials from the response body`() {
+        server.setPostStatus(400)
+        server.setPostBody("""{"error":"bad","signature":"SECRETSIG","detail":"see http://x/y?X-Amz-Signature=SECRETSIG2 for $appToken"}""")
+        assertFalse(upload())
+        val all = logger.warnMessages.joinToString("\n")
+        assertTrue(all.contains("status=400") && all.contains("bad"), "got: $all")
+        assertFalse(all.contains("SECRET") || all.contains(appToken), "got: $all")
+    }
+
     @Test fun `the info-level failure details do not leak the app token or a signature`() {
         // A configured endpoint with a space makes HttpPost throw IllegalArgumentException that echoes the URL.
         val ok = SymbolUploader.uploadData(

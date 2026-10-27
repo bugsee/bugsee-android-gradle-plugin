@@ -250,7 +250,7 @@ internal object CliBinaryResolver {
         } catch (e: Throwable) {
             if (isInterrupt(e)) throw cancelled(e)
             logger.warn(
-                "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
+                "Bugsee: failed to download bugsee-cli v$version for $triple: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
                     "using the Kotlin uploader.",
             )
             null
@@ -446,7 +446,7 @@ internal object CliBinaryResolver {
             // Self-update is strictly best-effort — never let it break
             // resolution. DEBUG only so quiet/offline builds stay quiet.
             if (debug) {
-                logger.warn("Bugsee: bugsee-cli self-update check failed: ${e.message}")
+                logger.warn("Bugsee: bugsee-cli self-update check failed: ${BundleUploader.scrubForLog(e.message ?: "")}")
             }
         }
         return binary
@@ -643,7 +643,18 @@ internal object CliBinaryResolver {
         conn.instanceFollowRedirects = true
         conn.requestMethod = "GET"
         if (conn.responseCode !in 200..299) {
-            val body = conn.errorStream?.bufferedReader()?.readText()?.take(200).orEmpty()
+            // Read a bounded prefix only: an error page can be arbitrarily large.
+            val raw = conn.errorStream?.bufferedReader()?.use { r ->
+                val buf = CharArray(4096)
+                var len = 0
+                while (len < buf.size) {
+                    val n = r.read(buf, len, buf.size - len)
+                    if (n < 0) break
+                    len += n
+                }
+                String(buf, 0, len)
+            }
+            val body = BundleUploader.redactBodyForLog(raw)
             throw IOException("GET $url returned ${conn.responseCode}: $body")
         }
         return conn

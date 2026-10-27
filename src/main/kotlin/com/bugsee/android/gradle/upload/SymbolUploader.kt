@@ -214,7 +214,7 @@ internal object SymbolUploader {
             // 200..299 range; this aligns the two.
             if (statusCode !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$statusCode): ${reply.body.orEmpty()}",
+                    "Bugsee upload failed (status=$statusCode): ${BundleUploader.redactBodyForLog(reply.body, appToken)}",
                 )
                 return@use false
             }
@@ -225,7 +225,7 @@ internal object SymbolUploader {
                 return@use false
             }
 
-            if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText)}")
+            if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText, appToken)}")
 
             // Parse the body defensively. The 2xx range covers
             // 201 Created / 202 Accepted / 204 No Content responses
@@ -247,7 +247,7 @@ internal object SymbolUploader {
             } catch (e: Exception) {
                 logger.warn(
                     "Bugsee upload failed: response body is not valid JSON " +
-                        "(status=$statusCode, ${contentText.length} chars): ${e.message}",
+                        "(status=$statusCode, ${contentText.length} chars)",
                 )
                 return@use false
             }
@@ -267,7 +267,7 @@ internal object SymbolUploader {
                     if (errorType == "ApplicationNotFoundError") {
                         logger.warn("App token is invalid: ${BundleUploader.maskAppToken(appToken)}")
                     } else {
-                        logger.warn("Bugsee upload failed with error: $error")
+                        logger.warn("Bugsee upload failed with error: ${BundleUploader.redactBodyForLog(error.toString(), appToken)}")
                     }
                 } else {
                     logger.warn("Bugsee upload failed: null endpoint")
@@ -290,7 +290,7 @@ internal object SymbolUploader {
             val putStatus = putReply.status
             if (putStatus !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$putStatus): ${putReply.body.orEmpty()}",
+                    "Bugsee upload failed (status=$putStatus): ${BundleUploader.redactBodyForLog(putReply.body, appToken)}",
                 )
                 return@use false
             }
@@ -302,19 +302,11 @@ internal object SymbolUploader {
 
     /**
      * The metadata POST's reply as it is safe to log: the `endpoint` field is a presigned PUT URL whose
-     * query string is a write credential valid for days, so only the query is dropped and every other field
-     * stays visible. A body that is not a JSON object is reduced to its length: a proxy or CDN page can echo
-     * anything, including a presigned URL.
+     * query string is a write credential valid for days, so the query is dropped (at any depth) and
+     * credential-looking fields are redacted; see [BundleUploader.redactBodyForLog].
      */
-    internal fun redactedResponseForLog(contentText: String): String = try {
-        val json = JSONObject(contentText)
-        if (json.has("endpoint")) {
-            json.put("endpoint", BundleUploader.redactPresignedUrl(json.optString("endpoint", "")))
-        }
-        json.toString()
-    } catch (e: Exception) {
-        "<not a JSON object, ${contentText.length} chars>"
-    }
+    internal fun redactedResponseForLog(contentText: String, appToken: String? = null): String =
+        BundleUploader.redactBodyForLog(contentText, appToken)
 
     /**
      * Whether the metadata POST's reply says the server already has this symbol

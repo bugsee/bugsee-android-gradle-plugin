@@ -70,7 +70,7 @@ internal object BaselineClient {
                 .build()
                 .toASCIIString()
         } catch (e: Exception) {
-            logger.warn("Bugsee: size-check baseline URL build failed (${e.message}); skipping")
+            logger.warn("Bugsee: size-check baseline URL build failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping")
             return null
         }
 
@@ -99,7 +99,7 @@ internal object BaselineClient {
                     if (statusCode !in 200..299) {
                         logger.warn(
                             "Bugsee: size-check baseline lookup returned $statusCode " +
-                                "(${body.take(200)}); skipping check"
+                                "(${BundleUploader.redactBodyForLog(body, appToken)}); skipping check"
                         )
                         return@use null
                     }
@@ -107,7 +107,7 @@ internal object BaselineClient {
                     val payload = try {
                         ApiEndpoint.unwrapResult(JSONObject(body))
                     } catch (e: Exception) {
-                        logger.warn("Bugsee: size-check baseline returned non-JSON; skipping (${body.take(200)})")
+                        logger.warn("Bugsee: size-check baseline returned non-JSON; skipping (${BundleUploader.redactBodyForLog(body, appToken)})")
                         return@use null
                     }
 
@@ -140,7 +140,7 @@ internal object BaselineClient {
                     )
                 }
         } catch (e: Exception) {
-            logger.warn("Bugsee: size-check baseline lookup failed (${e.message}); skipping check")
+            logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
             null
         }
     }

@@ -57,6 +57,85 @@ internal object BundleUploader {
         return if (q >= 0) url.substring(0, q) + "?…<redacted>" else url
     }
 
+    private const val MAX_LOGGED_BODY_CHARS = 500
+    private const val MAX_SCRUBBED_TEXT_CHARS = 4096
+    private const val MAX_PARSED_BODY_CHARS = 65_536
+    private const val MAX_PLAIN_TEXT_CHARS = 120
+
+    // `?` is excluded from the character classes so a run of `?` cannot be rescanned per position (O(n^2)).
+    private val QUERY_WITH_PARAMS = Regex("\\?[^\\s\"'<>?]*=[^\\s\"'<>?]*")
+    private val SENSITIVE_JSON_KEY = Regex("signature|secret|token|credential|authoriz|password|x-amz|key|stringtosign|canonicalrequest|policy", RegexOption.IGNORE_CASE)
+    private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
+    private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
+    private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
+    private val SECRET_XML_TAG = Regex("<(StringToSign|SignatureProvided|AWSAccessKeyId|CanonicalRequest|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
+    private val XML_ERROR_CODE = Regex("<Code>([A-Za-z0-9_.\\-]{1,64})</Code>")
+    private val HTML_TITLE = Regex("<title>([^<]{1,100})</title>", RegexOption.IGNORE_CASE)
+
+    /**
+     * Mask [appToken] and drop credentials from free text such as an exception message or a JSON string
+     * value: `?name=value` query strings (a presigned URL's query is a write credential), SigV4-style
+     * `Signature=`/`Credential=` pairs, `Bearer`/`Basic` tokens, `Authorization`/`Cookie`/`X-Amz-*` header
+     * lines and S3 secret XML elements (StringToSign, ...). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
+     */
+    internal fun scrubForLog(text: String, appToken: String? = null): String {
+        // Mask first: truncating first could cut the token in half so the exact match no longer fires.
+        val masked = if (!appToken.isNullOrEmpty()) text.replace(appToken, maskAppToken(appToken)) else text
+        val unxml = masked.replace(SECRET_XML_TAG, "<$1><redacted></$1>")
+        val bounded = if (unxml.length > MAX_SCRUBBED_TEXT_CHARS) unxml.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else unxml
+        return bounded
+            .replace(QUERY_WITH_PARAMS, "?<redacted>")
+            .replace(SIGV4_PAIR, "$1=<redacted>")
+            .replace(BEARER, "$1 <redacted>")
+            .replace(SECRET_HEADER, "$1: <redacted>")
+    }
+
+    /**
+     * Log-safe rendering of an HTTP response body from a failed upload step. Raw bodies can echo
+     * credentials: an S3 `SignatureDoesNotMatch` XML body carries the signature, string-to-sign and access
+     * key id, and a proxy page can echo the request URL with its presigned query.
+     *
+     *  - a JSON object or array keeps its structure: values under credential-looking keys (signature,
+     *    secret, token, ...) are replaced, keys and string values go through [scrubForLog];
+     *  - an HTML/XML body is reduced to its length plus the S3-style `<Code>` or HTML `<title>` when present;
+     *  - plain text (no markup) keeps a short [scrubForLog]ged prefix, so gateway errors such as
+     *    "Request Entity Too Large" stay diagnosable;
+     *  - the result is capped at [MAX_LOGGED_BODY_CHARS].
+     */
+    internal fun redactBodyForLog(body: String?, appToken: String? = null): String {
+        if (body.isNullOrBlank()) return ""
+        fun walk(value: Any?): Any? = when (value) {
+            is org.json.JSONObject -> org.json.JSONObject().also { out ->
+                for (key in value.keySet()) {
+                    out.put(
+                        scrubForLog(key, appToken),
+                        if (SENSITIVE_JSON_KEY.containsMatchIn(key)) "<redacted>" else walk(value.opt(key)),
+                    )
+                }
+            }
+            is org.json.JSONArray -> org.json.JSONArray().also { out ->
+                for (i in 0 until value.length()) out.put(walk(value.opt(i)))
+            }
+            is String -> scrubForLog(value, appToken)
+            else -> value
+        }
+        val rendered = try {
+            if (body.length > MAX_PARSED_BODY_CHARS) throw IllegalArgumentException("too large to parse")
+            val trimmed = body.trimStart()
+            val json: Any = if (trimmed.startsWith("[")) org.json.JSONArray(trimmed) else org.json.JSONObject(trimmed)
+            walk(json).toString()
+        } catch (e: Exception) {
+            val code = XML_ERROR_CODE.find(body)?.groupValues?.get(1)
+            val title = HTML_TITLE.find(body)?.groupValues?.get(1)?.trim()
+            val plain = if ('<' !in body && '{' !in body) scrubForLog(body.trim(), appToken).take(MAX_PLAIN_TEXT_CHARS) else null
+            "<non-JSON body, ${body.length} chars" +
+                (if (code != null) ", code=$code" else "") +
+                (if (title != null) ", title=${scrubForLog(title, appToken)}" else "") +
+                (if (plain != null) ": $plain" else "") + ">"
+        }
+        return if (rendered.length > MAX_LOGGED_BODY_CHARS) rendered.take(MAX_LOGGED_BODY_CHARS) + "…" else rendered
+    }
+
     /**
      * Log-safe projection of the createBuild JSON response. The full
      * response carries two presigned PUT URLs (`endpoint`,
@@ -156,7 +235,7 @@ internal object BundleUploader {
             // green while the backend never saw the build.
             if (statusCode !in 200..299) {
                 val body = EntityUtils.toString(response.entity, "utf-8")
-                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): $body")
+                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): ${redactBodyForLog(body, appToken)}")
             }
 
             val resEntity = response.entity
@@ -173,7 +252,7 @@ internal object BundleUploader {
             val responseBody = try {
                 JSONObject(contentText)
             } catch (e: Exception) {
-                throw RuntimeException("Bugsee bundle upload step 1: non-JSON response: ${contentText.take(200)}")
+                throw RuntimeException("Bugsee bundle upload step 1: non-JSON response: ${redactBodyForLog(contentText, appToken)}")
             }
             val payload = ApiEndpoint.unwrapResult(responseBody)
             if (debug) logger.warn(
@@ -214,7 +293,7 @@ internal object BundleUploader {
                             "Bugsee: App token is invalid: ${maskAppToken(appToken)}"
                         )
                     }
-                    throw RuntimeException("Bugsee build-info upload failed: $error")
+                    throw RuntimeException("Bugsee build-info upload failed: ${redactBodyForLog(error.toString(), appToken)}")
                 }
                 if (presignedEndpoint.isNotEmpty()) {
                     // Server returned a URL we didn't ask for. Treat
@@ -238,7 +317,7 @@ internal object BundleUploader {
                                 "Bugsee: App token is invalid: ${maskAppToken(appToken)}"
                             )
                         }
-                        throw RuntimeException("Bugsee bundle upload failed: $error")
+                        throw RuntimeException("Bugsee bundle upload failed: ${redactBodyForLog(error.toString(), appToken)}")
                     }
                     throw RuntimeException("Bugsee bundle upload failed: server returned no endpoint")
                 }
@@ -264,13 +343,13 @@ internal object BundleUploader {
                         val body = EntityUtils.toString(putResponse.entity, "utf-8")
                         logger.warn(
                             "Bugsee: bundle upload step 2 failed " +
-                            "(status=${putResponse.statusLine.statusCode}): $body"
+                            "(status=${putResponse.statusLine.statusCode}): ${redactBodyForLog(body, appToken)}"
                         )
                     } else if (debug) {
                         logger.warn("Bugsee: Bundle upload complete.")
                     }
                 } catch (e: Exception) {
-                    logger.warn("Bugsee: bundle upload step 2 failed: ${e.message}")
+                    logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 }
             }
 
@@ -460,13 +539,13 @@ internal object BundleUploader {
                 val body = EntityUtils.toString(resp.entity, "utf-8")
                 logger.warn(
                     "Bugsee: $label upload failed " +
-                    "(status=${resp.statusLine.statusCode}): $body"
+                    "(status=${resp.statusLine.statusCode}): ${redactBodyForLog(body)}"
                 )
             } else if (debug) {
                 logger.warn("Bugsee: $label upload complete.")
             }
         } catch (e: Exception) {
-            logger.warn("Bugsee: $label upload failed: ${e.message}")
+            logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         }
     }
 }

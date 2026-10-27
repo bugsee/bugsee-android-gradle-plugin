@@ -699,7 +699,7 @@ abstract class BundleUploadTask : DefaultTask() {
                     } catch (e: Exception) {
                         logger.warn(
                             "Bugsee: bugsee-cli upload build threw — falling back to " +
-                                "the native uploader. Cause: ${e.message}",
+                                "the native uploader. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}",
                         )
                     } finally {
                         payloadFile.delete()
@@ -732,7 +732,7 @@ abstract class BundleUploadTask : DefaultTask() {
                         )
                         chunkedSucceeded = true
                     } catch (e: Exception) {
-                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${e.message}")
+                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
                 }
 
@@ -755,7 +755,7 @@ abstract class BundleUploadTask : DefaultTask() {
                             debug = isDebug
                         )
                     } catch (e: Exception) {
-                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${e.message}")
+                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
                 }
             }

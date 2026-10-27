@@ -293,7 +293,7 @@ internal object CliUploader {
             }.exitValue
         } catch (e: Exception) {
             logger.warn(
-                "Bugsee: failed to execute bugsee-cli pack: ${e.message}; " +
+                "Bugsee: failed to execute bugsee-cli pack: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
                     "using the native packer.",
             )
             return false
@@ -379,7 +379,7 @@ internal object CliUploader {
             result.exitValue
         } catch (e: Exception) {
             logger.warn(
-                "Bugsee: failed to execute bugsee-cli: ${e.message}; " +
+                "Bugsee: failed to execute bugsee-cli: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
                     "will fall back to the Kotlin uploader.",
             )
             return CliUploadResult(
