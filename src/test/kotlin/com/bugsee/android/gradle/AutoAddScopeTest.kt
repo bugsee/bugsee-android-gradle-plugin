@@ -322,7 +322,7 @@ class AutoAddScopeTest {
             "releaseLatestTestImplementation", "uiTestImplementation",
         )
         val test = listOf(
-            "latestTestUnitTestImplementation", "latestTestDebugAndroidTestImplementation",
+            "latestTestUnitTestImplementation", "testLatestTestImplementation", "latestTestDebugAndroidTestImplementation",
             "testLatestTestImplementation", "androidTestLatestTestImplementation",
             "testImplementation", "jvmTestImplementation", "latestTestFixturesApi",
         )
@@ -337,11 +337,59 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun declaredVariantNamesAreEmptyWithoutAndroidDsl() {
+        assertTrue(DependencyDetector.declaredVariantNames(ProjectBuilder.builder().build()).isEmpty())
+    }
+
+    /** End to end: the names are read from a (stubbed) Android DSL and drive the auto-add. */
+    @Test
+    fun okHttpOnDeclaredLatestTestFlavorConfigurationIsAutoAdded() {
+        val h = Harness(null)
+        h.project.extensions.add(
+            com.android.build.api.dsl.CommonExtension::class.java, "android",
+            fakeDsl(flavors = listOf("latestTest"), buildTypes = listOf("debug", "release")),
+        )
+        h.project.configurations.maybeCreate("latestTestImplementation")
+        h.declareOn("latestTestImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded())
+
+        // The same name WITHOUT a declaration stays a test configuration.
+        val other = Harness(null)
+        other.project.configurations.maybeCreate("latestTestImplementation")
+        other.declareOn("latestTestImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        assertEquals(emptySet(), other.autoAdded())
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun fakeDsl(flavors: List<String>, buildTypes: List<String>): com.android.build.api.dsl.CommonExtension<*, *, *, *, *, *> {
+        fun named(type: Class<*>, n: String): Any = java.lang.reflect.Proxy.newProxyInstance(
+            type.classLoader, arrayOf(type),
+        ) { _, m, _ -> if (m.name == "getName") n else null }
+        fun container(type: Class<*>, names: List<String>): Any {
+            val items = names.map { named(type, it) }
+            return java.lang.reflect.Proxy.newProxyInstance(
+                org.gradle.api.NamedDomainObjectContainer::class.java.classLoader,
+                arrayOf(org.gradle.api.NamedDomainObjectContainer::class.java),
+            ) { _, m, _ -> if (m.name == "iterator") items.iterator() else null }
+        }
+        val dsl = java.lang.reflect.Proxy.newProxyInstance(
+            com.android.build.api.dsl.CommonExtension::class.java.classLoader,
+            arrayOf(com.android.build.api.dsl.CommonExtension::class.java),
+        ) { _, m, _ ->
+            when (m.name) {
+                "getBuildTypes" -> container(org.gradle.api.Named::class.java, buildTypes)
+                "getProductFlavors" -> container(org.gradle.api.Named::class.java, flavors)
+                else -> null
+            }
+        }
+        return dsl as com.android.build.api.dsl.CommonExtension<*, *, *, *, *, *>
+    }
+
+    @Test
     fun reservedTestNamesDoNotMaskTestConfigurations() {
         // AGP rejects these as flavor / build type names; were they declared they must not turn
         // `testImplementation` into a production configuration.
         val names = setOf("test", "androidTest", "main")
-        assertTrue(DependencyDetector.declaredVariantNames(ProjectBuilder.builder().build()).isEmpty())
         assertFalse(DependencyDetector.isProductionConfiguration("testImplementation", names))
     }
 

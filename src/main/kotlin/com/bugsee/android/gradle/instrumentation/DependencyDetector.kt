@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
 import com.android.build.api.dsl.CommonExtension
+import org.gradle.api.Named
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
 import org.gradle.api.artifacts.ProjectDependency
@@ -75,8 +76,8 @@ internal object DependencyDetector {
      * Test-ness is a camelCase `Test` word in the name, EXCEPT when [declaredNames] (the build
      * types and flavors declared in the Android DSL, see [declaredVariantNames]) explains the
      * whole prefix: a flavor `latestTest` makes `latestTestImplementation` a production
-     * configuration of that flavor, while `latestTestUnitTestImplementation` (AGP's unit-test
-     * component of it) stays a test configuration. The auto-add runs before variants exist, so
+     * configuration of that flavor, while `testLatestTestImplementation` (AGP's unit-test
+     * configuration of it) stays a test configuration. The auto-add runs before variants exist, so
      * the declared names are the earliest authoritative source; with none declared the plain
      * name rule applies. A KMP source set such as `uiTest` is not a declared name, so it stays test.
      */
@@ -99,10 +100,14 @@ internal object DependencyDetector {
     fun declaredVariantNames(project: Project): Set<String> = try {
         val dsl = project.extensions.findByType(CommonExtension::class.java)
         val names = HashSet<String>()
-        dsl?.buildTypes?.mapTo(names) { it.name }
-        dsl?.productFlavors?.mapTo(names) { it.name }
+        // Read as [Named]: every DSL container element is one, and it keeps this independent of
+        // the AGP DSL element interfaces (which differ between AGP versions).
+        (dsl?.buildTypes as Iterable<*>?)?.forEach { (it as? Named)?.let { n -> names += n.name } }
+        (dsl?.productFlavors as Iterable<*>?)?.forEach { (it as? Named)?.let { n -> names += n.name } }
         names
-    } catch (t: Throwable) {
+    } catch (t: Exception) {
+        emptySet()
+    } catch (t: LinkageError) {
         emptySet()
     }
 
@@ -111,7 +116,7 @@ internal object DependencyDetector {
     private fun isDeclaredVariantConfiguration(name: String, declaredNames: Set<String>): Boolean {
         // Names AGP reserves for its test components (`test*`, `androidTest*`, `main`) can never
         // be flavors / build types; ignoring them stops them masking a genuine test configuration.
-        val names = declaredNames.filter { it != "main" && !it.startsWith("test") && !it.startsWith("androidTest") }
+        val names = declaredNames.filter { it.isNotEmpty() && it != "main" && !it.startsWith("test") && !it.startsWith("androidTest") }
         if (names.isEmpty()) return false
         val prefix = name.replace(PRODUCTION_SUFFIX_TAIL, "")
         if (prefix.isEmpty()) return false

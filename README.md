@@ -510,11 +510,13 @@ the upload tasks skip with a single info-level message instead of failing or war
   name contains a capitalised `Test` word is treated as a test configuration,
   except when the build types and flavors declared in the `android { }` DSL
   explain it (a flavor `latestTest` keeps `latestTestImplementation` and
-  `latestTestReleaseApi` production; `latestTestUnitTestImplementation` stays a
-  test configuration). A custom source set that is not an Android build type or
+  `latestTestReleaseApi` production; `testLatestTestImplementation`, AGP's unit-test
+  configuration of that flavor, stays test). A custom source set that is not an Android build type or
   flavor, such as a KMP `uiTest`, stays a test configuration and its libraries
-  are not detected. A dependency only in `debugImplementation` is detected and
-  its extension module is added project-wide. In the undetected cases declare the library directly in
+  are not detected (so does a Kotlin Multiplatform per-flavor source set such as
+  `androidLatestTestImplementation`). A dependency only in `debugImplementation`
+  is detected and its extension module is added project-wide. In the undetected
+  cases declare the library directly in
   an app-module production configuration, or declare the Bugsee extension module
   (for example `bugsee-android-okhttp`) explicitly. For Compose, the compiler
   plugin additionally needs a direct Compose dependency in such a configuration:
