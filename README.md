@@ -517,8 +517,9 @@ the upload tasks skip with a single info-level message instead of failing or war
   per-flavor source sets (`androidLatestTestImplementation`) are likewise not
   detected. A dependency only in `debugImplementation` is detected and its
   extension module is added project-wide. In the undetected cases declare the
-  library directly in an app-module production configuration, or declare the Bugsee extension module
-  (for example `bugsee-android-okhttp`) explicitly. For Compose, the compiler
+  library directly in an app-module production configuration, or declare the
+  Bugsee extension module (for example `bugsee-android-okhttp`) explicitly. For
+  Compose, the compiler
   plugin additionally needs a direct Compose dependency in such a configuration:
   declaring `bugsee-android-compose` alone does not enable it.
 

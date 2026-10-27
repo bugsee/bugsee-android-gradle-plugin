@@ -108,10 +108,14 @@ internal object DependencyDetector {
         (dsl?.productFlavors as Iterable<*>?)?.forEach { (it as? Named)?.let { n -> names += n.name } }
         names
     } catch (t: Exception) {
+        LOGGER.debug("Bugsee: could not read declared build types/flavors of ${project.path}; using the name rule", t)
         emptySet()
     } catch (t: LinkageError) {
+        LOGGER.debug("Bugsee: could not read declared build types/flavors of ${project.path}; using the name rule", t)
         emptySet()
     }
+
+    private val LOGGER = org.gradle.api.logging.Logging.getLogger(DependencyDetector::class.java)
 
     // `latestTestImplementation` / `uiTestReleaseApi`: the prefix before the suffix is a camelCase
     // concatenation of declared build type / flavor names (AGP names a variant that way).
