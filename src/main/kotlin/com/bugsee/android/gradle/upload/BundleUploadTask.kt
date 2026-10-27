@@ -388,9 +388,9 @@ abstract class BundleUploadTask : DefaultTask() {
             )
         if (appToken == null) {
             if (placeholderSeen) {
-                AppTokenResolver.logPlaceholderSkip(logger, "build-info")
+                AppTokenResolver.logPlaceholderSkip(logger, "build-info", variantName.get())
             } else {
-                logger.warn("Bugsee: Could not resolve appToken. Skipping bundle upload.")
+                logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping bundle upload.")
             }
             return
         }
@@ -401,7 +401,7 @@ abstract class BundleUploadTask : DefaultTask() {
         // R8-minified build.
         val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
         if (buildUUID.isEmpty()) {
-            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping bundle upload.")
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty for variant ${variantName.get()}. Skipping bundle upload.")
             return
         }
 
@@ -410,14 +410,14 @@ abstract class BundleUploadTask : DefaultTask() {
         val versionCode = ManifestModifier.getVersionCode(manifest)
         val packageName = ManifestModifier.getPackageName(manifest)
         if (versionCode == null) {
-            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml")
+            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml for variant ${variantName.get()}. Skipping bundle upload.")
             return
         }
 
         // Resolve the artifact file
         val artifactFile = resolveArtifactFile()
         if (artifactFile == null || !artifactFile.exists()) {
-            if (isDebug) logger.warn("Bugsee: Artifact file not found. Skipping bundle upload.")
+            if (isDebug) logger.warn("Bugsee: Artifact file not found for variant ${variantName.get()}. Skipping bundle upload.")
             return
         }
 

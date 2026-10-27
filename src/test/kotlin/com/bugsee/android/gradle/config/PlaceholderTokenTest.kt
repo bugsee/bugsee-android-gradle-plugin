@@ -221,6 +221,13 @@ class PlaceholderTokenTest {
         assertTrue(logger.infos.single().contains("skipping mapping upload"))
     }
 
+    @Test
+    fun taskSkipMessageNamesTheVariant() {
+        AppTokenResolver.logPlaceholderSkip(logger, "build-info", "freeRelease")
+        assertTrue(logger.warnings.isEmpty())
+        assertEquals("Bugsee: Placeholder app token configured; skipping build-info upload for variant freeRelease.", logger.infos.single())
+    }
+
     private fun manifest(tokenValue: String): File = File(tmp.root, "AndroidManifest.xml").apply {
         writeText(
             """<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p">
