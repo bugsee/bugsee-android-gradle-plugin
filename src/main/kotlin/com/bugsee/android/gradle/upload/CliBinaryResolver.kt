@@ -646,8 +646,13 @@ internal object CliBinaryResolver {
             // Read a bounded prefix only: an error page can be arbitrarily large.
             val raw = conn.errorStream?.bufferedReader()?.use { r ->
                 val buf = CharArray(4096)
-                val n = r.read(buf)
-                if (n > 0) String(buf, 0, n) else ""
+                var len = 0
+                while (len < buf.size) {
+                    val n = r.read(buf, len, buf.size - len)
+                    if (n < 0) break
+                    len += n
+                }
+                String(buf, 0, len)
             }
             val body = BundleUploader.redactBodyForLog(raw)
             throw IOException("GET $url returned ${conn.responseCode}: $body")
