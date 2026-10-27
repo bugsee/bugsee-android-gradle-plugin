@@ -98,6 +98,22 @@ class ProjectAccessTest {
         assertEquals(":lib", resolved.path)
     }
 
+    @Test
+    fun targetProjectResolvesNestedAbsolutePathFromANonRootProject() {
+        val root = ProjectBuilder.builder().withName("r5").withProjectDir(tmp.newFolder("r5")).build()
+        val libs = ProjectBuilder.builder().withName("libs").withProjectDir(tmp.newFolder("r5", "libs")).withParent(root).build()
+        ProjectBuilder.builder().withName("core").withProjectDir(tmp.newFolder("r5", "libs", "core")).withParent(libs).build()
+        val app = ProjectBuilder.builder().withName("app").withProjectDir(tmp.newFolder("r5", "app")).withParent(root).build()
+        app.configurations.create("implementation")
+        val dep = app.dependencies.project(mapOf("path" to ":libs:core")) as ProjectDependency
+
+        // The wrapper's Gradle (8.7) has no ProjectDependency.getPath(), so inject it to exercise the
+        // findProject(path) branch used on Gradle 8.11+.
+        val viaPath = ProjectDependencyCompat.targetProject(app, dep, isolatedProjects = false) { ":libs:core" }
+        assertEquals(":libs:core", viaPath?.path)
+        assertNull(ProjectDependencyCompat.targetProject(app, dep, isolatedProjects = true) { ":libs:core" })
+    }
+
     /** A [BuildFeatures] whose `isolatedProjects.active` is [active]; every other member is unused. */
     private fun features(active: Boolean): BuildFeatures {
         val provider = object : Provider<Boolean> by tmpProject().provider({ active }) {}
