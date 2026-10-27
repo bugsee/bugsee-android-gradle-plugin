@@ -2032,7 +2032,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         /**
          * Project-level gate for a Compose compiler-plugin subfeature: on when any scope enables
          * [def] (see [isAutoAddEnabled]), off when every scope that sets it disables it, and [default]
-         * when nothing sets it (`true` for the compose features, `false` for `composeInTests`). Without per-variant input this equals the former
+         * when nothing sets it (`true` for the compose features, `false` for
+         * `composeInTests`). Without per-variant input this equals the former
          * `!property.isPresent || property.get()`.
          */
         internal fun isCompilerFeatureEnabled(
