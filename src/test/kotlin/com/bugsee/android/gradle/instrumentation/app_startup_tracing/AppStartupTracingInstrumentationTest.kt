@@ -155,6 +155,43 @@ class AppStartupTracingInstrumentationTest {
         org.junit.Assert.assertFalse(instrumentation.shouldApply(project, true, null))
     }
 
+    // ── #100: the gate reads the SAME resolver as the core auto-add ──
+
+    @Test fun `several app pins gate on the highest version not the first declared`() {
+        // The old resolver returned the first hit in configuration order (6.5.0 here) and
+        // refused; Gradle (and the auto-add) pick the highest.
+        project.dependencies.add(project.configurations.maybeCreate("a").name, "com.bugsee:bugsee-android:6.5.0")
+        project.dependencies.add(project.configurations.maybeCreate("b").name, "com.bugsee:bugsee-android:7.0.0")
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
+    @Test fun `debug-only old pin in a dependency project does not refuse`() {
+        val lib = ProjectBuilder.builder().withName("lib").withParent(project).build()
+        lib.dependencies.add(lib.configurations.maybeCreate("debugImplementation").name, "com.bugsee:bugsee-android:6.5.0")
+        lib.dependencies.add(lib.configurations.maybeCreate("implementation").name, "com.bugsee:bugsee-android:7.0.0")
+        project.dependencies.add(
+            project.configurations.maybeCreate("implementation").name,
+            project.dependencies.project(mapOf("path" to lib.path))
+        )
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
+    @Test fun `old project-dependency pin refuses and an app pin wins over it`() {
+        val lib = ProjectBuilder.builder().withName("lib").withParent(project).build()
+        lib.dependencies.add(lib.configurations.maybeCreate("implementation").name, "com.bugsee:bugsee-android:6.5.0")
+        project.dependencies.add(
+            project.configurations.maybeCreate("implementation").name,
+            project.dependencies.project(mapOf("path" to lib.path))
+        )
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertFalse(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+        // The app's own core pin is tier 1 and wins, exactly as in the auto-add.
+        addBugseeAndroidDependency(project, "7.0.0")
+        org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
     /**
      * Adds a real `com.bugsee:bugsee-android` external dependency to a
      * resolvable configuration on the project so [DependencyDetector]

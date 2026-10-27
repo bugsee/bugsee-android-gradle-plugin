@@ -147,57 +147,6 @@ internal object DependencyDetector {
         }
     }
 
-    /**
-     * Returns the declared version string of the matching external Bugsee
-     * dependency, or `null` if no match is found or no version is declared
-     * (project deps, dynamic versions without a string form).
-     *
-     * Scans this project's configurations first, then recurses into project
-     * dependencies (so the version is found even when the external SDK dep is
-     * declared by an intermediate module). For external deps the version is
-     * [org.gradle.api.artifacts.Dependency.getVersion].
-     *
-     * <p>Used by tier-driven instrumentation to bail out early when
-     * the runtime SDK is older than the minimum version that ships
-     * the injected dispatcher symbols.
-     */
-    fun getBugseeDependencyVersion(
-        project: Project,
-        artifactPrefix: String,
-    ): String? = getBugseeDependencyVersion(project, artifactPrefix, HashSet())
-
-    private fun getBugseeDependencyVersion(
-        project: Project,
-        artifactPrefix: String,
-        visited: MutableSet<String>
-    ): String? {
-        if (!visited.add(project.path)) {
-            return null
-        }
-        // Prefer a version declared directly on this project.
-        for (config in project.configurations) {
-            for (dep in config.dependencies) {
-                if (isMatchingExternal(dep, artifactPrefix)) {
-                    val v = dep.version
-                    if (!v.isNullOrBlank()) return v
-                }
-            }
-        }
-        // Otherwise, look through intermediate project modules.
-        for (config in project.configurations) {
-            for (dep in config.dependencies) {
-                if (dep is ProjectDependency) {
-                    val target = ProjectDependencyCompat.targetProject(project, dep)
-                    val v = target?.let {
-                        getBugseeDependencyVersion(evaluated(project, it), artifactPrefix, visited)
-                    }
-                    if (v != null) return v
-                }
-            }
-        }
-        return null
-    }
-
     private fun isMatchingExternal(dep: Dependency, artifactPrefix: String): Boolean {
         return dep.group == BUGSEE_GROUP && dep.name.startsWith(artifactPrefix)
     }
