@@ -268,6 +268,11 @@ abstract class NativeUploadTask : DefaultTask() {
             null
         }
 
+        // Set when the unstripped-libraries upload failed and fell through to the AGP sources: if none
+        // of those exists either, nothing was uploaded and failOnUploadError must still fire.
+        var dirUploadFailed = false
+        var agpSourceTried = false
+
         // Preferred source: the unstripped libraries, uploaded in place as a
         // directory (bugsee-cli >= 0.8.0). Independent of ndk.debugSymbolLevel.
         // Falls through to the AGP-produced sources below when unavailable.
@@ -313,6 +318,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     }
                     return
                 }
+                dirUploadFailed = true
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
@@ -325,6 +331,7 @@ abstract class NativeUploadTask : DefaultTask() {
         if (intermediateSymbolsDir.exists()) {
             if (isDebug) logger.warn("Bugsee: Intermediate symbols folder found: ${intermediateSymbolsDir.path}")
 
+            agpSourceTried = true
             val zipTemp = File.createTempFile(buildUUID, ".zip")
             try {
                 ZipUtils.zipDirectory(intermediateSymbolsDir.absolutePath, zipTemp.absolutePath)
@@ -359,6 +366,7 @@ abstract class NativeUploadTask : DefaultTask() {
                 ?.forEach { outputDir ->
                 val symbolsZip = File(outputDir, "native-debug-symbols.zip")
                 if (symbolsZip.exists()) {
+                    agpSourceTried = true
                     if (isDebug) logger.warn("Bugsee: Native symbols file found: ${symbolsZip.path}")
                     uploadOneZip(
                         zip = symbolsZip,
@@ -381,6 +389,9 @@ abstract class NativeUploadTask : DefaultTask() {
         } else {
             logger.warn("Bugsee: NDK upload is enabled but no native symbols found for variant ${variantName.get()}. " +
                 "Ensure your project includes native code and that debugSymbolLevel is configured.")
+        }
+        if (dirUploadFailed && !agpSourceTried) {
+            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native libraries for variant ${variantName.get()}")
         }
     }
 

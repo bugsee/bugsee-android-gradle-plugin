@@ -187,9 +187,10 @@ dotted-path form as the DSL field names.
 registration or artifact upload: a network error, an HTTP error that persists after the plugin's bounded retry, or a
 rejection such as an invalid app token) fail the build. By default it only logs a warning and the build
 stays green. Skipped uploads (no app token, nothing to upload) and symbols the server already has never
-fail the build. With the plugin's built-in uploader a failed auxiliary build-info blob (dependencies,
-timings) stays a warning; with `bugsee-cli` (the default) any failure the CLI reports for the build
-upload, including those blobs, fails it. It can be set per variant.
+fail the build. A failed auxiliary build-info blob (dependencies, timings) stays a warning with the plugin's
+built-in uploader and for the build-info-only upload; when size analysis uploads the artifact through
+`bugsee-cli upload build` (the default), any failure that command reports, including those blobs, fails
+the build. It can be set per variant.
 
 ### NDK integration
 

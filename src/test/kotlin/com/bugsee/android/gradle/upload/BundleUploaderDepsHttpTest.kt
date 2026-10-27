@@ -338,6 +338,18 @@ class BundleUploaderDepsHttpTest {
         // best-effort posture on the artefact branch survives the 5xx.
     }
 
+    @Test fun `a persistent 503 on the artefact PUT is retried three times before it is reported`() {
+        includeArtifactEndpoint = true
+        artifactPutStatus = 503
+        val ok = BundleUploader.uploadData(
+            file = freshArtifact(), json = metadataJson(withDepsFlag = false), appToken = appToken,
+            endpoint = baseUrl, requestArtifactUpload = true, logger = logger, debug = false,
+            retryPolicy = HttpRetry.RetryPolicy(backoffMs = 0),
+        )
+        assertTrue(!ok)
+        assertEquals(3, requests.count { it.path == "/presigned/artifact" })
+    }
+
     @Test fun `uploadData reports a failed artefact PUT so failOnUploadError can act on it`() {
         includeArtifactEndpoint = true
         artifactPutStatus = 500

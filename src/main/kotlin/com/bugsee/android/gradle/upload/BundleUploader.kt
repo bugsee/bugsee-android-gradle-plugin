@@ -340,14 +340,15 @@ internal object BundleUploader {
                     )
                     val httpPut = HttpPut(presignedEndpoint)
                     httpPut.entity = FileEntity(file)
-                    val putResponse = client.execute(httpPut)
+                    // A PUT to a fixed presigned URL is safe to repeat (FileEntity is repeatable). The client's
+                    // own handler also retries I/O errors that happen before the request is sent.
+                    val putReply = HttpRetry.execute(client, httpPut, "bundle upload step 2", logger, retryPolicy)
 
-                    if (putResponse.statusLine.statusCode !in 200..299) {
-                        val body = EntityUtils.toString(putResponse.entity, "utf-8")
+                    if (putReply.status !in 200..299) {
                         artifactUploaded = false
                         logger.warn(
                             "Bugsee: bundle upload step 2 failed " +
-                            "(status=${putResponse.statusLine.statusCode}): ${redactBodyForLog(body, appToken)}"
+                            "(status=${putReply.status}): ${redactBodyForLog(putReply.body, appToken)}"
                         )
                     } else if (debug) {
                         logger.warn("Bugsee: Bundle upload complete.")
