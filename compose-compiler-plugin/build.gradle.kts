@@ -204,8 +204,25 @@ val simulatorJars = composeVariants.associate { variant ->
 // 2.0.21 and 2.3.0 are here because the mapping CLAIMS them: 2.0 routes to the base artifact and
 // 2.3.0-exact is the boundary where the k22 registrar's plain `val pluginId` must satisfy the
 // abstract member 2.3 introduced. A claimed line with no row here is an unverified claim.
-val matrixKotlinVersions =
-    listOf("1.9.22", "2.0.21", "2.1.0", "2.2.0", "2.2.21", "2.3.0", "2.3.21", "2.4.0", "2.4.10")
+// The patch rows (2.1.10/20/21, 2.2.10/20, 2.3.10/20) pin the releases between each line's `.0` and
+// its latest patch, which the plugin is compiled against a different patch of (issue #59).
+//
+// `-Pbugsee.matrix.extraKotlin=<v>[,<v>]` appends versions on top of that list; the scheduled
+// workflow passes the newest published Kotlin release, so a compiler change is noticed within a week
+// rather than at the next release. ComposeVariantMatrixTest derives the expected variant from the
+// version's line and FAILS for a line no variant claims.
+val extraMatrixKotlinVersions: List<String> =
+    (findProperty("bugsee.matrix.extraKotlin") as String?).orEmpty()
+        .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+val matrixKotlinVersions = (
+    listOf(
+        "1.9.22", "2.0.21",
+        "2.1.0", "2.1.10", "2.1.20", "2.1.21",
+        "2.2.0", "2.2.10", "2.2.20", "2.2.21",
+        "2.3.0", "2.3.10", "2.3.20", "2.3.21",
+        "2.4.0", "2.4.10",
+    ) + extraMatrixKotlinVersions
+    ).distinct()
 
 val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
     val cfg = configurations.create("matrixCompiler${kotlinVersion.replace(".", "_")}") {
@@ -269,7 +286,8 @@ val composeVariantMatrix by tasks.registering(Test::class) {
     // Resolved lazily: building the argument list at configuration time would force all seven
     // compiler distributions to download merely to CONFIGURE the task (e.g. on `gradle tasks`).
     jvmArgumentProviders.add(CommandLineArgumentProvider {
-        variantJarFiles.map { (id, jar) -> "-Dbugsee.variantJar.$id=${jar.get().asFile.absolutePath}" } +
+        listOf("-Dbugsee.matrix.extraKotlin=${extraMatrixKotlinVersions.joinToString(",")}") +
+            variantJarFiles.map { (id, jar) -> "-Dbugsee.variantJar.$id=${jar.get().asFile.absolutePath}" } +
             simulatorJarFiles.map { (id, jar) -> "-Dbugsee.simulatorJar.$id=${jar.get().asFile.absolutePath}" } +
             matrixClasspathFiles.map { (v, files) -> "-Dbugsee.kotlinClasspath.$v=${files.asPath}" }
     })

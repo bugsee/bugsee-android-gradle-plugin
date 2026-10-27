@@ -4,7 +4,6 @@ import com.bugsee.android.gradle.integration.harness.FixtureProject
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -20,7 +19,8 @@ import java.io.File
  *     as the plugin's own class fails with a `ClassCastException`; only JDK types may cross.
  *  2. With Isolated Projects on, no problem is attributed to the Bugsee plugin. The fixture's AGP
  *     (8.6) is itself not Isolated Projects-clean, so the build is not required to succeed: the
- *     configuration-cache report is searched for problems whose owner is Bugsee.
+ *     configuration-cache report is searched for problems whose owner is Bugsee. A newer AGP that is
+ *     clean produces no report, which also passes.
  */
 class IsolatedProjectsIntegrationTest {
 
@@ -52,15 +52,24 @@ class IsolatedProjectsIntegrationTest {
         assertFalse(result.output, result.output.contains("cannot be cast to class"))
 
         val report = reportFile(result.output)
-        assertNotNull("expected a configuration-cache report in:\n${result.output}", report)
+        if (report == null) {
+            // An AGP that is itself Isolated Projects-clean (the newer toolchain-matrix legs) leaves no
+            // problem to report: the entry is stored and no report is written. That is a clean pass.
+            assertTrue(
+                "expected a configuration-cache report, or a clean store with no problems, in:\n${result.output}",
+                result.output.contains("Configuration cache entry stored") &&
+                    !Regex("\\d+ problems? (was|were) found").containsMatchIn(result.output),
+            )
+            return
+        }
         // Guard against a vacuous pass: the fixture's AGP is not Isolated Projects-clean, so a
         // parseable report has problem entries. None found means the report format changed.
         assertTrue(
             "configuration-cache report has no problem entries; the parser below is out of date",
-            Regex("\"problem\":\\[\\s*[^\\]\\s]").containsMatchIn(report!!.readText()),
+            Regex("\"problem\":\\[\\s*[^\\]\\s]").containsMatchIn(report.readText()),
         )
         val ownedByBugsee = Regex("com\\.bugsee\\.android\\.gradle'\"\\}\\],\"problem\":\\[(.*?)\\]")
-            .findAll(report!!.readText())
+            .findAll(report.readText())
             .map { m -> Regex("\"(?:text|name)\":\"(.*?)\"").findAll(m.groupValues[1]).joinToString("") { it.groupValues[1] } }
             .toList()
         assertTrue("Isolated Projects problems attributed to the Bugsee plugin:\n$ownedByBugsee", ownedByBugsee.isEmpty())

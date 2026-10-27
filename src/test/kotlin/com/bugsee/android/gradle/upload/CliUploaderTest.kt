@@ -52,7 +52,7 @@ class CliUploaderTest {
                 "--version", "1.2.3",
                 "--build", "42",
                 "--uuid", "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
-                "/tmp/mapping.txt",
+                File("/tmp/mapping.txt").absolutePath,
             ),
             argv,
         )
@@ -95,7 +95,7 @@ class CliUploaderTest {
                 "--version", "1.2.3",
                 "--build", "42",
                 "--uuid", "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
-                "/tmp/native-debug-symbols.zip",
+                File("/tmp/native-debug-symbols.zip").absolutePath,
             ),
             argv,
         )
@@ -160,8 +160,8 @@ class CliUploaderTest {
             listOf(
                 "upload", "build-info",
                 "--upload-url", "https://s3.example/final/build-info/abc-tid.zip?sig=…",
-                "--deps", "/tmp/dependencies.json",
-                "--timings", "/tmp/timings.json",
+                "--deps", File("/tmp/dependencies.json").absolutePath,
+                "--timings", File("/tmp/timings.json").absolutePath,
             ),
             argv,
         )
@@ -213,9 +213,9 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "pack",
-                "--artifact", "/tmp/app.apk",
-                "--mapping", "/tmp/mapping.txt",
-                "--out", "/tmp/upload.zip",
+                "--artifact", File("/tmp/app.apk").absolutePath,
+                "--mapping", File("/tmp/mapping.txt").absolutePath,
+                "--out", File("/tmp/upload.zip").absolutePath,
             ),
             argv,
         )
@@ -228,7 +228,7 @@ class CliUploaderTest {
             outZip = File("/tmp/upload.zip"),
         )
         assertContentEquals(
-            listOf("pack", "--artifact", "/tmp/app.aab", "--out", "/tmp/upload.zip"),
+            listOf("pack", "--artifact", File("/tmp/app.aab").absolutePath, "--out", File("/tmp/upload.zip").absolutePath),
             argv,
         )
         assertFalse(argv.contains("--mapping"), "no --mapping flag when mapping is null; argv=$argv")
@@ -250,11 +250,11 @@ class CliUploaderTest {
             listOf(
                 "--endpoint", "https://api.bugsee.com",
                 "upload", "build",
-                "--payload-json", "/tmp/payload.json",
-                "--artifact", "/tmp/app.aab",
-                "--mapping", "/tmp/mapping.txt",
-                "--deps", "/tmp/deps.json",
-                "--timings", "/tmp/timings.json",
+                "--payload-json", File("/tmp/payload.json").absolutePath,
+                "--artifact", File("/tmp/app.aab").absolutePath,
+                "--mapping", File("/tmp/mapping.txt").absolutePath,
+                "--deps", File("/tmp/deps.json").absolutePath,
+                "--timings", File("/tmp/timings.json").absolutePath,
                 "--chunked",
             ),
             argv,
@@ -275,8 +275,8 @@ class CliUploaderTest {
             listOf(
                 "--endpoint", "https://api.bugsee.com",
                 "upload", "build",
-                "--payload-json", "/tmp/payload.json",
-                "--artifact", "/tmp/app.apk",
+                "--payload-json", File("/tmp/payload.json").absolutePath,
+                "--artifact", File("/tmp/app.apk").absolutePath,
             ),
             argv,
         )

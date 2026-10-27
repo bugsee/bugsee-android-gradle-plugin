@@ -46,14 +46,21 @@ class ComposeVariantMatrixTest {
             Case("k21", "1.9.22", true, "predates the IR API changes entirely"),
             Case("k21", "2.0.21", true, "2.0 still has the legacy IR API; the mapping routes it here"),
             Case("k21", "2.1.0", true, "the line k21 is built against"),
+            Case("k21", "2.1.10", true, "same line, later patch"),
+            Case("k21", "2.1.20", true, "same line, later patch"),
+            Case("k21", "2.1.21", true, "same line, latest patch"),
             Case("k21", "2.2.21", false, "2.2 widened the irCall/irString builder receiver to IrBuilder"),
             Case("k21", "2.4.10", false, "2.4 moved extension registration to ExtensionPointDescriptor"),
 
             // k22 — modern IR API; its plain `val pluginId` satisfies 2.3's abstract member at runtime.
             Case("k22", "2.1.0", false, "the 2.2 parameters/arguments API does not exist in 2.1"),
             Case("k22", "2.2.0", true, "the line k22 is built against"),
-            Case("k22", "2.2.21", true, "same line, later patch"),
+            Case("k22", "2.2.10", true, "same line, later patch"),
+            Case("k22", "2.2.20", true, "same line, later patch"),
+            Case("k22", "2.2.21", true, "same line, latest patch"),
             Case("k22", "2.3.0", true, "2.3.0 exact: the boundary where pluginId became abstract"),
+            Case("k22", "2.3.10", true, "2.3 patch release"),
+            Case("k22", "2.3.20", true, "2.3 patch release"),
             Case("k22", "2.3.21", true, "2.3 shares 2.2's IR API; pluginId is satisfied by JVM resolution"),
             Case("k22", "2.4.10", false, "2.4 moved extension registration to ExtensionPointDescriptor"),
 
@@ -63,7 +70,20 @@ class ComposeVariantMatrixTest {
             Case("k24", "2.4.10", true, "same line, later patch"),
         )
 
+        // Versions the build asked for on top of the table (-Pbugsee.matrix.extraKotlin, e.g. the
+        // newest published Kotlin). Each must be claimed by exactly the variant for its line.
         val failures = mutableListOf<String>()
+        for (version in System.getProperty("bugsee.matrix.extraKotlin").orEmpty().split(",").filter { it.isNotBlank() }) {
+            val variant = variantForLine(version)
+            if (variant == null) {
+                failures += "Kotlin $version: no variant claims this line - add one, or extend a variant's range"
+                continue
+            }
+            val outcome = compileFixture(variant, version)
+            if (outcome !is Outcome.Injected) {
+                failures += "$variant on Kotlin $version (newest-release check): expected injection but got $outcome"
+            }
+        }
         for (case in cases) {
             val outcome = compileFixture(case.variant, case.kotlin)
             val ok = if (case.expectInjection) {
@@ -79,6 +99,24 @@ class ComposeVariantMatrixTest {
         }
         if (failures.isNotEmpty()) {
             fail("Compose variant matrix mismatches:\n  " + failures.joinToString("\n  "))
+        }
+    }
+
+    /**
+     * The variant that claims [kotlin]'s line, or null for an unclaimed line. This mirrors the
+     * plugin's own Kotlin-line -> artifact mapping,
+     * `ComposeKotlinCompatibility.artifactIdFor` (root project, `ComposeKotlinCompatibility.kt`);
+     * keep the two in step, since the module cannot depend on the root plugin.
+     */
+    private fun variantForLine(kotlin: String): String? {
+        val parts = kotlin.split(".", "-")
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: return null
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        return when {
+            major == 1 || (major == 2 && minor <= 1) -> "k21"
+            major == 2 && minor in 2..3 -> "k22"
+            major == 2 && minor == 4 -> "k24"
+            else -> null
         }
     }
 

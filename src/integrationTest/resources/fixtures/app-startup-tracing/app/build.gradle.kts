@@ -23,9 +23,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
@@ -172,5 +169,13 @@ if (project.findProperty("bugseeFixtureFakeFlutter")?.toString() == "true") {
     // merged dir (FlutterPlugin.kt `tasksToCheck`: compress<Variant>Assets, ...).
     tasks.matching { it.name == "processDebugResources" || it.name == "compressDebugAssets" }.configureEach {
         dependsOn(copyFlutter)
+    }
+}
+
+// Explicit, to match compileOptions above. The `kotlinOptions { jvmTarget }` it replaces is a hard
+// error from Kotlin 2.3; the `compilerOptions` DSL exists from Kotlin 2.0.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }

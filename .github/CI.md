@@ -1,6 +1,7 @@
 # CI/CD
 
-All workflows run on GitHub-hosted `ubuntu-latest` runners. Environments,
+All workflows run on GitHub-hosted `ubuntu-latest` runners, except the `windows` job of `pr.yml`
+(`windows-latest`). Environments,
 secrets and the release gate follow the same conventions as
 `bugsee/bugsee-android`.
 
@@ -8,9 +9,48 @@ secrets and the release gate follow the same conventions as
 |---|---|---|---|---|
 | `pr.yml` | PR → `main` / `release` | — | `false` | `scripts/build.sh --full` — unit + TestKit integration tests + Compose variant matrix |
 | `codeql.yml` | PR / push `main`, `release`; weekly | — | — | CodeQL advanced setup: `java-kotlin` (manual `gradlew assemble -x test`), `actions`, `c-cpp`. Replaces the default setup, which must be turned off |
+| `pr.yml` (`integration (gradle …, agp …, kotlin …)`) | PR → `main` / `release` | — | `false` | The TestKit suite on newer toolchains, one job per row of the `toolchain` matrix (Gradle 9.0.0 / AGP 8.13.2 / Kotlin 2.2.20, Gradle 9.8.0 / AGP 9.4.1 / Kotlin 2.3.20) |
+| `pr.yml` (`windows`) | PR → `main` / `release` | — | `false` | On `windows-latest`: `CliBinaryResolverTest`, `CliUploaderTest`, and `BuildTypeGatingTest` + `ToolchainMatrixTest` as the TestKit smoke (pre-built plugin jar, no `clean`). Not run off Windows, so do not make it a required check until it has been seen green |
+| `scheduled.yml` | weekly + manual | — | `false` | Compose variant matrix on the newest stable patch of each claimed Kotlin line (2.1 - 2.4) and the newest stable overall (`-Pbugsee.matrix.extraKotlin`); fails for a Kotlin line no variant claims, or when a lookup finds nothing |
 | `deploy-staging.yml` | push to `main` | `staging` | `false` | `build.sh` + `deploy.sh` — `<version>-SNAPSHOT` to the Central snapshot repository, unsigned |
 | `deploy-production.yml` | manual dispatch | `production` | `true` | `build.sh --full` + `deploy.sh` — signed release into a closed Central staging deployment |
 | `claude.yml` | `@claude` mention | — | — | Claude answers on the issue or PR |
+
+## Toolchain matrix
+
+`integrationTest` takes three optional Gradle properties, all forwarded to the fixtures by
+`FixtureProject` (unset = the declared minimums, Gradle 8.7 / AGP 8.6.0 / Kotlin 2.1.0):
+
+```
+./gradlew integrationTest -Pbugsee.it.gradleVersion=9.8.0 -Pbugsee.it.agpVersion=9.4.1 -Pbugsee.it.kotlinVersion=2.3.20
+```
+
+- `gradleVersion` runs the fixtures with `GradleRunner.withGradleVersion`. A non-default Gradle also
+  switches the fixtures from the included-build plugin to a pre-built jar published into
+  `build/integrationTest/plugin-repo`: the plugin's own Kotlin 2.1 compiler cannot compile it under
+  the newest Gradle APIs, and the jar is what consumers get anyway.
+- `agpVersion` / `kotlinVersion` rewrite the plugin versions in the fixture's root `build.gradle.kts`.
+  AGP 9 compiles Kotlin itself, so for AGP >= 9 the fixtures set `android.builtInKotlin=false` and
+  `android.newDsl=false` (temporary AGP opt-outs; they go away in AGP 10 and the fixtures then need a
+  Kotlin-free variant).
+- `ToolchainMatrixTest` asserts the build really ran on the requested versions (exact resolved
+  version, so a request bumped by conflict resolution, `2.2.0 -> 2.2.10`, fails).
+- The legs fetch the pinned `bugsee-cli` through `.github/actions/fetch-bugsee-cli` (shared with the
+  `test` job) and fail if `NativeMergedLibsE2ETest` was skipped.
+- `.gitattributes` pins `gradlew` and `*.sh` to LF (and `*.bat` to CRLF): Git for Windows would
+  otherwise check them out with CRLF and bash would fail on `gradlew`.
+
+**Cost.** Each leg is a full TestKit suite plus its own dependency downloads: the TestKit Gradle home
+lives under `build/tmp/` (about 3.5 GB of caches), outside what `setup-gradle` caches, so it is
+re-downloaded on every run and too large to cache usefully. The two legs run in parallel with the
+`test` job, so wall time barely moves, but the minutes are billed. There is deliberately no
+`paths-ignore` on `pr.yml`: a workflow skipped by path filters leaves its required checks pending
+forever.
+
+To add a row, add one line to `matrix.include` of the `toolchain` job in `pr.yml` and run that line
+locally first; incompatible pairs (AGP 8.13 on Gradle 9.7+) fail inside AGP. The Compose compiler-plugin
+rows live in `compose-compiler-plugin/build.gradle.kts` (`matrixKotlinVersions`) and
+`ComposeVariantMatrixTest`.
 
 ## Releasing
 
