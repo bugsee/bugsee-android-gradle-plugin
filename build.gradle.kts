@@ -72,8 +72,8 @@ dependencies {
     // depending on. If the plugin ever drops to a Method/Class API
     // added in ASM 9.6+, surface the minimum AGP requirement in the
     // plugin's POM constraint instead of relying on this comment.
-    compileOnly("org.ow2.asm:asm-tree:9.7")
-    compileOnly("org.ow2.asm:asm-analysis:9.7")
+    compileOnly("org.ow2.asm:asm-tree:9.11.1")
+    compileOnly("org.ow2.asm:asm-analysis:9.11.1")
 
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
