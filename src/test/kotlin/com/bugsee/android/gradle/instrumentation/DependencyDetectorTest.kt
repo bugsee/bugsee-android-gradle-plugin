@@ -4,7 +4,6 @@ import org.gradle.api.Project
 import org.gradle.testfixtures.ProjectBuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -89,20 +88,5 @@ class DependencyDetectorTest {
         // And still find the SDK once it's added, despite the cycle.
         lib.addExternal("com.bugsee:bugsee-android:7.0.0")
         assertTrue(DependencyDetector.hasBugseeDependency(app, "bugsee-android"))
-    }
-
-    @Test
-    fun `version is found transitively`() {
-        val app = child("app")
-        val lib = child("lib")
-        app.addProjectDep(lib)
-        lib.addExternal("com.bugsee:bugsee-android:7.0.0-beta13")
-        assertEquals("7.0.0-beta13", DependencyDetector.getBugseeDependencyVersion(app, "bugsee-android"))
-    }
-
-    @Test
-    fun `version is null when SDK absent`() {
-        val app = child("app")
-        assertNull(DependencyDetector.getBugseeDependencyVersion(app, "bugsee-android"))
     }
 }
