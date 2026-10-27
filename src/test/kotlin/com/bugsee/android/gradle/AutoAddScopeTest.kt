@@ -201,9 +201,13 @@ class AutoAddScopeTest {
             feedback.set(true)
         }
         h.declare("com.bugsee:bugsee-android-leak:$SDK_VERSION")
+        h.project.extensions.add("android", Any()) // lets the plugin's afterEvaluate run
         val bugsee = captureOutput {
             h.autoAdded()
             h.autoAdded() // a second read must not repeat the warnings
+            // The harness reads before the DSL is final, so the decision is provisional and its
+            // warnings are logged once, when the DSL is declared final (#50).
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
         }.filter { it.startsWith("Bugsee:") }
         assertEquals(
             listOf(

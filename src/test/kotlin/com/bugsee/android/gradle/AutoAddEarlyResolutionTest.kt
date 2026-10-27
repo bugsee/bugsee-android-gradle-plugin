@@ -84,7 +84,8 @@ class AutoAddEarlyResolutionTest {
         }
         p.evaluateNow() // the DSL is final before the first read: no provisional pass at all
         p.earlyRead()
-        assertEquals(setOf("bugsee-android-feedback"), p.names())
+        // sdkAutoLoad=false opts out of ALL auto-add (core and extension modules).
+        assertEquals(emptySet<String>(), p.names())
     }
 
     @Test
@@ -104,9 +105,10 @@ class AutoAddEarlyResolutionTest {
             feedback.set(true)
         }
         p.earlyRead()
-        assertEquals(setOf("bugsee-android-feedback"), p.names())
+        // sdkAutoLoad=false opts out of ALL auto-add (core and extension modules).
+        assertEquals(emptySet<String>(), p.names())
         p.evaluateNow()
-        assertEquals(setOf("bugsee-android-feedback"), p.names())
+        assertEquals(emptySet<String>(), p.names())
     }
 
     @Test
