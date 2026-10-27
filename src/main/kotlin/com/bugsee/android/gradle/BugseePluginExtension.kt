@@ -219,15 +219,22 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      *
      * When `true` (default), the plugin adds the core SDK to the
      * consuming app's `implementation` configuration at a dynamic version
-     * range floored at the plugin's `MIN_SDK_VERSION`. This lets an app
+     * range floored at the plugin's `MIN_SDK_VERSION` — unless the build already
+     * declares an SDK version, in which case that version is used instead (precedence:
+     * `bugsee-android` on the app > `bugsee-android` in a project the app depends on >
+     * a `bugsee-android-*` extension on the app > an extension in a dependency
+     * project; highest version within a tier). A pin declared that way may be below
+     * `MIN_SDK_VERSION`. This lets an app
      * depend only on `bugsee-android-feedback` (or `bugsee-android-okhttp`,
      * `bugsee-android-ndk`, …) and have the matching core SDK pulled in
      * automatically — extension-only declarations are sufficient.
      *
      * If the app has declared `bugsee-android` itself on any
      * configuration (`api`, `implementation`, `compileOnly`, per-variant
-     * configs, …), the auto-add is skipped regardless of this setting:
-     * the user-declared version always wins.
+     * configs, …), or a project it depends on exposes it through `api`, the
+     * auto-add is skipped regardless of this setting: the user-declared version
+     * always wins. (A library that only has it as `implementation` still gets the
+     * core added to the app, at the library's version.)
      *
      * Set to `false` to opt out of the auto-pull behaviour entirely: the plugin
      * then adds no Bugsee runtime module on its own, neither the core SDK nor any
