@@ -184,9 +184,9 @@ dotted-path form as the DSL field names.
 | `plugin.optimizeExtensionsLoading` | Boolean | `true` | `bugsee { optimizeExtensionsLoading.set(…) }` |
 
 `failOnUploadError` makes an upload that does not complete (mapping, native symbols or build
-registration: a network error, an HTTP error that persists after the plugin's bounded retry, or a
+registration or artifact upload: a network error, an HTTP error that persists after the plugin's bounded retry, or a
 rejection such as an invalid app token) fail the build. By default it only logs a warning and the build
-stays green. Skipped uploads (no app token, nothing to upload) and symbols the server already have never
+stays green. Skipped uploads (no app token, nothing to upload) and symbols the server already has never
 fail the build. With the plugin's built-in uploader a failed auxiliary build-info blob (dependencies,
 timings) stays a warning; with `bugsee-cli` (the default) any failure the CLI reports for the build
 upload, including those blobs, fails it. It can be set per variant.

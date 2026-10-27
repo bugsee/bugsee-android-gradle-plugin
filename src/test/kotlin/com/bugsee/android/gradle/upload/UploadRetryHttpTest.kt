@@ -113,13 +113,19 @@ class UploadRetryHttpTest {
         assertEquals(1, hits.get())
     }
 
+    @Test fun `504 on the registration POST is not retried since the server may still be working`() {
+        script("/v2/apps/$appToken/builds", listOf(504, 200), okBuild)
+        assertFailsWith<RuntimeException> { register() }
+        assertEquals(1, hits.get())
+    }
+
     @Test fun `4xx on the registration POST is not retried`() {
         script("/v2/apps/$appToken/builds", listOf(403, 200), okBuild)
         assertFailsWith<RuntimeException> { register() }
         assertEquals(1, hits.get())
     }
 
-    @Test fun `a failed registration POST logs neither the token nor a retry line with a URL`() {
+    @Test fun `a failed registration POST logs and throws without the app token`() {
         script("/v2/apps/$appToken/builds", listOf(503), okBuild)
         val logger = RecordingLogger()
         val ex = assertFailsWith<RuntimeException> { register(logger) }

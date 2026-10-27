@@ -42,11 +42,11 @@ internal object HttpRetry {
 
     /**
      * Statuses worth another attempt of a request that is NOT idempotent on the wire (a POST that registers
-     * a build): throttling and the gateway codes (usually the request never reached the application). A
+     * a build): throttling and 502/503 (usually the request never reached the application; not 504, where a stitch may still be running). A
      * plain 500 is not repeated. Repeating a registration is still safe because the server replaces a build
      * registered under the same `uuid` rather than creating a second one.
      */
-    private fun isGatewayTransient(status: Int): Boolean = status == 429 || status == 502 || status == 503 || status == 504
+    private fun isGatewayTransient(status: Int): Boolean = status == 429 || status == 502 || status == 503
 
     /**
      * Run [request], retrying transient statuses up to [MAX_ATTEMPTS] times. Permanent statuses (4xx,
@@ -59,7 +59,7 @@ internal object HttpRetry {
      * error, except a read timeout ([SocketTimeoutException]: the server already held the request for the
      * full socket timeout, so retrying would stall the build for minutes) or a cancellation. The caller's
      * client must have its own automatic retries disabled, since this loop owns all retries.
-     * [idempotent] `false` (a POST that creates a record): only 429/502/503/504 are retried, and an I/O
+     * [idempotent] `false` (a POST that creates a record): only 429/502/503 are retried, and an I/O
      * error is thrown as is, so the client's own handler decides about it (it does not resend a request
      * that was already fully sent).
      */

@@ -292,7 +292,7 @@ internal object ChunkedBundleUploader {
             put("sha1_list", JSONArray(hashes))
         }.toString()
         post.entity = StringEntity(body, "UTF-8")
-        // Retried on transient gateway statuses only (429/502/503/504); see HttpRetry.
+        // Retried on transient gateway statuses only (429/502/503); see HttpRetry.
         val reply = HttpRetry.execute(http, post, "chunks/check", logger, retryPolicy, idempotent = false)
         val responseBody = reply.body ?: ""
         if (reply.status !in 200..299) {
@@ -372,7 +372,7 @@ internal object ChunkedBundleUploader {
             put("chunks", JSONArray(hashes))
         }
         post.entity = StringEntity(body.toString(), "UTF-8")
-        // Registers the build, so retried on transient gateway statuses only (429/502/503/504); see HttpRetry.
+        // Registers the build, so retried on transient gateway statuses only (429/502/503); see HttpRetry.
         val reply = HttpRetry.execute(http, post, "/builds/chunked", logger, retryPolicy, idempotent = false)
         val responseBody = reply.body ?: ""
         if (reply.status !in 200..299) {

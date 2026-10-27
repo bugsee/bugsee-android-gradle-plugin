@@ -722,7 +722,7 @@ abstract class BundleUploadTask : DefaultTask() {
             // Native fallback (used when the CLI path is inert/unavailable or
             // hit a structural failure). Chunked first, then single-PUT — both
             // consume the lazily-packed uploadZip and carry their own build-info
-            // handling. Best-effort: a failed upload never fails the build.
+            // handling. Best-effort: a failed upload only warns, unless failOnUploadError is on.
             if (!uploadHandled) {
                 var chunkedSucceeded = false
                 if (chunked) {
@@ -746,6 +746,13 @@ abstract class BundleUploadTask : DefaultTask() {
                     } catch (e: InterruptedException) {
                         Thread.currentThread().interrupt()
                         throw e
+                    } catch (e: java.io.IOException) {
+                        // A cancelled build must stay cancelled, not become a fallback or a warning.
+                        if (HttpRetry.isInterruption(e)) {
+                            Thread.currentThread().interrupt()
+                            throw e
+                        }
+                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     } catch (e: Exception) {
                         logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
@@ -773,6 +780,14 @@ abstract class BundleUploadTask : DefaultTask() {
                     } catch (e: InterruptedException) {
                         Thread.currentThread().interrupt()
                         throw e
+                    } catch (e: java.io.IOException) {
+                        // A cancelled build must stay cancelled, not become a fallback or a warning.
+                        if (HttpRetry.isInterruption(e)) {
+                            Thread.currentThread().interrupt()
+                            throw e
+                        }
+                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
+                        uploadFailed = true
                     } catch (e: Exception) {
                         logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                         uploadFailed = true
@@ -812,7 +827,7 @@ abstract class BundleUploadTask : DefaultTask() {
             }
 
             if (uploadFailed) {
-                UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the ${format.get()} build registration for variant ${variantName.get()}")
+                UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the ${format.get()} build upload for variant ${variantName.get()}")
             }
         } finally {
             // Only the native fallback materializes the ZIP; the CLI path never

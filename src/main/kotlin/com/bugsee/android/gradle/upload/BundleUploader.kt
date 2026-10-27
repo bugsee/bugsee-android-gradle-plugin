@@ -231,7 +231,7 @@ internal object BundleUploader {
         return httpClient.use { client ->
             var artifactUploaded = true
             // The registration POST creates a record, so only the statuses that mean "not processed"
-            // (429/502/503/504) are retried; see HttpRetry.
+            // (429/502/503) are retried; see HttpRetry.
             val reply = HttpRetry.execute(client, httpPost, "bundle upload step 1", logger, retryPolicy, idempotent = false)
             val statusCode = reply.status
 
@@ -352,6 +352,13 @@ internal object BundleUploader {
                     } else if (debug) {
                         logger.warn("Bugsee: Bundle upload complete.")
                     }
+                } catch (e: java.io.IOException) {
+                    if (HttpRetry.isInterruption(e)) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    }
+                    artifactUploaded = false
+                    logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 } catch (e: Exception) {
                     artifactUploaded = false
                     logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")

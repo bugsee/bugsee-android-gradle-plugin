@@ -142,6 +142,13 @@ internal object BaselineClient {
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             throw e
+        } catch (e: java.io.IOException) {
+            if (HttpRetry.isInterruption(e)) {
+                Thread.currentThread().interrupt()
+                throw e
+            }
+            logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
+            null
         } catch (e: Exception) {
             logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
             null

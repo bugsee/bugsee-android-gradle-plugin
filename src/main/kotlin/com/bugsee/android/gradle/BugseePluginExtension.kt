@@ -153,7 +153,7 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
 
     /**
      * Fail the build when an upload to Bugsee does not complete (mapping, native symbols, build
-     * registration): a transport error (connection refused, DNS, timeout, TLS), an HTTP error status that
+     * registration and artifact upload): a transport error (connection refused, DNS, timeout, TLS), an HTTP error status that
      * persists after the bounded retry, or a server rejection such as an invalid app token.
      *
      * By default (`false`) the plugin only logs a warning and the build stays green. Turn this on in CI
