@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
 import com.bugsee.android.gradle.BugseeInstrumentationExtension
+import com.bugsee.android.gradle.ProjectAccess
 import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.Project
@@ -72,7 +73,7 @@ internal class InstrumentationConfigResolver(
         }
 
         // 2. Gradle property
-        val gradleValue = project.findProperty(gradlePropName)?.toString()
+        val gradleValue = ProjectAccess.gradleProperty(project, gradlePropName)
         if (gradleValue != null) {
             val parsed = StartupTier.parse(gradleValue)
             if (parsed != null) {
@@ -122,7 +123,7 @@ internal class InstrumentationConfigResolver(
         }
 
         // 2. Gradle project property
-        val gradleValue = project.findProperty(gradlePropName)?.toString()
+        val gradleValue = ProjectAccess.gradleProperty(project, gradlePropName)
         if (gradleValue != null) {
             val parsed = gradleValue.toBooleanStrictOrNull()
             if (parsed == null) {

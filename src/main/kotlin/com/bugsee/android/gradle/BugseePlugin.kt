@@ -13,6 +13,7 @@ import com.bugsee.android.gradle.config.VariantContext
 import com.bugsee.android.gradle.upload.DependencyCollector
 import com.bugsee.android.gradle.instrumentation.InstrumentationConfigResolver
 import com.bugsee.android.gradle.instrumentation.ProjectDependencyCompat
+import com.bugsee.android.gradle.instrumentation.warnIfProjectDependenciesNotInspected
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
@@ -417,7 +418,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 // is going to auto-add the core SDK: at this point that
                 // dependency is still a pending `withDependencies` addition and
                 // is therefore invisible to DependencyDetector's declared-deps scan.
-                val coreSdkAutoLoad = settingsResolver().globalValue(SDK_AUTO_LOAD) && !isCoreSdkPresent(project)
+                val sdkAutoLoadOn = settingsResolver().globalValue(SDK_AUTO_LOAD)
+                val coreSdkAutoLoad = sdkAutoLoadOn && !isCoreSdkPresent(project)
+                // With auto-load off nothing else supplies the SDK: if the module's own
+                // dependencies do not declare it, SDK-dependent instrumentation is skipped.
+                // Same predicate as the instrumentation gates (prefix match, unscoped); the mode
+                // is checked first so nothing extra runs when Isolated Projects is off.
+                if (!sdkAutoLoadOn && ProjectAccess.isIsolatedProjects(project) &&
+                    !DependencyDetector.hasBugseeDependency(project, "bugsee-android")
+                ) {
+                    warnIfProjectDependenciesNotInspected(
+                        project, "the core Bugsee SDK was not found (and sdkAutoLoad is off, so it is not added)"
+                    )
+                }
                 val registrar = InstrumentationRegistrar(
                     project, project.logger, isDebug, configResolver,
                     effective.instrumentation.excludes.getOrElse(emptySet()),
@@ -446,20 +459,17 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun settingsResolver(): SettingsResolver = settingsResolver ?: run {
         val project = checkNotNull(appliedProject) { "Bugsee plugin not applied" }
         val extension = checkNotNull(pluginExtension) { "Bugsee plugin not applied" }
-        val root = project.rootProject
-        val text = root.providers
-            .fileContents(root.layout.projectDirectory.file(BUGSEE_PROPERTIES_FILENAME))
+        val text = project.providers
+            .fileContents(ProjectAccess.rootFile(project, BUGSEE_PROPERTIES_FILENAME))
             .asText.orNull
         // PluginPropertiesApplier has already reported a malformed file; do not repeat it.
         // The file is shared by every module, so its diagnostics are reported by the first project
         // that reads it; later projects parse silently.
         val warnedKey = "bugsee.settingsFileDiagnosticsReported"
-        val rootExtras = root.extensions.extraProperties
-        val parseLogger = if (rootExtras.has(warnedKey)) {
-            discardingLogger()
-        } else {
-            rootExtras.set(warnedKey, true)
+        val parseLogger = if (BugseeBuildState.claim(project, warnedKey)) {
             project.logger
+        } else {
+            discardingLogger()
         }
         val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
         SettingsResolver(extension, parsed, project.objects, project.logger, root.layout.projectDirectory.asFile)
@@ -696,7 +706,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(ccInputs.stringResFiles)
-            task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
+            task.rootProjectDirectory.fileValue(project.rootDir)
         }
 
         // Finalize after assemble/bundle and the packaging/signing tasks below them
@@ -759,7 +769,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             ccInputs.preResolvedToken?.let { task.preResolvedAppToken.set(it) }
             if (ccInputs.placeholderSeen) task.placeholderTokenSeen.set(true)
             task.stringResourceFiles.from(ccInputs.stringResFiles)
-            task.rootProjectDirectory.set(project.rootProject.layout.projectDirectory)
+            task.rootProjectDirectory.fileValue(project.rootDir)
             task.buildDirectory.set(project.layout.buildDirectory)
 
             // Ensure native debug metadata is extracted before upload.
@@ -1561,11 +1571,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }.getOrNull()
 
     private fun knownVariantNames(project: Project): MutableSet<String> {
-        val extras = project.rootProject.extensions.extraProperties
-        val key = "bugsee.knownVariantNames"
-        if (!extras.has(key)) extras.set(key, HashSet<String>())
-        @Suppress("UNCHECKED_CAST")
-        return extras.get(key) as MutableSet<String>
+        return BugseeBuildState.knownVariantNames(project)
     }
 
     /** Names of every application variant, shared across modules. */
@@ -1595,9 +1601,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     private fun warnUnsupportedKotlinOnce(project: Project, version: String?) {
         val key = "bugsee.composeCompilerKotlinWarned"
-        val root = project.gradle.rootProject.extensions.extraProperties
-        if (root.has(key)) return
-        root.set(key, true)
+        if (!BugseeBuildState.claim(project, key)) return
         project.logger.warn(
             "Bugsee gradle plugin: Compose instrumentation is disabled because the project " +
                 "uses Kotlin ${version ?: "(undetermined)"}, which this plugin's Compose " +
@@ -1758,7 +1762,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             key: String
         ): Boolean {
             resolver.anyScopeValue(def)?.let { return it }
-            val gradleValue = project.findProperty("bugsee.instrumentation.$key")?.toString()
+            val gradleValue = ProjectAccess.gradleProperty(project, "bugsee.instrumentation.$key")
             if (gradleValue != null) {
                 val parsed = gradleValue.toBooleanStrictOrNull()
                 if (parsed == null) {

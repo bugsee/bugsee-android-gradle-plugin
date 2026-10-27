@@ -249,7 +249,7 @@ internal object AppTokenResolver {
         debug: Boolean,
     ): String? {
         resolveFromExtension(extension, variantName, logger, debug)?.let { return it }
-        resolveFromPropertiesFile(project.rootProject.projectDir, logger, debug)
+        resolveFromPropertiesFile(project.rootDir, logger, debug)
             ?.let { return it }
 
         val sourceFiles: Iterable<File> = try {

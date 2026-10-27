@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.config
 
 import com.bugsee.android.gradle.BugseePluginExtension
+import com.bugsee.android.gradle.ProjectAccess
 import org.gradle.api.Project
 import org.gradle.api.logging.Logger
 
@@ -54,8 +55,7 @@ internal object PluginPropertiesApplier {
         // edits bugsee.properties, leading to stale config from the
         // cache. `.asText.orNull` returns null when the file is
         // absent (no log noise — that's the common case).
-        val file = project.rootProject.layout.projectDirectory
-            .file(BUGSEE_PROPERTIES_FILENAME)
+        val file = ProjectAccess.rootFile(project, BUGSEE_PROPERTIES_FILENAME)
         val text = project.providers.fileContents(file).asText.orNull
         applyText(text, extension, project.logger, project.rootProject.layout.projectDirectory.asFile)
     }
