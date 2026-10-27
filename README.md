@@ -621,6 +621,8 @@ Gradle log level:
 | `variant.<name>.*` key or `variant("<name>")` block matching no variant, flavor or build type | `warn` | Otherwise silently ignored, so a typo or wrong case falls back to the root/DSL token. |
 | `variant.<name>.plugin.<key>` for a global-only setting | `warn` | Ignored; use the root `plugin.<key>`. |
 | `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
+| Resolved `com.bugsee:*` modules on different versions (checked when the variant's runtime classpath resolves, so not on a configuration-cache hit; Maven modules only, project dependencies are not compared) | `warn`, once per variant | Mixed SDK releases can fail at runtime; the message lists each `group:name:version`. Never fails the build. |
+| Declared Bugsee SDK version (the core, or an extension when the core is not declared) older than the `initializeExtensions` floor while `optimizeExtensionsLoading` is on | `warn`, once per module | Extension providers are then left in the manifest (no strip); upgrade the SDK or turn the option off. |
 | Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |
 
 An empty root `app_token=` warns once, when the root token is actually consulted

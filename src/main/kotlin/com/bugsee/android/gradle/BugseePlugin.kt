@@ -18,6 +18,7 @@ import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
+import com.bugsee.android.gradle.instrumentation.SdkVersionAlignment
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.instrumentation.BugseeSdkDeclarations
 import com.bugsee.android.gradle.manifest.ExtensionStripGate
@@ -341,9 +342,18 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // Known limits, shared with the auto-add and tracked in #114: the app's own
             // configurations are read unscoped (a test-only newer pin can win), and a pin
             // only on a dependency project's debug* edge is not seen (null => strip).
-            val declaredSdkVersion = BugseeSdkVersion.parse(
-                BugseeSdkDeclarations.declaredCoreSdkVersion(project)
-            )
+            val declaredSdkVersionRaw = BugseeSdkDeclarations.declaredCoreSdkVersion(project)
+            val declaredSdkVersion = BugseeSdkVersion.parse(declaredSdkVersionRaw)
+            if (instrumentationGloballyEnabled && effective.optimizeExtensionsLoading.get() &&
+                ExtensionStripGate.isBelowFloor(declaredSdkVersion) &&
+                BugseeBuildState.claim(project, "extensions-init-sdk-below-floor:${project.buildTreePath}")
+            ) {
+                project.logger.warn(ExtensionStripGate.belowFloorWarning(declaredSdkVersionRaw))
+            }
+
+            // Resolution-time check: fires when the runtime classpath resolves (never forces it
+            // here) and warns when the resolved com.bugsee:* modules are on different versions.
+            SdkVersionAlignment.watch(project.logger, "$variantName (module ${project.path})", variant.runtimeConfiguration)
 
 
             // --- Manifest UUID injection + extension provider stripping ---

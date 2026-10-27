@@ -173,4 +173,12 @@ class ExtensionStripGateTest {
         )
     }
 
+    @Test
+    fun `below-floor warning applies to a known old version only`() {
+        assertTrue(ExtensionStripGate.isBelowFloor(BugseeSdkVersion.parse("7.0.0-beta10")))
+        assertFalse(ExtensionStripGate.isBelowFloor(CURRENT_SDK))
+        assertFalse(ExtensionStripGate.isBelowFloor(null))
+        val msg = ExtensionStripGate.belowFloorWarning("7.0.0-beta10")
+        assertTrue(msg, "7.0.0-beta10" in msg && "optimizeExtensionsLoading" in msg)
+    }
 }

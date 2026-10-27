@@ -42,6 +42,18 @@ internal object ExtensionStripGate {
         preNumber = 11,
     )
 
+    /** `true` when [sdkVersion] is known and older than [MIN_SDK_VERSION_WITH_EXTENSIONS_INIT]. */
+    fun isBelowFloor(sdkVersion: BugseeSdkVersion?): Boolean =
+        sdkVersion != null && sdkVersion < MIN_SDK_VERSION_WITH_EXTENSIONS_INIT
+
+    /** Warning for the otherwise silent no-strip in [shouldStrip] when the declared SDK is below the floor. */
+    fun belowFloorWarning(declaredVersion: String?): String =
+        "Bugsee gradle plugin: extension provider stripping (optimizeExtensionsLoading) requires " +
+            "Bugsee SDK (`com.bugsee:bugsee-android`) $MIN_SDK_VERSION_WITH_EXTENSIONS_INIT or newer " +
+            "(found $declaredVersion). Leaving the extension providers in the manifest, so " +
+            "startup is not optimised. Upgrade the SDK or set optimizeExtensionsLoading = false " +
+            "to silence this."
+
     /**
      * @param sdkVersion the consumer's declared `com.bugsee:bugsee-android` version, or
      *   `null` when it could not be parsed (project dependency, `7.+`, an unresolved
@@ -58,7 +70,7 @@ internal object ExtensionStripGate {
     ): Boolean {
         if (!optimizeExtensionsLoading) return false
         if (!instrumentationGloballyEnabled) return false
-        if (sdkVersion != null && sdkVersion < MIN_SDK_VERSION_WITH_EXTENSIONS_INIT) return false
+        if (isBelowFloor(sdkVersion)) return false
         return !InstrumentationExcludes.isExcluded(
             ExtensionsInitClassVisitorFactory.TARGET_CLASS_FQN,
             excludes,
