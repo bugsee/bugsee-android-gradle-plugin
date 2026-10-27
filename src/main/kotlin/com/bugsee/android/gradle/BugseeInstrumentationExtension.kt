@@ -19,6 +19,7 @@ import javax.inject.Inject
  *         mainThreadMisuse.set(true)
  *         ktor.set(true)              // Ktor HTTP client plugin auto-loading
  *         cronet.set(true)            // Cronet HTTP client plugin auto-loading
+ *         composeInTests.set(false)   // also wrap Compose in test compilations (off by default)
  *         startupTier.set(StartupTier.STANDARD) // App-startup bytecode tracing depth
  *     }
  * }
@@ -154,6 +155,22 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
     val composeInput: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
     /**
+     * Also apply the Compose compiler plugin (`compose` tag and `composeSecure` wrapping) to TEST
+     * compilations: unit tests (Robolectric), instrumented tests, test fixtures and other test source sets.
+     *
+     * Off by default: the tag/secure wraps add modifier and semantics nodes that can change
+     * parent/child matchers in Compose tests. Turn it on when you want tags in test runs, e.g.
+     * Robolectric recordings. It only widens WHICH compilations are processed; [compose] and
+     * [composeSecure] still decide what is injected there.
+     *
+     * Scope note: the gate is project-level like [compose]. Enabling this in ANY scope (global
+     * DSL or a variant block) applies the compiler plugin to every test compilation of the module.
+     *
+     * When unset, defaults to `false`.
+     */
+    val composeInTests: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
+
+    /**
      * Depth of app-startup bytecode tracing.
      *
      * Typed [StartupTier] property — the compiler enforces that the value
@@ -244,6 +261,9 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
         "compose" -> compose
         "composeSecure" -> composeSecure
         "composeInput" -> composeInput
+        // Compiler-plugin gate only (default FALSE, applied in BugseePlugin.isApplicable); do not
+        // route it through InstrumentationConfigResolver, whose fallback default is true.
+        "composeInTests" -> composeInTests
         // Ktor / Cronet: today read only via direct property access in
         // the auto-install flow, but the keyed path is wired so a future
         // bytecode-instrumentation addition that uses these keys honors

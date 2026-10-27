@@ -249,4 +249,58 @@ class ComposeTestCompilationTest {
         assertTrue(plugin.isApplicable(stub(p, "freeDeviceTest", siblings = siblings)))
         assertTrue(plugin.isApplicable(stub(p, "debug", siblings = siblings)))
     }
+
+    @Test
+    fun `composeInTests opts test compilations back in without touching production`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java).instrumentation.composeInTests.set(true)
+        val all = listOf("debug", "release", "debugUnitTest", "releaseAndroidTest", "test", "debugTestFixtures")
+        listOf("debugUnitTest", "releaseAndroidTest", "test", "debugTestFixtures").forEach { assertTrue(ComposeTestCompilation.isTest(stub(p, it, siblings = all))) }
+        all.forEach { assertTrue(plugin.isApplicable(stub(p, it, siblings = all)), "$it must be applicable") }
+    }
+
+    @Test
+    fun `composeInTests false keeps test compilations skipped`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java).instrumentation.composeInTests.set(false)
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
+
+    @Test
+    fun `composeInTests does not override disabled compose and composeSecure`() {
+        val (p, plugin) = appliedPlugin()
+        val instr = p.extensions.getByType(BugseePluginExtension::class.java).instrumentation
+        instr.composeInTests.set(true)
+        instr.compose.set(false)
+        instr.composeSecure.set(false)
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
+
+    @Test
+    fun `bugsee properties composeInTests key turns the gate on`() {
+        val (p, plugin) = appliedPlugin()
+        com.bugsee.android.gradle.config.PluginPropertiesApplier.applyText(
+            "plugin.instrumentation.composeInTests=true\n",
+            p.extensions.getByType(BugseePluginExtension::class.java),
+            p.logger,
+        )
+        assertTrue(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
+
+    @Test
+    fun `composeInTests set in one variant block applies to every test compilation`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java)
+            .variant("release") { it.instrumentation.composeInTests.set(true) }
+        val all = listOf("debug", "debugUnitTest")
+        assertTrue(plugin.isApplicable(stub(p, "debugUnitTest", siblings = all)))
+    }
+
+    @Test
+    fun `composeInTests false in a variant block falls back to the off default`() {
+        val (p, plugin) = appliedPlugin()
+        p.extensions.getByType(BugseePluginExtension::class.java)
+            .variant("release") { it.instrumentation.composeInTests.set(false) }
+        assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
 }

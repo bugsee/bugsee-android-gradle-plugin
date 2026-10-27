@@ -29,7 +29,7 @@ class SettingDefinitionsTest {
         "instrumentation.enabled", "instrumentation.okhttp", "instrumentation.httpEngine",
         "instrumentation.log", "instrumentation.thread", "instrumentation.mainThreadMisuse",
         "instrumentation.operationDispatch", "instrumentation.compose",
-        "instrumentation.composeSecure", "instrumentation.composeInput",
+        "instrumentation.composeSecure", "instrumentation.composeInput", "instrumentation.composeInTests",
         "instrumentation.ktor", "instrumentation.cronet", "instrumentation.startupTier",
     )
 

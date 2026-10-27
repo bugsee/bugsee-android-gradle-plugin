@@ -79,6 +79,7 @@ internal object SettingDefinitions {
         boolDef("instrumentation.compose", SettingScope.VARIANT) { it.instrumentation.compose },
         boolDef("instrumentation.composeSecure", SettingScope.VARIANT) { it.instrumentation.composeSecure },
         boolDef("instrumentation.composeInput", SettingScope.VARIANT) { it.instrumentation.composeInput },
+        boolDef("instrumentation.composeInTests", SettingScope.VARIANT) { it.instrumentation.composeInTests },
         boolDef("instrumentation.ktor", SettingScope.VARIANT) { it.instrumentation.ktor },
         boolDef("instrumentation.cronet", SettingScope.VARIANT) { it.instrumentation.cronet },
         enumDef("instrumentation.startupTier", SettingScope.VARIANT, StartupTier::class.java) { it.instrumentation.startupTier },
