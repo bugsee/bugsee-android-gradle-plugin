@@ -322,8 +322,8 @@ class AutoAddScopeTest {
             "releaseLatestTestImplementation", "uiTestImplementation",
         )
         val test = listOf(
-            "latestTestUnitTestImplementation", "testLatestTestImplementation", "latestTestDebugAndroidTestImplementation",
-            "testLatestTestImplementation", "androidTestLatestTestImplementation",
+            "latestTestUnitTestImplementation", "testLatestTestImplementation", "testLatestTestDebugImplementation",
+            "androidTestLatestTestDebugImplementation", "testFixturesLatestTestApi",
             "testImplementation", "jvmTestImplementation", "latestTestFixturesApi",
         )
         production.forEach {

@@ -95,7 +95,9 @@ internal object DependencyDetector {
 
     /**
      * Names of the build types and product flavors declared in [project]'s Android DSL, or empty
-     * when there is no Android DSL (yet). Reads only [project]'s own extension.
+     * when there is no Android DSL (yet), or when AGP is loaded by a different classloader than
+     * the plugin (the DSL type then does not match and the plain name rule applies). Reads only
+     * [project]'s own extension.
      */
     fun declaredVariantNames(project: Project): Set<String> = try {
         val dsl = project.extensions.findByType(CommonExtension::class.java)
