@@ -381,11 +381,17 @@ class CliUploaderTest {
         )
     }
 
-    @Test fun `reserved exit codes in 40+ range do NOT trigger fallback`() {
+    @Test fun `binary-did-not-run exit codes trigger fallback`() {
+        listOf(126, 127, 128, 134, 137, 139, 255, -1, -1073741701, -1073741515, Int.MIN_VALUE).forEach { code ->
+            assertTrue(CliUploader.shouldFallback(code), "exit $code means the binary did not run")
+        }
+    }
+
+    @Test fun `substantive and reserved exit codes 3 and 40 to 125 do NOT trigger fallback`() {
         // Defensive: any future addition to the CLI's exit-code enum lands
         // in a non-fallback bucket by default. A new code that SHOULD trigger
         // fallback must be added explicitly to `CliUploader.shouldFallback`.
-        listOf(40, 41, 50, 99, 127).forEach { code ->
+        listOf(3, 40, 41, 50, 99, 125).forEach { code ->
             assertFalse(
                 CliUploader.shouldFallback(code),
                 "exit $code (reserved) must default to substantive-failure; update both sides if needed",
@@ -630,6 +636,67 @@ class CliUploaderTest {
         assertEquals(2, result.exitCode)
         assertTrue(result.shouldFallback, "exit 2 (Usage) → structural fallback")
         assertEquals("exit-2", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 127 to fallback with not-runnable reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 127), executableCliStub())
+        assertFalse(result.success)
+        assertEquals(127, result.exitCode)
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-127-not-runnable", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 137 to fallback with signal reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 137), executableCliStub())
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-137-signal-9", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec renders a negative exit code as unsigned hex in the reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = -1073741819), executableCliStub())
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-0xC0000005-not-runnable", result.fallbackReason)
+    }
+
+    @Test fun `fallbackReason formats every fallback bucket`() {
+        assertEquals("exit-1", CliUploader.fallbackReason(1))
+        assertEquals("exit-2", CliUploader.fallbackReason(2))
+        assertEquals("exit-126-not-runnable", CliUploader.fallbackReason(126))
+        assertEquals("exit-128-not-runnable", CliUploader.fallbackReason(128))
+        assertEquals("exit-129-signal-1", CliUploader.fallbackReason(129))
+        assertEquals("exit-139-signal-11", CliUploader.fallbackReason(139))
+        assertEquals("exit-0xFFFFFFFF-not-runnable", CliUploader.fallbackReason(-1))
+    }
+
+    @Test fun `signal exit falls back for symbols but not for build registration`() {
+        val r = runUploadMapping(FakeExec(cliExitValue = 137), executableCliStub())
+        assertTrue(r.shouldFallback, "symbols are idempotent: fall back")
+        assertFalse(r.shouldFallbackForBuildRegistration, "build registration state unknown: no second attempt")
+    }
+
+    @Test fun `windows crash status falls back for symbols but not for build registration`() {
+        val r = runUploadMapping(FakeExec(cliExitValue = -1073741819), executableCliStub())
+        assertTrue(r.shouldFallback)
+        assertFalse(r.shouldFallbackForBuildRegistration)
+    }
+
+    @Test fun `not-runnable exits fall back for both symbols and build registration`() {
+        for (code in listOf(126, 127, 128, -1, -1073741515, -1073741701, -1073741511, -1073741502)) {
+            val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertTrue(r.shouldFallback, "exit $code symbols")
+            assertTrue(r.shouldFallbackForBuildRegistration, "exit $code build registration")
+        }
+        for (code in listOf(1, 2)) {
+            val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertTrue(r.shouldFallbackForBuildRegistration, "structural exit $code keeps build fallback")
+        }
+    }
+
+    @Test fun `verifyAndExec maps exit 3 to no-fallback failure`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 3), executableCliStub())
+        assertFalse(result.success)
+        assertFalse(result.shouldFallback)
+        assertEquals(null, result.fallbackReason)
     }
 
     @Test fun `verifyAndExec maps substantive exit codes to no-fallback failures`() {

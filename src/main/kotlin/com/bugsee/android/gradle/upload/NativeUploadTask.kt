@@ -41,7 +41,7 @@ import javax.inject.Inject
  *     directly with `transform = "breakpad"`.
  *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload --type elf`
  *     via [CliUploader.uploadElf]. On a structural CLI failure (exit 1 or 2,
- *     binary missing, exec failed), fall back to the Kotlin uploader.
+ *     exit < 0 / 126 / 127 / >= 128, binary missing, exec failed), fall back to the Kotlin uploader.
  *     Substantive CLI failures (bad token, server, network) propagate.
  *
  * Both paths share the [SymbolHashCache] — once a hash is uploaded

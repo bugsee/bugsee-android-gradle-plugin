@@ -12,7 +12,9 @@ import java.io.File
  *   - exit 0 → success, no fallback.
  *   - exit 1 (Unexpected) or exit 2 (Usage) → structural CLI failure;
  *     the Kotlin uploader is given a chance to take over.
- *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40+) →
+ *   - negative, 126, 127 or >= 128 → the binary did not run (not executable,
+ *     not found, loader failure, killed by a signal); fall back as well.
+ *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40–125) →
  *     substantive failure; the Kotlin uploader would hit the same error,
  *     so we do NOT retry and the caller surfaces the failure as-is.
  *
@@ -30,7 +32,19 @@ internal data class CliUploadResult(
      * touching customer code.
      */
     val fallbackReason: String?,
-)
+) {
+    /**
+     * Fallback gate for the build-registration path (`upload build`). Unlike
+     * symbol uploads (idempotent: duplicate 16004 is success), a second
+     * registration is not known to be safe, so a signal exit (> 128) or a Windows
+     * crash/kill status (< -1, other than loader failures such as 0xC0000135) — where
+     * the CLI DID run and may have already registered the build before dying — must
+     * not trigger a retry. Only 1, 2, 126, 127, 128, loader failures and the
+     * plugin-synthesized -1 keep the fallback.
+     */
+    val shouldFallbackForBuildRegistration: Boolean
+        get() = shouldFallback && !CliUploader.ranAndDied(exitCode)
+}
 
 /**
  * Drives `bugsee-cli debug-files upload` invocations for the symbol types
@@ -53,6 +67,21 @@ internal object CliUploader {
 
     /** Per the CLI's documented exit-code contract: 2 = Usage (argv error). */
     private const val EXIT_USAGE = 2
+
+    /** POSIX shell convention: 126 = found but not executable, 127 = not found. */
+    private const val EXIT_NOT_EXECUTABLE = 126
+    private const val EXIT_NOT_FOUND = 127
+
+    /**
+     * Windows NT statuses meaning the image never started (so nothing could have been
+     * registered): 0xC0000135 DLL_NOT_FOUND, 0xC000007B INVALID_IMAGE_FORMAT,
+     * 0xC0000139 ENTRYPOINT_NOT_FOUND, 0xC0000142 DLL_INIT_FAILED.
+     */
+    private val WINDOWS_LOADER_FAILURES: Set<Int> =
+        setOf(0xC0000135L, 0xC000007BL, 0xC0000139L, 0xC0000142L).map { it.toInt() }.toSet()
+
+    /** POSIX: 128 + signal number when the process is killed by a signal. */
+    private const val EXIT_SIGNAL_BASE = 128
 
     /** The environment variable bugsee-cli reads the app token from (`--app-token` is its flag form). */
     internal const val APP_TOKEN_ENV = "BUGSEE_APP_TOKEN"
@@ -128,7 +157,8 @@ internal object CliUploader {
      * At least one of [depsJsonFile] / [timingsJsonFile] must be non-null
      * (the CLI rejects an empty bundle with a config error). Returns the
      * same [CliUploadResult] contract as the symbol uploads — a
-     * structural failure (exit 1/2, binary missing) signals the caller to
+     * structural failure (exit 1/2, exit < 0 / 126 / 127 / >= 128,
+     * binary missing) signals the caller to
      * fall back to the legacy per-blob gzip PUTs.
      *
      * Requires `bugsee-cli` >= 0.2.0 (the version that introduced the
@@ -169,11 +199,15 @@ internal object CliUploader {
      * the CLI owns *how* (packing, registration, presigned PUTs, chunking,
      * retries, telemetry).
      *
-     * Returns the [CliUploadResult] contract: a structural failure (exit 1/2,
-     * binary missing) signals the caller to fall back to the native
-     * Bundle/ChunkedBundleUploader path; a substantive failure (bad token /
-     * server / transport) propagates without fallback since the native path
-     * would hit the same error.
+     * Returns the [CliUploadResult] contract. Callers must gate the native
+     * Bundle/ChunkedBundleUploader fallback on
+     * [CliUploadResult.shouldFallbackForBuildRegistration], NOT on `shouldFallback`:
+     * only exit 1/2, 126, 127, 128, Windows loader failures and the plugin-synthesized
+     * -1 (binary missing / exec failed) keep the fallback, because the CLI provably
+     * did not register anything. A signal exit (> 128) or Windows crash/kill status
+     * (< -1, non-loader) skips it, since the build may already be registered. A
+     * substantive failure (bad token / server / transport) propagates without
+     * fallback since the native path would hit the same error.
      *
      * Requires `bugsee-cli` >= the version that introduced `upload build`
      * (gated by the caller via [CliBinaryResolver]); an older binary yields a
@@ -368,14 +402,14 @@ internal object CliUploader {
             )
             shouldFallback(exitCode) -> {
                 logger.warn(
-                    "Bugsee: bugsee-cli exited with $exitCode (structural failure); " +
+                    "Bugsee: bugsee-cli ${describeFallback(exitCode)}; " +
                         "falling back to the Kotlin uploader.",
                 )
                 CliUploadResult(
                     success = false,
                     exitCode = exitCode,
                     shouldFallback = true,
-                    fallbackReason = "exit-$exitCode",
+                    fallbackReason = fallbackReason(exitCode),
                 )
             }
             else -> {
@@ -560,12 +594,61 @@ internal object CliUploader {
     }
 
     /**
-     * Whether [exitCode] is one of the CLI's "structural failure" codes that
-     * mean the binary never got a fair chance — and the Kotlin uploader can
-     * still succeed.
+     * Whether the symbol uploaders should fall back to the Kotlin uploader for
+     * [exitCode]: the CLI's structural codes (1, 2) or an OS-level failure
+     * ([isOsLevelFailure]). Symbol uploads are idempotent (duplicate 16004 is
+     * success), so this is safe even when the CLI ran and was killed. Build
+     * registration uses the stricter [CliUploadResult.shouldFallbackForBuildRegistration].
      *
      * Visible for testing.
      */
     internal fun shouldFallback(exitCode: Int): Boolean =
-        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE
+        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE || isOsLevelFailure(exitCode)
+
+    /**
+     * Exit codes produced by the OS/shell rather than a substantive CLI result, for
+     * which the symbol uploaders fall back: negative (Windows loader failures and
+     * crash/kill statuses), POSIX 126 (not executable) / 127 (not found), 128, and
+     * > 128 (killed by a signal). Not all of these mean the process never started;
+     * see [ranAndDied] for the ones where the CLI did run.
+     *
+     * Visible for testing.
+     */
+    internal fun isOsLevelFailure(exitCode: Int): Boolean =
+        exitCode < 0 || exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode >= EXIT_SIGNAL_BASE
+
+    /**
+     * Whether the CLI DID start and then died: a POSIX signal exit (> 128, signal
+     * `exit - 128`) or a Windows NT status crash/kill (< -1, e.g. 0xC0000005), except
+     * Windows loader failures ([WINDOWS_LOADER_FAILURES]; the process never reached main). Plugin-
+     * synthesized -1 (binary missing / not executable / exec failed) is NOT included.
+     * Used to avoid a second build registration, whose state is unknown.
+     */
+    internal fun ranAndDied(exitCode: Int): Boolean =
+        exitCode > EXIT_SIGNAL_BASE || (exitCode < -1 && exitCode !in WINDOWS_LOADER_FAILURES)
+
+    /**
+     * `X-Bugsee-Uploader` fallback reason for a fallback [exitCode]: `exit-1` /
+     * `exit-2` (structural), `exit-<n>-not-runnable` (126, 127, 128), `exit-<n>-signal-<sig>`
+     * (> 128), or `exit-0x<HEX>-not-runnable` for negative codes (unsigned hex avoids
+     * a double hyphen). The `not-runnable` token is a stable backend bucket and also
+     * covers Windows crash statuses; it is kept for header compatibility.
+     *
+     * Visible for testing.
+     */
+    internal fun fallbackReason(exitCode: Int): String = when {
+        exitCode < 0 -> "exit-0x${Integer.toHexString(exitCode).uppercase()}-not-runnable"
+        exitCode > EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode == EXIT_SIGNAL_BASE ->
+            "exit-$exitCode-not-runnable"
+        else -> "exit-$exitCode"
+    }
+
+    private fun describeFallback(exitCode: Int): String = when {
+        exitCode < 0 -> "could not be run (exit 0x${Integer.toHexString(exitCode).uppercase()})"
+        exitCode > EXIT_SIGNAL_BASE -> "was killed by signal ${exitCode - EXIT_SIGNAL_BASE} (exit $exitCode)"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode == EXIT_SIGNAL_BASE ->
+            "could not be run (exit $exitCode)"
+        else -> "exited with $exitCode (structural failure)"
+    }
 }

@@ -40,7 +40,8 @@ import javax.inject.Inject
  *     directly, exactly as the task always has.
  *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload` via
  *     [CliUploader]. On a structural CLI failure (exit 1 or 2 per the
- *     CLI contract, binary missing, exec failed), fall back to the
+ *     CLI contract, binary did not run / killed by a signal: exit < 0, 126,
+ *     127 or >= 128, binary missing, exec failed), fall back to the
  *     Kotlin uploader so the build still ships symbols. Substantive CLI
  *     failures (bad token, server, network) propagate without retry.
  *
