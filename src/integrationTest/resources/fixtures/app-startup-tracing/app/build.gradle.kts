@@ -81,6 +81,9 @@ dependencies {
         compileOnly("com.bugsee:bugsee-android:99.0.0")
     }
     implementation("androidx.startup:startup-runtime:1.1.1")
+    // `-PbugseeFixtureLibJar=<absolute path>` adds a prebuilt third-party-style library jar
+    // (used by InstrumentationFallbackIntegrationTest, whose classes cannot come from javac).
+    project.findProperty("bugseeFixtureLibJar")?.toString()?.let { implementation(files(it)) }
 }
 
 bugsee {

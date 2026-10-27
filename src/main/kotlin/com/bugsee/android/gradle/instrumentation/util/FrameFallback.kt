@@ -56,8 +56,14 @@ import java.lang.reflect.Method
  *    sizing errs only on the conservative side.
  *  - The trial proves only THIS lane's output. A method within a few bytes of 65,535 can still
  *    overflow if a later lane in the chain adds code after the trial passed.
- *  - `ClassTooLargeException` (constant pool beyond 65,535 entries) still fails the build: the
- *    trial writer's pool is a copy taken at trial time, so it cannot see the real one filling up.
+ *  - `ClassTooLargeException` (constant pool beyond 65,535 entries): the trial pool is padded to
+ *    the real pool's size, so a method whose instrumented form would overflow it is reverted
+ *    like any other. A class whose ORIGINAL pool is already within `MinifiedClassSkip.POOL_HEADROOM`
+ *    of the limit is not instrumented at all by any lane (`MinifiedClassSkip.shouldSkip`; ExtensionsInit,
+ *    which targets only Bugsee's own class, is exempt), which also covers the streaming lanes
+ *    that have no trial. That holds while the buffering lanes' own additions stay within the
+ *    headroom; a streaming lane running after a buffering lane that filled the pool to the limit
+ *    can still overflow it.
  *  - Version-50 classes with `JSR/RET`: AGP retries the whole class with `COMPUTE_MAXS` iff it
  *    sees the bare `IllegalArgumentException("JSR/RET are not supported with computeFrames
  *    option")`. That exception is therefore never wrapped or swallowed here ([JSR_RET_MESSAGE]),
