@@ -33,7 +33,7 @@ import com.bugsee.android.gradle.upload.NativeUploadTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
-import org.gradle.api.artifacts.DependencySet
+import org.gradle.api.artifacts.Configuration
 import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskProvider
@@ -64,6 +64,38 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     // Set once the Android plugin has been seen and the variant wiring registered.
     private var androidWired = false
+
+    // True once the build script body (so the user's `bugsee { }` block) has been evaluated,
+    // i.e. from the first `afterEvaluate` on. Until then a `withDependencies` action fired by an
+    // early reader of `implementation` decides on a possibly non-final DSL.
+    private var dslFinal = false
+
+    // The auto-add made while the DSL was not yet final, re-checked in afterEvaluate.
+    private var autoAddRecord: AutoAddRecord? = null
+
+    /** Test seam: receives the warning logged when an early-read auto-add cannot be corrected. */
+    internal var uncorrectableAutoAddHook: ((String) -> Unit)? = null
+
+    private class AutoAddRecord(val config: Configuration, val result: AutoAddResult)
+
+    /** The DSL-derived gates the auto-add decision depends on, plus the dependencies it produced. */
+    private class AutoAddResult(
+        val inputs: AutoAddInputs,
+        val dependencies: List<Dependency>,
+        // Debug "Auto-adding ..." lines for [dependencies]; logged only once the decision is final.
+        val notes: List<String>,
+    )
+
+    private data class AutoAddInputs(
+        val sdkAutoLoad: Boolean,
+        val ndk: Boolean,
+        val leak: Boolean,
+        val feedback: Boolean,
+        val compose: Boolean,
+        val okhttp: Boolean,
+        val ktor: Boolean,
+        val cronet: Boolean,
+    )
 
     // Injected by Gradle at plugin apply time — the service registry
     // we need to hook the BuildTimingService into the task-completion
@@ -142,102 +174,25 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                         return@withDependencies
                     }
 
-                    // Decided before variants exist: global-scope values (so
-                    // preferSettingsFile applies), or any scope for the module
-                    // auto-adds (see isAutoAddEnabled).
-                    val resolver = settingsResolver()
-                    val isDebug = resolver.globalValueOrNull(DEBUG) ?: false
-
-                    // `sdkAutoLoad=false` opts out of ALL auto-add (core SDK and every
-                    // extension module): the user declares every Bugsee module
-                    // themselves. Resolved with the global-scope rule, so the DSL and
-                    // bugsee.properties (incl. preferSettingsFile) behave identically.
-                    if (!resolver.globalValue(SDK_AUTO_LOAD)) {
-                        inertOptInModules(project, resolver).forEach { (setting, artifact) ->
-                            project.logger.warn(sdkAutoLoadOffWarning(setting, artifact))
-                        }
-                        if (isDebug) {
-                            project.logger.warn("Bugsee: sdkAutoLoad=false - skipping all dependency auto-add")
-                        }
-                        return@withDependencies
-                    }
-
-                    // Auto-add the core Bugsee SDK if the consuming app has
-                    // not declared one. Dynamic version range with the
-                    // plugin's MIN_SDK_VERSION as a floor — the consumer
-                    // automatically picks up newer compatible SDK releases
-                    // without bumping the plugin. If the user has declared
-                    // their own version on any configuration (`api`,
-                    // `compileOnly`, variant configs, …), defer to it
-                    // rather than layering a dynamic dep on top.
-                    // Version shared by EVERY auto-added Bugsee module — core
-                    // AND extensions. Prefer the version the consumer already
-                    // declared for the core SDK; otherwise the dynamic range
-                    // floored at MIN_SDK_VERSION. Extensions are published under
-                    // the SDK's version line, so they must track the SDK version
-                    // (never the plugin version — see autoAddModule).
-                    val sdkVersion = declaredCoreSdkVersion(project)
-                        ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
-
-                    if (!isCoreSdkPresent(project)) {
-                        if (isDebug) {
-                            project.logger.warn(
-                                "Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion"
-                            )
-                        }
-                        deps.add(
-                            project.dependencies.create(
-                                "com.bugsee:bugsee-android:$sdkVersion"
-                            )
-                        )
-                    }
-
-                    // Optional SDK modules driven by user opt-in via the
-                    // `bugsee { ndk { enabled.set(true) }; feedback(true) }`
-                    // DSL. Same already-declared check as the
-                    // auto-instrumented modules below. The NDK runtime is added
-                    // when NDK is enabled globally or in any variant scope; the
-                    // per-variant symbol upload task stays exact.
-                    if (resolver.anyScopeValue(NDK_ENABLED) ?: false) {
-                        autoAddModule(project, deps, "bugsee-android-ndk", "ndk", isDebug, sdkVersion)
-                    }
-                    if (resolver.globalValue(LEAK_ENABLED)) {
-                        autoAddModule(project, deps, "bugsee-android-leak", "leak", isDebug, sdkVersion)
-                    }
-                    if (resolver.globalValue(FEEDBACK)) {
-                        autoAddModule(project, deps, "bugsee-android-feedback", "feedback", isDebug, sdkVersion)
-                    }
-
-                    // Compose AAR carries three independent capabilities (tag
-                    // injection, secure-modifier auto-detection, input capture).
-                    // Auto-add the AAR if ANY of them is enabled — disabling
-                    // `compose` (the umbrella) while keeping `composeInput` or
-                    // `composeSecure` should still pull in the runtime that
-                    // hosts those features.
-                    val composeEnabled =
-                        isAutoAddEnabled(project, resolver, INST_COMPOSE, "compose") ||
-                                isAutoAddEnabled(project, resolver, INST_COMPOSE_SECURE, "composeSecure") ||
-                                isAutoAddEnabled(project, resolver, INST_COMPOSE_INPUT, "composeInput")
-                    if (hasComposeDependency(project) && composeEnabled) {
-                        autoAddModule(project, deps, "bugsee-android-compose", "compose", isDebug, sdkVersion)
-                    }
-                    if (hasOkHttpDependency(project) && isAutoAddEnabled(project, resolver, INST_OKHTTP, "okhttp")) {
-                        autoAddModule(project, deps, "bugsee-android-okhttp", "okhttp", isDebug, sdkVersion)
-                    }
-                    if (hasKtorDependency(project, 2) && isAutoAddEnabled(project, resolver, INST_KTOR, "ktor")) {
-                        autoAddModule(project, deps, "bugsee-android-ktor-2", "ktor-2", isDebug, sdkVersion)
-                    }
-                    if (hasKtorDependency(project, 3) && isAutoAddEnabled(project, resolver, INST_KTOR, "ktor")) {
-                        autoAddModule(project, deps, "bugsee-android-ktor-3", "ktor-3", isDebug, sdkVersion)
-                    }
-                    if (hasCronetDependency(project) && isAutoAddEnabled(project, resolver, INST_CRONET, "cronet")) {
-                        autoAddModule(project, deps, "bugsee-android-cronet", "cronet", isDebug, sdkVersion)
-                    }
+                    // Decided before variants exist. If the first read of `implementation`
+                    // happens before the user's `bugsee { }` block (another plugin reading it
+                    // at apply time), the DSL is not final: the decision is made with what is
+                    // known, NOT memoized, and re-checked in afterEvaluate (see
+                    // [reconcileAutoAdd]).
+                    val added = computeAutoAdds(
+                        project,
+                        if (dslFinal) settingsResolver() else freshSettingsResolver(),
+                    )
+                    deps.addAll(added.dependencies)
+                    // A provisional pass is not announced; [reconcileAutoAdd] logs the final one.
+                    if (dslFinal) added.notes.forEach { project.logger.warn(it) } else autoAddRecord = AutoAddRecord(config, added)
                 }
             }
         }
 
         project.afterEvaluate {
+            // Fallback: normally the DSL was already declared final by `finalizeDsl` below.
+            onDslFinal(project)
             val isDebug = settingsResolver().globalValue(DEBUG)
             if (isDebug) project.logger.warn("Bugsee: Plugin applied")
 
@@ -303,6 +258,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 }
             }
         }
+
+        // The first AGP hook after the build script body and before ANY `onVariants` callback (which
+        // reads the declared dependencies to gate instrumentation) — the earliest point at which
+        // the DSL is final and late enough that the auto-add can still be corrected.
+        androidComponents.finalizeDsl { onDslFinal(project) }
 
         androidComponents.onVariants { variant ->
             val globalDebug = settingsResolver().globalValue(DEBUG)
@@ -466,6 +426,191 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
     }
 
+    private fun readAutoAddInputs(project: Project, resolver: SettingsResolver) = AutoAddInputs(
+        sdkAutoLoad = resolver.globalValue(SDK_AUTO_LOAD),
+        ndk = resolver.anyScopeValue(NDK_ENABLED) ?: false,
+        leak = resolver.globalValue(LEAK_ENABLED),
+        feedback = resolver.globalValue(FEEDBACK),
+        // Compose AAR carries three independent capabilities (tag injection, secure-modifier
+        // auto-detection, input capture). Auto-add the AAR if ANY of them is enabled — disabling
+        // `compose` (the umbrella) while keeping `composeInput` or `composeSecure` should still
+        // pull in the runtime that hosts those features.
+        compose = isAutoAddEnabled(project, resolver, INST_COMPOSE, "compose") ||
+                isAutoAddEnabled(project, resolver, INST_COMPOSE_SECURE, "composeSecure") ||
+                isAutoAddEnabled(project, resolver, INST_COMPOSE_INPUT, "composeInput"),
+        okhttp = isAutoAddEnabled(project, resolver, INST_OKHTTP, "okhttp"),
+        ktor = isAutoAddEnabled(project, resolver, INST_KTOR, "ktor"),
+        cronet = isAutoAddEnabled(project, resolver, INST_CRONET, "cronet"),
+    )
+
+    /**
+     * The auto-add decision: which Bugsee modules to add to `implementation`, from [resolver]
+     * and the declared dependencies. Nothing is added to the configuration here, so it can be
+     * re-run by [reconcileAutoAdd].
+     */
+    private fun computeAutoAdds(
+        project: Project,
+        resolver: SettingsResolver,
+        ignore: Set<Dependency> = emptySet(),
+    ): AutoAddResult {
+        val out = ArrayList<Dependency>()
+        val notes = ArrayList<String>()
+        // Decided before variants exist: global-scope values (so preferSettingsFile applies), or
+        // any scope for the module auto-adds (see isAutoAddEnabled).
+        val isDebug = resolver.globalValueOrNull(DEBUG) ?: false
+        val inputs = readAutoAddInputs(project, resolver)
+
+        // `sdkAutoLoad=false` opts out of ALL auto-add (core SDK and every extension module): the
+        // user declares every Bugsee module themselves. Resolved with the global-scope rule, so the
+        // DSL and bugsee.properties (incl. preferSettingsFile) behave identically.
+        if (!inputs.sdkAutoLoad) {
+            inertOptInModules(project, resolver, ignore).forEach { (setting, artifact) ->
+                notes.add(sdkAutoLoadOffWarning(setting, artifact))
+            }
+            if (isDebug) notes.add("Bugsee: sdkAutoLoad=false - skipping all dependency auto-add")
+            return AutoAddResult(inputs, out, notes)
+        }
+
+        // Version shared by EVERY auto-added Bugsee module — core AND extensions. Prefer the
+        // version the consumer already declared for the core SDK; otherwise the dynamic range
+        // floored at MIN_SDK_VERSION. Extensions are published under the SDK's version line, so
+        // they must track the SDK version (never the plugin version — see autoAddModule).
+        val sdkVersion = declaredCoreSdkVersion(project, ignore)
+            ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
+
+        // Auto-add the core Bugsee SDK if the consuming app has not declared one. If the user has
+        // declared their own version on any configuration (`api`, `compileOnly`, variant configs,
+        // …), defer to it rather than layering a dynamic dep on top. Opt-out via
+        // `bugsee { sdkAutoLoad.set(false) }`.
+        if (!isCoreSdkPresent(project, ignore)) {
+            if (isDebug) notes.add("Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion")
+            out.add(project.dependencies.create("com.bugsee:bugsee-android:$sdkVersion"))
+        }
+
+        // Optional SDK modules driven by user opt-in via `bugsee { ndk { enabled.set(true) };
+        // feedback(true) }`. The NDK runtime is added when NDK is enabled globally or in any
+        // variant scope; the per-variant symbol upload task stays exact.
+        if (inputs.ndk) autoAddModule(project, out, "bugsee-android-ndk", "ndk", isDebug, sdkVersion, ignore, notes)
+        if (inputs.leak) autoAddModule(project, out, "bugsee-android-leak", "leak", isDebug, sdkVersion, ignore, notes)
+        if (inputs.feedback) autoAddModule(project, out, "bugsee-android-feedback", "feedback", isDebug, sdkVersion, ignore, notes)
+
+        if (hasComposeDependency(project) && inputs.compose) {
+            autoAddModule(project, out, "bugsee-android-compose", "compose", isDebug, sdkVersion, ignore, notes)
+        }
+        if (hasOkHttpDependency(project) && inputs.okhttp) {
+            autoAddModule(project, out, "bugsee-android-okhttp", "okhttp", isDebug, sdkVersion, ignore, notes)
+        }
+        if (hasKtorDependency(project, 2) && inputs.ktor) {
+            autoAddModule(project, out, "bugsee-android-ktor-2", "ktor-2", isDebug, sdkVersion, ignore, notes)
+        }
+        if (hasKtorDependency(project, 3) && inputs.ktor) {
+            autoAddModule(project, out, "bugsee-android-ktor-3", "ktor-3", isDebug, sdkVersion, ignore, notes)
+        }
+        if (hasCronetDependency(project) && inputs.cronet) {
+            autoAddModule(project, out, "bugsee-android-cronet", "cronet", isDebug, sdkVersion, ignore, notes)
+        }
+        return AutoAddResult(inputs, out, notes)
+    }
+
+    /**
+     * Called once the DSL is final: from `androidComponents.finalizeDsl` (the first hook after the
+     * build script body and before any `onVariants` callback reads the declared dependencies), or
+     * from the plugin's own `afterEvaluate` as a fallback when AGP is absent.
+     *
+     * Values set later than that (a user `afterEvaluate { }` registered after ours, or a task) are
+     * not seen; neither is a read of `implementation` made inside another plugin's `afterEvaluate`
+     * that runs before this point, which is then treated as an early read and corrected here.
+     */
+    private fun onDslFinal(project: Project) {
+        if (dslFinal) return
+        dslFinal = true
+        // Drop any resolver memoized before the DSL was final so every later reader sees it.
+        settingsResolver = null
+        reconcileAutoAdd(project)
+    }
+
+    /**
+     * Re-checks an auto-add that was made before the DSL was final (an early reader fired the
+     * `withDependencies` action before the `bugsee { }` block, and before the build script's own
+     * `dependencies { }` block, ran). Gradle runs that action on the FIRST read of the dependency
+     * set and never again, so the only way to honour the final state is to correct the
+     * configuration afterwards.
+     *
+     * The corrected set is computed FIRST, without touching the configuration (our own earlier
+     * additions are excluded from the "already declared" scans by identity). The configuration is
+     * mutated only when the coordinates differ, and then only by the difference, so an unchanged
+     * decision causes no remove/add churn. If Gradle refuses the change (a configuration extending
+     * `implementation` was already resolved), nothing is left half-applied and a loud warning
+     * is logged instead.
+     *
+     * Known ambiguity: a [org.gradle.api.artifacts.DependencySet] de-duplicates by content, so if
+     * the user declares exactly the auto-add range for `bugsee-android` after the early read, that
+     * declaration is swallowed as a duplicate of ours and removed with it when `sdkAutoLoad` is
+     * off. Pin a different version or declare it before the early read.
+     */
+    private fun reconcileAutoAdd(project: Project) {
+        val record = autoAddRecord ?: return
+        autoAddRecord = null
+        val config = record.config
+        val early = record.result
+
+        val corrected = computeAutoAdds(
+            project, settingsResolver(), ignore = early.dependencies.toSet(),
+        )
+        val earlyCoords = coordinatesOf(early.dependencies)
+        val correctedCoords = coordinatesOf(corrected.dependencies)
+        if (earlyCoords == correctedCoords) {
+            corrected.notes.forEach { project.logger.warn(it) }
+            return
+        }
+
+        val toRemove = early.dependencies.filter { coordinateOf(it) !in correctedCoords }
+        val toAdd = corrected.dependencies.filter { coordinateOf(it) !in earlyCoords }
+        val why = differingInputs(early.inputs, corrected.inputs).ifEmpty { "declared dependencies changed" }
+        var removed = false
+        try {
+            if (toRemove.isNotEmpty()) {
+                config.dependencies.removeAll(toRemove.toSet())
+                removed = true
+            }
+            config.dependencies.addAll(toAdd)
+            corrected.notes.forEach { project.logger.warn(it) }
+            project.logger.info(
+                "Bugsee: '${config.name}' was read before the bugsee { } block was evaluated; " +
+                    "auto-added modules re-applied for the final configuration ($why)" +
+                    (if (toRemove.isNotEmpty()) "; removed ${toRemove.map { coordinateOf(it) }}" else "") + "."
+            )
+            return
+        } catch (e: Exception) {
+            if (removed) runCatching { config.dependencies.addAll(toRemove) }
+            project.logger.debug("Bugsee: could not correct '${config.name}'", e)
+        }
+        val message = (
+            "Bugsee: '${config.name}' was read before the bugsee { } block was evaluated, and a " +
+                "configuration extending it has already been resolved, so the auto-added Bugsee " +
+                "modules were decided on defaults and could not be corrected ($why). " +
+                "Declare the Bugsee dependencies explicitly, or apply the Bugsee plugin and its " +
+                "bugsee { } block before whatever reads the configuration."
+        )
+        project.logger.warn(message)
+        uncorrectableAutoAddHook?.invoke(message)
+    }
+
+    private fun coordinateOf(dep: Dependency): String = "${dep.group}:${dep.name}:${dep.version}"
+
+    private fun coordinatesOf(deps: List<Dependency>): Set<String> = deps.map { coordinateOf(it) }.toSet()
+
+    private fun differingInputs(a: AutoAddInputs, b: AutoAddInputs): String = buildList {
+        if (a.sdkAutoLoad != b.sdkAutoLoad) add("sdkAutoLoad ${a.sdkAutoLoad} -> ${b.sdkAutoLoad}")
+        if (a.ndk != b.ndk) add("ndk.enabled ${a.ndk} -> ${b.ndk}")
+        if (a.leak != b.leak) add("leak.enabled ${a.leak} -> ${b.leak}")
+        if (a.feedback != b.feedback) add("feedback ${a.feedback} -> ${b.feedback}")
+        if (a.compose != b.compose) add("instrumentation.compose* ${a.compose} -> ${b.compose}")
+        if (a.okhttp != b.okhttp) add("instrumentation.okhttp ${a.okhttp} -> ${b.okhttp}")
+        if (a.ktor != b.ktor) add("instrumentation.ktor ${a.ktor} -> ${b.ktor}")
+        if (a.cronet != b.cronet) add("instrumentation.cronet ${a.cronet} -> ${b.cronet}")
+    }.joinToString(", ")
+
     /**
      * The per-variant settings resolver, created on first call. Callers (`afterEvaluate`,
      * `onVariants`, `withDependencies`, the Compose compiler-plugin gates) run after the
@@ -473,7 +618,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * set, so it must not be built at apply time. The file is read through `providers.fileContents` (a configuration-cache
      * input), as [PluginPropertiesApplier.applyTo] does.
      */
-    private fun settingsResolver(): SettingsResolver = settingsResolver ?: run {
+    private fun settingsResolver(): SettingsResolver =
+        settingsResolver ?: freshSettingsResolver().also { settingsResolver = it }
+
+    /** Builds a resolver from the DSL as it is NOW, without memoizing it. */
+    private fun freshSettingsResolver(): SettingsResolver = run {
         val project = checkNotNull(appliedProject) { "Bugsee plugin not applied" }
         val extension = checkNotNull(pluginExtension) { "Bugsee plugin not applied" }
         val text = project.providers
@@ -490,7 +639,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
         val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
         SettingsResolver(extension, parsed, project.objects, project.logger, project.rootDir)
-    }.also { settingsResolver = it }
+    }
 
     private fun registerManifestTask(
         project: Project,
@@ -1527,10 +1676,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * graph, and adding a duplicate dynamic-version dep on top would let
      * Gradle's conflict resolver silently override the user's pin.
      */
-    private fun isCoreSdkPresent(project: Project): Boolean {
+    private fun isCoreSdkPresent(project: Project, ignore: Set<Dependency> = emptySet()): Boolean {
         return project.configurations.any { config ->
             config.dependencies.any { dep ->
-                isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep)
+                !isIgnored(ignore, dep) && (isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep))
             }
         }
     }
@@ -1559,10 +1708,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * modules use this so they always resolve at the SAME version as the core
      * SDK the app actually consumes, rather than the plugin's own version.
      */
-    private fun declaredCoreSdkVersion(project: Project): String? {
+    private fun declaredCoreSdkVersion(project: Project, ignore: Set<Dependency> = emptySet()): String? {
         for (config in project.configurations) {
             for (dep in config.dependencies) {
-                if (dep.group == BUGSEE_GROUP &&
+                if (!isIgnored(ignore, dep) &&
+                    dep.group == BUGSEE_GROUP &&
                     dep.name == "bugsee-android" &&
                     !dep.version.isNullOrBlank()
                 ) {
@@ -1583,24 +1733,22 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      */
     private fun autoAddModule(
         project: Project,
-        deps: DependencySet,
+        out: MutableList<Dependency>,
         artifactName: String,
         projectName: String,
         isDebug: Boolean,
-        sdkVersion: String
+        sdkVersion: String,
+        ignore: Set<Dependency>,
+        notes: MutableList<String>,
     ) {
-        if (!isModuleDeclared(project, artifactName, projectName)) {
+        if (!isModuleDeclared(project, artifactName, projectName, ignore)) {
             // [sdkVersion] tracks the CORE SDK version, NOT the plugin version.
             // Extension AARs (bugsee-android-ndk, -okhttp, -feedback, …) are
             // published under the SDK's version line, so versioning them with
             // PLUGIN_VERSION produced a non-existent coordinate (e.g.
             // `com.bugsee:bugsee-android-ndk:4.0.0-beta14`) and failed the build.
-            if (isDebug) {
-                project.logger.warn(
-                    "Bugsee: Auto-adding $artifactName runtime dependency $sdkVersion"
-                )
-            }
-            deps.add(project.dependencies.create("com.bugsee:$artifactName:$sdkVersion"))
+            if (isDebug) notes.add("Bugsee: Auto-adding $artifactName runtime dependency $sdkVersion")
+            out.add(project.dependencies.create("com.bugsee:$artifactName:$sdkVersion"))
         }
     }
 
@@ -1669,30 +1817,43 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     companion object {
         /** True when the user declared the Bugsee module (Maven coordinate or project dependency) anywhere. */
-        internal fun isModuleDeclared(project: Project, artifactName: String, projectName: String): Boolean =
+        internal fun isModuleDeclared(
+            project: Project,
+            artifactName: String,
+            projectName: String,
+            ignore: Set<Dependency> = emptySet(),
+        ): Boolean =
             project.configurations.any { config ->
                 config.dependencies.any { dep ->
-                    (dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
-                        (dep is ProjectDependency &&
-                            ProjectDependencyCompat.targetProject(project, dep)?.let {
-                                it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
-                            } == true)
+                    !isIgnored(ignore, dep) &&
+                        ((dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
+                            (dep is ProjectDependency &&
+                                ProjectDependencyCompat.targetProject(project, dep)?.let {
+                                    it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
+                                } == true))
                 }
             }
+
+        /** Identity match: excludes dependencies the plugin itself auto-added (see reconcileAutoAdd). */
+        private fun isIgnored(ignore: Set<Dependency>, dep: Dependency): Boolean = ignore.any { it === dep }
 
         /**
          * Explicit opt-ins (`ndk.enabled`, `leak.enabled`, `feedback`) whose runtime module the plugin
          * would normally auto-add but the user did not declare. Under `sdkAutoLoad=false` these switches
          * are inert; returns (setting key, artifact) per such opt-in.
          */
-        internal fun inertOptInModules(project: Project, resolver: SettingsResolver): List<Pair<String, String>> {
+        internal fun inertOptInModules(
+            project: Project,
+            resolver: SettingsResolver,
+            ignore: Set<Dependency> = emptySet(),
+        ): List<Pair<String, String>> {
             val ndk = resolver.anyScopeValue(NDK_ENABLED) ?: false
             return listOf(
                 Triple("ndk.enabled", "bugsee-android-ndk", "ndk") to ndk,
                 Triple("leak.enabled", "bugsee-android-leak", "leak") to resolver.globalValue(LEAK_ENABLED),
                 Triple("feedback", "bugsee-android-feedback", "feedback") to resolver.globalValue(FEEDBACK),
             )
-                .filter { (t, enabled) -> enabled && !isModuleDeclared(project, t.second, t.third) }
+                .filter { (t, enabled) -> enabled && !isModuleDeclared(project, t.second, t.third, ignore) }
                 .map { (t, _) -> t.first to t.second }
         }
 
