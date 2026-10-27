@@ -24,6 +24,7 @@ import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
 import com.bugsee.android.gradle.manifest.BugseeManifestTask
 import com.bugsee.android.gradle.manifest.FlutterAssetsOrdering
 import com.bugsee.android.gradle.upload.AppTokenResolver
+import com.bugsee.android.gradle.util.MinimumVersions
 import com.bugsee.android.gradle.upload.BuildTimingService
 import com.bugsee.android.gradle.upload.BundleUploadTask
 import com.bugsee.android.gradle.upload.MappingUploadTask
@@ -71,6 +72,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     abstract val listenerRegistry: BuildEventsListenerRegistry
 
     override fun apply(project: Project) {
+        // First thing: a readable failure on an unsupported AGP/Gradle (issue #60), before any
+        // other Gradle/AGP API is touched. AGP not yet applied: the AGP half is skipped.
+        MinimumVersions.checkProject(project)
+
         val extension = project.extensions.create(PLUGIN_NAME, BugseePluginExtension::class.java)
         pluginExtension = extension
         appliedProject = project
