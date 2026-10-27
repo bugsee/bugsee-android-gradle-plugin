@@ -298,7 +298,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             project.afterEvaluate {
                 if (!isBugseeSdkGroup(project.group?.toString().orEmpty())) {
                     project.logger.warn(
-                        libraryModuleMessage(project.path, project == project.rootProject, project.name)
+                        libraryModuleMessage(project.path, project.path == ":", project.name)
                     )
                 }
             }
