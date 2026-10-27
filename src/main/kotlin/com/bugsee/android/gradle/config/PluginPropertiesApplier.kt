@@ -57,7 +57,7 @@ internal object PluginPropertiesApplier {
         // absent (no log noise — that's the common case).
         val file = ProjectAccess.rootFile(project, BUGSEE_PROPERTIES_FILENAME)
         val text = project.providers.fileContents(file).asText.orNull
-        applyText(text, extension, project.logger, project.rootProject.layout.projectDirectory.asFile)
+        applyText(text, extension, project.logger, project.rootDir)
     }
 
     /**

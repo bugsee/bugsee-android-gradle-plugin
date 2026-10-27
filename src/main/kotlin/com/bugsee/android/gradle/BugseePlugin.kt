@@ -472,7 +472,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             discardingLogger()
         }
         val parsed = SettingsFileParser.parse(text, parseLogger, reportMalformedFile = false)
-        SettingsResolver(extension, parsed, project.objects, project.logger, root.layout.projectDirectory.asFile)
+        SettingsResolver(extension, parsed, project.objects, project.logger, project.rootDir)
     }.also { settingsResolver = it }
 
     private fun registerManifestTask(
