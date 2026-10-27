@@ -133,6 +133,13 @@ class BugseeSdkDeclarationsTest {
         assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
 
+    @Test fun `known limit - app debug pin counts for every variant and can mask a release pin (#114)`() {
+        app.declare("releaseImplementation", "com.bugsee:bugsee-android:6.5.0")
+        app.declare("debugImplementation", "com.bugsee:bugsee-android:7.5.0")
+        // Documented in BugseePlugin: the resolver is variant-agnostic and picks the highest.
+        assertEquals("7.5.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
     @Test fun `extension pin is the fallback when no core is declared and never beats a core`() {
         app.declare("implementation", "com.bugsee:bugsee-android-okhttp:7.1.0")
         assertEquals("7.1.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
