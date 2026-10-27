@@ -195,6 +195,7 @@ internal object SymbolUploader {
             .build()
 
         val httpClient = HttpClients.custom()
+            .useSystemProperties()
             .setDefaultRequestConfig(requestConfig)
             .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
             .disableAutomaticRetries() // executeWithRetry owns retries; stacking both multiplied full-body PUTs

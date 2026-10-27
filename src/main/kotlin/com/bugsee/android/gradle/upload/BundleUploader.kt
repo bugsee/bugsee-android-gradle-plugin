@@ -140,6 +140,7 @@ internal object BundleUploader {
             .build()
 
         val httpClient = HttpClients.custom()
+            .useSystemProperties()
             .setDefaultRequestConfig(requestConfig)
             .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
             .setRetryHandler(StandardHttpRequestRetryHandler())

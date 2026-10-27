@@ -57,6 +57,7 @@ internal object ChunkedBundleUploader {
             .setConnectionRequestTimeout(CONNECT_TIMEOUT_MS)
             .build()
         return HttpClients.custom()
+            .useSystemProperties()
             .setDefaultRequestConfig(cfg)
             .setUserAgent(USER_AGENT)
             .build()
