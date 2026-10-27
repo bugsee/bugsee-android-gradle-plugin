@@ -199,13 +199,15 @@ internal object CliUploader {
      * the CLI owns *how* (packing, registration, presigned PUTs, chunking,
      * retries, telemetry).
      *
-     * Returns the [CliUploadResult] contract: a structural failure (exit 1/2,
-     * exit < 0 / 126 / 127 / >= 128, binary missing) signals the caller to fall back to the native
-     * Bundle/ChunkedBundleUploader path — but callers must gate registration on
-     * [CliUploadResult.shouldFallbackForBuildRegistration], which skips the retry after
-     * a signal kill or Windows crash status (the build may already be registered); a substantive failure (bad token /
-     * server / transport) propagates without fallback since the native path
-     * would hit the same error.
+     * Returns the [CliUploadResult] contract. Callers must gate the native
+     * Bundle/ChunkedBundleUploader fallback on
+     * [CliUploadResult.shouldFallbackForBuildRegistration], NOT on `shouldFallback`:
+     * only exit 1/2, 126, 127, 128, Windows loader failures and the plugin-synthesized
+     * -1 (binary missing / exec failed) keep the fallback, because the CLI provably
+     * did not register anything. A signal exit (> 128) or Windows crash/kill status
+     * (< -1, non-loader) skips it, since the build may already be registered. A
+     * substantive failure (bad token / server / transport) propagates without
+     * fallback since the native path would hit the same error.
      *
      * Requires `bugsee-cli` >= the version that introduced `upload build`
      * (gated by the caller via [CliBinaryResolver]); an older binary yields a
@@ -592,9 +594,11 @@ internal object CliUploader {
     }
 
     /**
-     * Whether [exitCode] is one of the CLI's "structural failure" codes that
-     * mean the binary never got a fair chance — and the Kotlin uploader can
-     * still succeed.
+     * Whether the symbol uploaders should fall back to the Kotlin uploader for
+     * [exitCode]: the CLI's structural codes (1, 2) or an OS-level failure
+     * ([isOsLevelFailure]). Symbol uploads are idempotent (duplicate 16004 is
+     * success), so this is safe even when the CLI ran and was killed. Build
+     * registration uses the stricter [CliUploadResult.shouldFallbackForBuildRegistration].
      *
      * Visible for testing.
      */
@@ -627,7 +631,8 @@ internal object CliUploader {
      * `X-Bugsee-Uploader` fallback reason for a fallback [exitCode]: `exit-1` /
      * `exit-2` (structural), `exit-<n>-not-runnable` (126, 127, 128), `exit-<n>-signal-<sig>`
      * (> 128), or `exit-0x<HEX>-not-runnable` for negative codes (unsigned hex avoids
-     * a double hyphen).
+     * a double hyphen). The `not-runnable` token is a stable backend bucket and also
+     * covers Windows crash statuses; it is kept for header compatibility.
      *
      * Visible for testing.
      */
