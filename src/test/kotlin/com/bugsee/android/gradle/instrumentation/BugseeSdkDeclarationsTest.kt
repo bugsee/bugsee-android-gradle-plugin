@@ -63,8 +63,8 @@ class BugseeSdkDeclarationsTest {
     }
 
     @Test fun `several app pins resolve to the highest regardless of configuration order`() {
-        app.declare("a", "com.bugsee:bugsee-android:6.5.0")
-        app.declare("b", "com.bugsee:bugsee-android:7.0.0")
+        app.declare("implementation", "com.bugsee:bugsee-android:6.5.0")
+        app.declare("api", "com.bugsee:bugsee-android:7.0.0")
         assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
 
@@ -77,7 +77,7 @@ class BugseeSdkDeclarationsTest {
     @Test fun `app core pin wins over a project-dependency pin`() {
         lib.declare("implementation", "com.bugsee:bugsee-android:7.5.0")
         dependOnLib()
-        app.declare("other", "com.bugsee:bugsee-android:7.0.0")
+        app.declare("api", "com.bugsee:bugsee-android:7.0.0")
         assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
 
@@ -89,18 +89,44 @@ class BugseeSdkDeclarationsTest {
         assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
 
+    @Test fun `test and compileOnly pins on the app never beat a production pin (#114)`() {
+        app.declare("implementation", "com.bugsee:bugsee-android:6.5.0")
+        app.declare("testImplementation", "com.bugsee:bugsee-android:7.5.0")
+        app.declare("androidTestImplementation", "com.bugsee:bugsee-android:7.6.0")
+        app.declare("compileOnly", "com.bugsee:bugsee-android:7.7.0")
+        assertEquals("6.5.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `test-only or compileOnly-only app pin resolves to null (#114)`() {
+        app.declare("testImplementation", "com.bugsee:bugsee-android:7.5.0")
+        app.declare("compileOnly", "com.bugsee:bugsee-android:7.7.0")
+        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `debugImplementation-only pin on the app still counts (#114)`() {
+        app.declare("debugImplementation", "com.bugsee:bugsee-android:6.5.0")
+        assertEquals("6.5.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `test-scoped extension pin is ignored by the extension fallback tier (#114)`() {
+        app.declare("testImplementation", "com.bugsee:bugsee-android-okhttp:7.1.0")
+        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        app.declare("implementation", "com.bugsee:bugsee-android-okhttp:7.0.0")
+        assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
     @Test fun `extension pin is the fallback when no core is declared and never beats a core`() {
-        app.declare("a", "com.bugsee:bugsee-android-okhttp:7.1.0")
+        app.declare("implementation", "com.bugsee:bugsee-android-okhttp:7.1.0")
         assertEquals("7.1.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
-        app.declare("b", "com.bugsee:bugsee-android:7.0.0")
+        app.declare("api", "com.bugsee:bugsee-android:7.0.0")
         assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
 
     @Test fun `plugin artifact is not an SDK module and ignored deps do not count`() {
-        app.declare("a", "com.bugsee:bugsee-android-gradle-plugin:4.0.0")
+        app.declare("implementation", "com.bugsee:bugsee-android-gradle-plugin:4.0.0")
         assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
-        app.declare("b", "com.bugsee:bugsee-android:7.0.0")
-        val added = app.configurations.getByName("b").dependencies.toSet()
+        app.declare("api", "com.bugsee:bugsee-android:7.0.0")
+        val added = app.configurations.getByName("api").dependencies.toSet()
         assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app, ignore = added))
     }
 }

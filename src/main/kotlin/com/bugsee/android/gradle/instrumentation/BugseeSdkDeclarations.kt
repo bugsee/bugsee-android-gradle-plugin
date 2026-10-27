@@ -18,8 +18,9 @@ import org.gradle.api.artifacts.ProjectDependency
  *
  * Only configurations that feed a consumer's RUNTIME classpath are read from a
  * dependency project (see [isProductionConfiguration]); the app's own
- * configurations are read by [declaredCoreSdkVersion] (every configuration, tier 1,
- * deliberately unscoped: a version declared on any app configuration counts).
+ * configurations are read by [declaredCoreSdkVersion] (tier 1) through the same predicate but
+ * with `debug*` INCLUDED, so a `debugImplementation`-only pin on the app counts while a
+ * test / androidTest / `compileOnly` pin does not (#114).
  */
 internal object BugseeSdkDeclarations {
 
@@ -112,7 +113,8 @@ internal object BugseeSdkDeclarations {
      *
      * Precedence (first non-empty tier wins; within a tier the HIGHEST parseable
      * version, which is what Gradle's conflict resolution picks):
-     * 1. `bugsee-android` declared on [project] (any configuration);
+     * 1. `bugsee-android` declared on [project] (production configurations, `debug*` included,
+     *    see [DependencyDetector.isProductionConfiguration]);
      * 2. `bugsee-android` declared by a project [project] depends on (production
      *    configurations only, see [inDependencyProjects]);
      * 3. any `bugsee-android-*` extension declared on [project];
@@ -127,7 +129,10 @@ internal object BugseeSdkDeclarations {
         ignore: Set<Dependency> = emptySet(),
         inDeps: Lazy<List<Declaration>> = lazy { inDependencyProjects(project) },
     ): String? {
-        val own = project.configurations.flatMap { it.dependencies }
+        val appNames = DependencyDetector.declaredVariantNames(project)
+        val own = project.configurations
+            .filter { DependencyDetector.isProductionConfiguration(it.name, appNames) }
+            .flatMap { it.dependencies }
             .filter { dep ->
                 ignore.none { it === dep } && isSdkModule(dep.group, dep.name) && !dep.version.isNullOrBlank()
             }
@@ -145,8 +150,11 @@ internal object BugseeSdkDeclarations {
      * counting it would switch the release auto-add (and instrumentation) off. The cost is the
      * opposite error on debug builds: a debug-only pin is ignored there and the default range is
      * added as before this analysis existed; that is the established, safe fallback. The app's
-     * OWN declarations are still read by [declaredCoreSdkVersion] across every configuration
-     * (unchanged legacy behaviour).
+     * OWN declarations are read by [declaredCoreSdkVersion] with `debug*` INCLUDED instead.
+     *
+     * Accepted limit (#114): a pin only on a dependency project's `debug*` edge is therefore not
+     * seen, so the resolver returns null for it. Counting it would let a debug-only old pin switch
+     * the RELEASE auto-add off / lower its version, a worse error than the debug fallback.
      */
     private fun isProductionConfiguration(name: String, declaredNames: Set<String>): Boolean =
         DependencyDetector.isProductionConfiguration(
