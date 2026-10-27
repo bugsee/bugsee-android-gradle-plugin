@@ -16,7 +16,8 @@ class BuildHeapPolicyTest {
         assertTrue(f.isFile, "could not locate gradle.properties from ${File(".").absolutePath}")
         val props = java.util.Properties().also { p -> f.reader().use { p.load(it) } }
         val value = props.getProperty(key) ?: error("$key is not set in gradle.properties")
-        val m = Regex("""-Xmx(\d+)([mMgG])""").find(value) ?: error("$key has no -Xmx: $value")
+        val m = Regex("""-Xmx(\d+)([mMgG])""").findAll(value).lastOrNull() // the JVM honours the last -Xmx
+            ?: error("$key has no -Xmx: $value")
         val n = m.groupValues[1].toInt()
         return if (m.groupValues[2].lowercase() == "g") n * 1024 else n
     }
