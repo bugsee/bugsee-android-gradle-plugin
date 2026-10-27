@@ -13,6 +13,7 @@ import com.bugsee.android.gradle.upload.NativeUploadTask
 import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Action
 import org.gradle.api.Project
+import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.api.provider.Provider
 import org.gradle.testfixtures.ProjectBuilder
 import org.junit.Test
@@ -20,6 +21,7 @@ import java.io.File
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Proxy
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -244,6 +246,34 @@ class VariantWiringTest {
         assertEquals(true, h.manifestTask("Release").optimizeExtensionsLoading.get())
     }
 
+    @Test
+    fun noAndroidPlugin_failsEvaluationWithAClearMessage() {
+        val h = Harness(null)
+
+        val failure = assertFailsWith<Throwable> { (h.project as ProjectInternal).evaluate() }
+
+        val messages = generateSequence(failure) { it.cause }.mapNotNull { it.message }.toList()
+        assertTrue(
+            messages.any { "Bugsee requires 'com.android.application' or 'com.android.library'" in it },
+            "unexpected failure: $messages",
+        )
+    }
+
+    @Test
+    fun androidPluginWithoutWiring_logsThatNothingWasWired() {
+        // An `android` extension without the application/library plugin ids (com.android.test,
+        // dynamic-feature): evaluation passes, and debug mode says why nothing is wired.
+        val h = Harness(null) { debug.set(true) }
+        h.project.extensions.add("android", Any())
+
+        val output = h.captureOutput { (h.project as ProjectInternal).evaluate() }
+
+        assertTrue(
+            output.any { "only application modules are configured; nothing wired" in it },
+            "output: $output",
+        )
+    }
+
     // ── Harness ─────────────────────────────────────────────────────
 
     private class Harness(propertiesText: String?, configure: BugseePluginExtension.() -> Unit = {}) {
@@ -261,7 +291,9 @@ class VariantWiringTest {
                 "androidComponents",
                 fakeComponents(),
             )
-            project.plugins.apply(BugseePlugin::class.java)
+            val plugin = project.plugins.apply(BugseePlugin::class.java)
+            // No real Android plugin is applied, so `withPlugin` never fires; wire directly.
+            plugin.wireAndroidComponents(project)
             extension = project.extensions.getByType(BugseePluginExtension::class.java)
             extension.configure()
         }

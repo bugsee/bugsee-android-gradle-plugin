@@ -59,6 +59,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     // `bugsee { }` block has been evaluated, as SettingsResolver requires.
     private var settingsResolver: SettingsResolver? = null
 
+    // Set once the Android plugin has been seen and the variant wiring registered.
+    private var androidWired = false
+
     // Injected by Gradle at plugin apply time — the service registry
     // we need to hook the BuildTimingService into the task-completion
     // event stream. Gradle provides this via abstract @Inject on the
@@ -220,17 +223,37 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             val isDebug = settingsResolver().globalValue(DEBUG)
             if (isDebug) project.logger.warn("Bugsee: Plugin applied")
 
-            // Verify android plugin is applied
             if (project.extensions.findByName("android") == null) {
                 throw IllegalStateException(
-                    "Must apply 'com.android.application' or 'com.android.library' first!"
+                    "Bugsee requires 'com.android.application' or 'com.android.library' in project ${project.path}"
+                )
+            }
+            // e.g. com.android.test / dynamic-feature: the Android plugin is there but nothing is wired.
+            if (!androidWired && isDebug) {
+                project.logger.warn(
+                    "Bugsee: only application modules are configured; nothing wired for ${project.path}"
                 )
             }
         }
 
+        // Wire the variants as soon as the Android plugin is applied, whichever order the build
+        // script lists the plugins in (`withPlugin` runs immediately when it is already applied).
+        // Looking the extension up here instead would find nothing when Bugsee is applied first,
+        // and silently skip every task.
+        for (androidPluginId in ANDROID_PLUGIN_IDS) {
+            project.pluginManager.withPlugin(androidPluginId) {
+                if (androidWired) return@withPlugin // defensive: run once
+                androidWired = true
+                wireAndroidComponents(project)
+            }
+        }
+    }
+
+    /** Internal so unit tests can drive the wiring without applying the real Android plugin. */
+    internal fun wireAndroidComponents(project: Project) {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {
-            project.logger.warn("Bugsee: AndroidComponentsExtension not found. Is the Android Gradle Plugin applied?")
+            project.logger.warn("Bugsee: AndroidComponentsExtension not found; skipping variant wiring.")
             return
         }
 
@@ -1516,6 +1539,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     companion object {
+
+        /** Android plugins whose application wires the variants (see [apply]). */
+        private val ANDROID_PLUGIN_IDS = listOf("com.android.application", "com.android.library")
 
         /** The names [variant] is matched by in per-variant settings: name, flavors (dimension order), build type. */
         internal fun variantContextOf(variant: com.android.build.api.variant.Variant): VariantContext =
