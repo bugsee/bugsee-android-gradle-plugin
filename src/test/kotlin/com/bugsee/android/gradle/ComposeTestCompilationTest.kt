@@ -254,7 +254,8 @@ class ComposeTestCompilationTest {
     fun `composeInTests opts test compilations back in without touching production`() {
         val (p, plugin) = appliedPlugin()
         p.extensions.getByType(BugseePluginExtension::class.java).instrumentation.composeInTests.set(true)
-        val all = listOf("debug", "debugUnitTest", "releaseAndroidTest", "test", "debugTestFixtures")
+        val all = listOf("debug", "release", "debugUnitTest", "releaseAndroidTest", "test", "debugTestFixtures")
+        listOf("debugUnitTest", "releaseAndroidTest", "test", "debugTestFixtures").forEach { assertTrue(ComposeTestCompilation.isTest(stub(p, it, siblings = all))) }
         all.forEach { assertTrue(plugin.isApplicable(stub(p, it, siblings = all)), "$it must be applicable") }
     }
 
@@ -273,5 +274,16 @@ class ComposeTestCompilationTest {
         instr.compose.set(false)
         instr.composeSecure.set(false)
         assertFalse(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
+    }
+
+    @Test
+    fun `bugsee properties composeInTests key turns the gate on`() {
+        val (p, plugin) = appliedPlugin()
+        com.bugsee.android.gradle.config.PluginPropertiesApplier.applyText(
+            "plugin.instrumentation.composeInTests=true\n",
+            p.extensions.getByType(BugseePluginExtension::class.java),
+            p.logger,
+        )
+        assertTrue(plugin.isApplicable(stub(p, "debugUnitTest", siblings = listOf("debug", "debugUnitTest"))))
     }
 }

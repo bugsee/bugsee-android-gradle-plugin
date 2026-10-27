@@ -501,7 +501,7 @@ class PluginPropertiesApplierTest {
         // here in a way it isn't for the convention-defaulted ones.
         val noConventionKeys = listOf(
             "okhttp", "httpEngine", "log", "thread", "mainThreadMisuse",
-            "operationDispatch", "compose", "composeSecure", "composeInput",
+            "operationDispatch", "compose", "composeSecure", "composeInput", "composeInTests",
             "ktor", "cronet",
         )
 
@@ -558,6 +558,7 @@ class PluginPropertiesApplierTest {
         "compose" -> instr.compose
         "composeSecure" -> instr.composeSecure
         "composeInput" -> instr.composeInput
+        "composeInTests" -> instr.composeInTests
         "ktor" -> instr.ktor
         "cronet" -> instr.cronet
         else -> error("unknown instrumentation key: $name")

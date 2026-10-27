@@ -314,7 +314,7 @@ note immediately below.
 > 2. `plugin.instrumentation.X` in `bugsee.properties`
 > 3. Legacy Gradle property `bugsee.instrumentation.X`
 > 4. Manifest `<meta-data android:name="com.bugsee.android.instrumentation.X" />`
-> 5. Built-in default (`true` for booleans; `STANDARD` for startupTier)
+> 5. Built-in default (`true` for booleans, except `composeInTests`, which is `false` and never consults steps 3-4; `STANDARD` for startupTier)
 >
 > Setting an instrumentation flag in `bugsee.properties` makes the
 > underlying DSL `Property` "present" (`isPresent == true`), and
@@ -553,7 +553,11 @@ the upload tasks skip with a single info-level message instead of failing or war
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
   including variants that disabled it.
-- **Compose and test code.** The Compose compiler plugin is not applied to test
+- **Compose and test code.** Unless `instrumentation.composeInTests` is enabled
+  (default `false`; same any-scope rule: enabling it in any scope applies the
+  compiler plugin to every test compilation of the module, and it is read only
+  from the DSL / `bugsee.properties`, not from Gradle properties or manifest
+  meta-data), the Compose compiler plugin is not applied to test
   compilations (`*UnitTest`, `*AndroidTest`, `*ScreenshotTest`, `testFixtures`,
   KMP `*Test` compilations associated with a main one, and every compilation of a
   `com.android.test` module), so tag wraps never add semantics nodes to the
