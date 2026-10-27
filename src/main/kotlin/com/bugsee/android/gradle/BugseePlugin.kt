@@ -1791,9 +1791,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     private fun recordDeclaredNames(project: Project) {
         val names = knownVariantNames(project)
-        val dsl = project.extensions.findByType(com.android.build.api.dsl.CommonExtension::class.java)
-        dsl?.buildTypes?.mapTo(names) { it.name }
-        dsl?.productFlavors?.mapTo(names) { it.name }
+        names += DependencyDetector.declaredVariantNames(project)
     }
 
     /** A [org.gradle.api.logging.Logger] that drops every message. */

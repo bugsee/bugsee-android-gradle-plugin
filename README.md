@@ -506,12 +506,20 @@ the upload tasks skip with a single info-level message instead of failing or war
   declared directly in the app module. Test, androidTest, testFixtures and
   compileOnly configurations are ignored, custom configurations that do not end
   in `Implementation` / `Api` / `RuntimeOnly` are not scanned, and libraries
-  declared in other project modules are not followed. The match is by name, so a
-  configuration whose name contains a capitalised `Test` word (a flavor or build
-  type such as `latestTest` or `uiTest`) is treated as a test configuration and
-  its libraries are not detected. In these cases declare the library directly in
-  an app-module production configuration, or declare the Bugsee extension module
-  (for example `bugsee-android-okhttp`) explicitly. For Compose, the compiler
+  declared in other project modules are not followed. A configuration whose
+  name contains a capitalised `Test` word is treated as a test configuration,
+  except when the build types and flavors declared in the `android { }` DSL
+  explain it (a flavor `latestTest` keeps `latestTestImplementation` and
+  `latestTestReleaseApi` production, while `testLatestTestImplementation`, AGP's
+  unit-test configuration of that flavor, stays test). A custom source set that
+  is not an Android build type or flavor, such as a KMP `uiTest`, stays a test
+  configuration and its libraries are not detected; Kotlin Multiplatform
+  per-flavor source sets (`androidLatestTestImplementation`) are likewise not
+  detected. A dependency only in `debugImplementation` is detected and its
+  extension module is added project-wide. In the undetected cases declare the
+  library directly in an app-module production configuration, or declare the
+  Bugsee extension module (for example `bugsee-android-okhttp`) explicitly. For
+  Compose, the compiler
   plugin additionally needs a direct Compose dependency in such a configuration:
   declaring `bugsee-android-compose` alone does not enable it.
 

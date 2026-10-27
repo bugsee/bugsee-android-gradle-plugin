@@ -1,5 +1,7 @@
 package com.bugsee.android.gradle.instrumentation
 
+import com.android.build.api.dsl.CommonExtension
+import org.gradle.api.Named
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
 import org.gradle.api.artifacts.ProjectDependency
@@ -36,33 +38,118 @@ internal object DependencyDetector {
     // testFixturesApi). Not a substring match: a flavor named `testing` or `latest` stays production.
     private val TEST_WORD = Regex("(^test|Test)(?=[A-Z]|$)")
 
+    private val PRODUCTION_SUFFIX_TAIL = Regex("(Implementation|Api|RuntimeOnly)$")
+
+    // A camelCase word `debug`/`Debug` (debugImplementation, freeDebugApi, debugCompilationImplementation).
+    private val DEBUG_WORD = Regex("(^debug|Debug)(?=[A-Z]|$)")
+
+    /** How [isProductionConfiguration] treats `debug*` configurations. */
+    enum class DebugConfigurations {
+        /**
+         * Count them: a `debugImplementation`-only dependency is on the debug runtime classpath, and
+         * the extension modules are added project-wide (the auto-add runs before variants exist),
+         * exactly as for the core SDK. Used by the third-party library detectors.
+         */
+        INCLUDE,
+
+        /**
+         * Ignore them: used when reading a dependency PROJECT's declarations, where a debug-only
+         * edge or pin is not on a release consumer's classpath and counting it would switch the
+         * release auto-add off (see [BugseeSdkDeclarations]).
+         */
+        EXCLUDE,
+    }
+
     /**
+     * The one production-classpath predicate shared by every scan (the library detectors and
+     * [BugseeSdkDeclarations]); the callers differ only in [debug].
+     *
      * Whether a configuration named [name] feeds the production (app) runtime
      * classpath: `implementation`, `api`, `runtimeOnly` and their build-type,
      * flavor, variant and KMP-source-set equivalents (`debugImplementation`,
      * `freeReleaseApi`, `androidMainImplementation`, ...). Excluded: test,
      * androidTest, unitTest, testFixtures configurations, `compileOnly` /
-     * `compileOnlyApi`, and anything else (lint, annotationProcessor, kapt, ksp,
-     * `*CompileClasspath`, ...), none of which ship in the app.
+     * `compileOnlyApi` (in any prefix position), and anything else (lint,
+     * annotationProcessor, kapt, ksp, `*CompileClasspath`, ...), none of which
+     * ship in the app.
      *
-     * A `debugImplementation`-only dependency DOES count: it is on the debug
-     * runtime classpath, and the extension module is added project-wide (the
-     * auto-add runs before variants exist), exactly as for the core SDK.
+     * Test-ness is a camelCase `Test` word in the name, EXCEPT when [declaredNames] (the build
+     * types and flavors declared in the Android DSL, see [declaredVariantNames]) explains the
+     * whole prefix: a flavor `latestTest` makes `latestTestImplementation` a production
+     * configuration of that flavor, while `testLatestTestImplementation` (AGP's unit-test
+     * configuration of it) stays a test configuration. The auto-add runs before variants exist, so
+     * the declared names are the earliest authoritative source; with none declared the plain
+     * name rule applies. A KMP source set such as `uiTest` is not a declared name, so it stays test.
      */
-    fun isProductionConfiguration(name: String): Boolean =
-        PRODUCTION_SUFFIX.containsMatchIn(name) &&
-            !name.contains("compileOnly", ignoreCase = true) &&
-            !TEST_WORD.containsMatchIn(name)
+    fun isProductionConfiguration(
+        name: String,
+        declaredNames: Set<String> = emptySet(),
+        debug: DebugConfigurations = DebugConfigurations.INCLUDE,
+    ): Boolean {
+        if (!PRODUCTION_SUFFIX.containsMatchIn(name) || name.contains("compileOnly", ignoreCase = true)) {
+            return false
+        }
+        if (debug == DebugConfigurations.EXCLUDE && DEBUG_WORD.containsMatchIn(name)) return false
+        return !TEST_WORD.containsMatchIn(name) || isDeclaredVariantConfiguration(name, declaredNames)
+    }
+
+    /**
+     * Names of the build types and product flavors declared in [project]'s Android DSL, or empty
+     * when there is no Android DSL (yet), or when AGP is loaded by a different classloader than
+     * the plugin (the DSL type then does not match and the plain name rule applies). Reads only
+     * [project]'s own extension.
+     */
+    fun declaredVariantNames(project: Project): Set<String> = try {
+        val dsl = project.extensions.findByType(CommonExtension::class.java)
+        val names = HashSet<String>()
+        // Read as [Named]: every DSL container element is one, and it keeps this independent of
+        // the AGP DSL element interfaces (which differ between AGP versions).
+        (dsl?.buildTypes as Iterable<*>?)?.forEach { (it as? Named)?.let { n -> names += n.name } }
+        (dsl?.productFlavors as Iterable<*>?)?.forEach { (it as? Named)?.let { n -> names += n.name } }
+        names
+    } catch (t: Exception) {
+        LOGGER.debug("Bugsee: could not read declared build types/flavors of ${project.path}; using the name rule", t)
+        emptySet()
+    } catch (t: LinkageError) {
+        LOGGER.debug("Bugsee: could not read declared build types/flavors of ${project.path}; using the name rule", t)
+        emptySet()
+    }
+
+    private val LOGGER = org.gradle.api.logging.Logging.getLogger(DependencyDetector::class.java)
+
+    // `latestTestImplementation` / `uiTestReleaseApi`: the prefix before the suffix is a camelCase
+    // concatenation of declared build type / flavor names (AGP names a variant that way).
+    private fun isDeclaredVariantConfiguration(name: String, declaredNames: Set<String>): Boolean {
+        // Names AGP reserves for its test components (`test*`, `androidTest*`, `main`) can never
+        // be flavors / build types; ignoring them stops them masking a genuine test configuration.
+        val names = declaredNames.filter { it.isNotEmpty() && it != "main" && !it.startsWith("test") && !it.startsWith("androidTest") }
+        if (names.isEmpty()) return false
+        val prefix = name.replace(PRODUCTION_SUFFIX_TAIL, "")
+        if (prefix.isEmpty()) return false
+        val memo = HashMap<Int, Boolean>()
+        fun explained(from: Int): Boolean {
+            if (from == prefix.length) return true
+            return memo.getOrPut(from) {
+                names.any { declared ->
+                    val word = if (from == 0) declared else declared.replaceFirstChar { it.uppercaseChar() }
+                    prefix.startsWith(word, from) && explained(from + word.length)
+                }
+            }
+        }
+        return explained(0)
+    }
 
     /**
      * Whether any dependency declared directly on a production-classpath configuration of
      * [project] (see [isProductionConfiguration]) matches [predicate]. Shared by every
      * third-party library detector so they cannot drift apart.
      */
-    fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean =
-        project.configurations.any { config ->
-            isProductionConfiguration(config.name) && config.dependencies.any(predicate)
+    fun anyProductionDependency(project: Project, predicate: (Dependency) -> Boolean): Boolean {
+        val declared = declaredVariantNames(project)
+        return project.configurations.any { config ->
+            isProductionConfiguration(config.name, declared) && config.dependencies.any(predicate)
         }
+    }
 
     /**
      * Returns `true` if [project] — or any project it depends on, transitively —
