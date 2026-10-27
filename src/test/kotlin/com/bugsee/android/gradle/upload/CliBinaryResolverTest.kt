@@ -330,6 +330,99 @@ class CliBinaryResolverTest {
         assertNotNull(resolved, "a thrown self-update exec must NOT break resolution")
     }
 
+    // ── build cancellation (interrupt) must not be swallowed ───────────
+
+    @Test fun `resolve rethrows an interrupt entering the lock on a cache miss instead of falling back`() {
+        org.junit.Assume.assumeNotNull(CliBinaryResolver.detectHostTriple())
+        val home = tmp.newFolder("empty-gradle-home")
+        val rec = RecordingExecOps()
+        Thread.currentThread().interrupt()
+        try {
+            val thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = rec,
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            assertTrue(thrown is InterruptedException, "got $thrown")
+            assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be preserved")
+            assertTrue(rec.specs.isEmpty(), "no download/exec may run on a cancelled thread")
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun `resolve rethrows an interrupt entering the lock on a cache hit`() {
+        val home = gradleHomeWithCachedBinary()
+        Thread.currentThread().interrupt()
+        try {
+            val thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = RecordingExecOps(),
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            assertTrue(thrown is InterruptedException, "got $thrown")
+            assertTrue(Thread.currentThread().isInterrupted)
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun `an InterruptedException thrown by the self-update exec propagates`() {
+        val home = gradleHomeWithCachedBinary()
+        val interrupting = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult =
+                throw InterruptedException("cancelled")
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+        try {
+            val thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = interrupting,
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            assertTrue(thrown is InterruptedException, "got $thrown")
+            assertTrue(Thread.currentThread().isInterrupted, "flag must be restored")
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun `a Gradle-wrapped interrupt from the self-update exec propagates`() {
+        // Gradle's exec kills the process and rethrows an interrupt as an
+        // unchecked wrapper with the flag restored — never a bare
+        // InterruptedException. The same isInterrupt() check guards the
+        // download path's catch (needs network, so not exercised here).
+        val home = gradleHomeWithCachedBinary()
+        val wrapping = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult {
+                Thread.currentThread().interrupt()
+                throw RuntimeException(InterruptedException("cancelled"))
+            }
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+        var thrown: Throwable? = null
+        var flag = false
+        val t = Thread {
+            thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = wrapping,
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            flag = Thread.currentThread().isInterrupted
+        }
+        t.start()
+        t.join(30_000)
+        assertFalse(t.isAlive, "resolve hung past the timeout")
+        assertTrue(thrown is InterruptedException, "got $thrown")
+        assertTrue(flag, "flag must be restored")
+    }
+
     // ── fixtures ─────────────────────────────────────────────────────
 
     @get:Rule

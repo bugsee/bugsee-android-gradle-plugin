@@ -153,6 +153,10 @@ internal object CliBinaryResolver {
      * Returns an executable `bugsee-cli` binary, or `null` if none could
      * be obtained. Side effect: may write into [gradleUserHome] under
      * `caches/bugsee-cli/`.
+     *
+     * Build cancellation is never downgraded to `null`: an interrupt (lock
+     * wait, download, or self-update exec) is rethrown as
+     * [InterruptedException] with the thread's interrupt flag set.
      */
     fun resolve(
         cliVersion: String?,
@@ -230,7 +234,13 @@ internal object CliBinaryResolver {
                     version, triple, cacheRoot, binaryName, logger, debug,
                     exec = { execOps.exec(it) },
                 )
-                maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+                val resolved = maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+                // Cancellation that landed during the (non-interruptible)
+                // download must not hand a binary to a cancelled thread.
+                if (Thread.currentThread().isInterrupted) {
+                    throw InterruptedException("bugsee-cli resolution cancelled")
+                }
+                resolved
             }
         } catch (e: InterruptedException) {
             // Build cancellation is not a download failure: do not fall back
@@ -238,6 +248,7 @@ internal object CliBinaryResolver {
             Thread.currentThread().interrupt()
             throw e
         } catch (e: Throwable) {
+            if (isInterrupt(e)) throw cancelled(e)
             logger.warn(
                 "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
                     "using the Kotlin uploader.",
@@ -361,6 +372,30 @@ internal object CliBinaryResolver {
         }
     }
 
+    /**
+     * True when [e] is a build-cancellation interrupt: an [InterruptedException]
+     * anywhere in the cause chain, or the thread's interrupt flag set. Gradle's
+     * `exec` kills the process and rethrows an interrupt as an unchecked
+     * wrapper (flag restored), so a bare `catch (InterruptedException)` never
+     * sees it.
+     */
+    private fun isInterrupt(e: Throwable): Boolean {
+        if (Thread.currentThread().isInterrupted) return true
+        var t: Throwable? = e
+        var depth = 0
+        while (t != null && depth++ < 16) {
+            if (t is InterruptedException) return true
+            t = t.cause
+        }
+        return false
+    }
+
+    private fun cancelled(e: Throwable): InterruptedException {
+        Thread.currentThread().interrupt()
+        return e as? InterruptedException
+            ?: InterruptedException("bugsee-cli resolution cancelled").also { it.initCause(e) }
+    }
+
     private fun interrupted(cause: Throwable): InterruptedException {
         Thread.currentThread().interrupt()
         return InterruptedException("interrupted while waiting for the bugsee-cli cache lock").also {
@@ -384,7 +419,9 @@ internal object CliBinaryResolver {
      * best-effort / self-replace semantics, the plugin just invokes it. The
      * call is wrapped so it can NEVER fail resolution: a thrown exec error
      * (e.g. the binary went away mid-build) is swallowed at DEBUG and the
-     * original [binary] is still returned.
+     * original [binary] is still returned. A build-cancellation interrupt
+     * (bare or wrapped by Gradle's exec) is NOT swallowed: it propagates as
+     * [InterruptedException] with the thread's flag restored.
      */
     private fun maybeSelfUpdate(
         binary: File,
@@ -405,6 +442,7 @@ internal object CliBinaryResolver {
                 spec.isIgnoreExitValue = true
             }
         } catch (e: Throwable) {
+            if (isInterrupt(e)) throw cancelled(e)
             // Self-update is strictly best-effort — never let it break
             // resolution. DEBUG only so quiet/offline builds stay quiet.
             if (debug) {
