@@ -173,4 +173,26 @@ class ExtensionStripGateTest {
         )
     }
 
+    @Test
+    fun `below-floor warning is suppressed when another precondition already disarms the strip`() {
+        val old = BugseeSdkVersion.parse("7.0.0-beta10")
+        fun warn(optimize: Boolean = true, enabled: Boolean = true, excludes: Set<String> = emptySet()) =
+            ExtensionStripGate.shouldWarnBelowFloor(optimize, enabled, excludes, old)
+        assertTrue(warn())
+        assertFalse(warn(optimize = false))
+        assertFalse(warn(enabled = false))
+        assertFalse(warn(excludes = setOf("com.bugsee.*")))
+        assertTrue(warn(excludes = setOf("com.example.*")))
+        assertFalse(ExtensionStripGate.shouldWarnBelowFloor(true, true, emptySet(), CURRENT_SDK))
+        assertFalse(ExtensionStripGate.shouldWarnBelowFloor(true, true, emptySet(), null))
+    }
+
+    @Test
+    fun `below-floor warning applies to a known old version only`() {
+        assertTrue(ExtensionStripGate.isBelowFloor(BugseeSdkVersion.parse("7.0.0-beta10")))
+        assertFalse(ExtensionStripGate.isBelowFloor(CURRENT_SDK))
+        assertFalse(ExtensionStripGate.isBelowFloor(null))
+        val msg = ExtensionStripGate.belowFloorWarning("7.0.0-beta10")
+        assertTrue(msg, "7.0.0-beta10" in msg && "optimizeExtensionsLoading" in msg)
+    }
 }
