@@ -51,6 +51,22 @@ abstract class BugseeNdkExtension @Inject constructor(objects: ObjectFactory) {
         objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
+     * Also upload native symbols for debuggable variants (e.g. `debug`).
+     *
+     * By default the per-variant `uploadBugsee{Variant}Native` task is
+     * registered only for release-like (non-debuggable) variants, mirroring
+     * [BugseeBuildInfoExtension.allBuildTypes]: debug rebuilds would otherwise
+     * ship the symbols of every local build. The runtime native-crash handler
+     * is unaffected — it is still added for every variant when [enabled] is set.
+     *
+     * Only has effect when [enabled] is also `true`.
+     *
+     * Default: `false`
+     */
+    val allBuildTypes: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
      * Force native debug-symbol upload on every build, bypassing the
      * local SHA-1 cache.
      *

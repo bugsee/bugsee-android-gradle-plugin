@@ -28,4 +28,16 @@ class NativeSymbolCacheKeyTest {
         assertNotEquals(nativeSymbolCacheKey("a", "debug"), nativeSymbolCacheKey("a", "release"))
         assertNotEquals(nativeSymbolCacheKey("a", "debug"), nativeSymbolCacheKey("b", "debug"))
     }
+
+    @Test fun `libs key follows the requested CLI version and explicit CLI path`() {
+        val base = nativeLibsCacheKey("a", "release", "https://e")
+        assertNotEquals(base, nativeLibsCacheKey("a", "release", "https://e", cliVersion = "0.9.0"))
+        assertNotEquals(base, nativeLibsCacheKey("a", "release", "https://e", cliPath = "/opt/bugsee-cli"))
+        assertNotEquals(
+            nativeLibsCacheKey("a", "release", "https://e", cliPath = "/opt/a"),
+            nativeLibsCacheKey("a", "release", "https://e", cliPath = "/opt/b"),
+        )
+        assertEquals(base, nativeLibsCacheKey("a", "release", "https://e", cliVersion = " ", cliPath = ""))
+        assertNotEquals(base, nativeLibsCacheKey("a", "release", "https://other"))
+    }
 }

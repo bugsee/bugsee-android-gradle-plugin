@@ -168,6 +168,65 @@ class NativeMergedLibsE2ETest {
         }
     }
 
+    @Test
+    fun `a debuggable variant uploads nothing by default`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            val dry = fx.buildTasks(
+                listOf(":app:assembleDebug", "--dry-run"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli",
+            )
+            assertFalse("no native upload task in the debug graph", dry.output.contains("uploadBugseeDebugNative"))
+            fx.buildTasks(
+                listOf(":app:assembleDebug"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli",
+            )
+            assertTrue(server.symbolPosts.isEmpty())
+            val releaseDry = fx.buildTasks(
+                listOf(":app:assembleRelease", "--dry-run"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli",
+            )
+            assertTrue(releaseDry.output.contains("uploadBugseeReleaseNative"))
+        }
+    }
+
+    @Test
+    fun `ndk allBuildTypes opts a debuggable variant in`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            val dry = fx.buildTasks(
+                listOf(":app:assembleDebug", "--dry-run"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli", "-PbugseeE2eAllBuildTypes=true",
+            )
+            assertTrue(dry.output.contains("uploadBugseeDebugNative"))
+            fx.buildTasks(
+                listOf(":app:assembleDebug"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli", "-PbugseeE2eAllBuildTypes=true",
+            )
+            assertEquals(1, server.symbolPosts.size)
+        }
+    }
+
+    @Test
+    fun `an unchanged second build skips the CLI, a changed library and --force do not`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            assemble(fx, server)
+            assertEquals(1, server.symbolPosts.size)
+
+            assemble(fx, server)
+            assertEquals("unchanged libraries: no CLI run, no request", 1, server.symbolPosts.size)
+
+            val source = fx.projectDir.resolve("app/src/main/cpp/native.c")
+            source.appendText("\nint bugsee_fixture_extra(void) { return 42; }\n")
+            assemble(fx, server)
+            assertEquals("a changed library invalidates the marker", 2, server.symbolPosts.size)
+
+            assemble(fx, server, extra = arrayOf("-PbugseeE2eForce=true"))
+            assertEquals("force bypasses it", 3, server.symbolPosts.size)
+        }
+    }
+
     private fun shim(exitCode: Int): File = temp.newFile("bugsee-cli-shim-$exitCode").apply {
         // Answers `exitCode` for a directory input and delegates everything else to the real CLI.
         writeText(
@@ -227,7 +286,7 @@ class NativeMergedLibsE2ETest {
     }
 
     @Test
-    fun `works with the configuration cache and re-uploads on a cache hit`() {
+    fun `works with the configuration cache and skips the upload on a cache hit`() {
         MockSymbolServer().use { server ->
             val fx = fixture()
             val first = assemble(fx, server, extra = arrayOf("--configuration-cache"))
@@ -235,7 +294,7 @@ class NativeMergedLibsE2ETest {
             val second = assemble(fx, server, extra = arrayOf("--configuration-cache"))
             assertTrue(second.output.contains("Reusing configuration cache"))
             assertFalse(second.output.contains("configuration cache problems"))
-            assertEquals("each build registers the library; the server dedups", 2, server.symbolPosts.size)
+            assertEquals("the second build finds the libraries unchanged and skips the CLI", 1, server.symbolPosts.size)
         }
     }
 }

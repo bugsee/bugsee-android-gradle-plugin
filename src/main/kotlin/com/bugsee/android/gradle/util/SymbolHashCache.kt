@@ -20,6 +20,7 @@ internal object SymbolHashCache {
     /**
      * Returns `true` if the cache contains an entry for [key] with matching [hash].
      */
+    @Synchronized
     fun isCached(cacheFile: File, key: String, hash: String): Boolean {
         val entries = readEntries(cacheFile)
         return entries.any { it.key == key && it.hash == hash }
@@ -29,6 +30,7 @@ internal object SymbolHashCache {
      * Stores [hash] for [key], evicting the least-recently-used entry
      * if the cache exceeds [MAX_ENTRIES].
      */
+    @Synchronized
     fun put(cacheFile: File, key: String, hash: String) {
         val entries = readEntries(cacheFile).toMutableList()
 

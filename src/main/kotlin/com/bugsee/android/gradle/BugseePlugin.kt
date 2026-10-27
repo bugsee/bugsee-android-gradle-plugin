@@ -390,7 +390,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 project, variant, effective, capitalizedVariant, resolveTaskProvider
             )
 
-            if (effective.ndk.enabled.get()) {
+            if (shouldRegisterNativeUploadFor(project, variant, effective, isDebug)) {
                 registerNativeUploadTask(
                     project, variant, effective, capitalizedVariant, resolveTaskProvider
                 )
@@ -714,6 +714,44 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             project,
             apkAndBundleEntryTaskNames(capitalizedVariant, isReleaseLikeVariant(project, variant)),
             mappingUploadTaskProvider,
+        )
+    }
+
+    /**
+     * Per-variant decision on whether to register the native-symbol upload task:
+     * `ndk.enabled`, and (unless `ndk.allBuildTypes` opts in) only for release-like,
+     * i.e. non-debuggable, variants.
+     */
+    private fun shouldRegisterNativeUploadFor(
+        project: Project,
+        variant: ApplicationVariant,
+        extension: BugseePluginExtension,
+        isDebug: Boolean,
+    ): Boolean {
+        if (!extension.ndk.enabled.get()) return false
+        if (!isReleaseLikeVariant(project, variant) && !extension.ndk.allBuildTypes.getOrElse(false)) {
+            logNativeSkippedOnce(project, variant)
+            if (isDebug) {
+                project.logger.warn(
+                    "Bugsee: skipping native symbol upload for non-release variant '${variant.name}' — " +
+                        "set ndk.allBuildTypes(true) to include it"
+                )
+            }
+            return false
+        }
+        return true
+    }
+
+    /** One lifecycle line per project: a behaviour change that must not pass silently. */
+    private fun logNativeSkippedOnce(project: Project, variant: ApplicationVariant) {
+        val key = "bugseeNativeSkipWarned"
+        val extra = project.extensions.extraProperties
+        if (extra.has(key) && extra.get(key) == true) return
+        extra.set(key, true)
+        project.logger.lifecycle(
+            "Bugsee: native symbols are uploaded only for non-debuggable build types " +
+                "(e.g. skipped: ${variant.buildType ?: variant.name}; every build type with isDebuggable = true); " +
+                "set ndk.allBuildTypes=true to include them"
         )
     }
 

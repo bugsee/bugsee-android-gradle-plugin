@@ -187,6 +187,7 @@ dotted-path form as the DSL field names.
 | Key | Type | Default |
 |---|---|---|
 | `plugin.ndk.enabled` | Boolean | `false` |
+| `plugin.ndk.allBuildTypes` | Boolean | `false` |
 | `plugin.ndk.forceDebugSymbolsUpload` | Boolean | `false` |
 | `plugin.ndk.useMergedNativeLibs` | Boolean | `true` |
 
@@ -199,6 +200,20 @@ Unchanged prebuilt libraries are deduplicated server-side. Set
 A library that an earlier release uploaded only as SYMBOL_TABLE (function names)
 is upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+); the server
 never replaces debug info with a poorer file, so no `forceDebugSymbolsUpload` is needed.
+
+The upload task is registered only for non-debuggable variants, like `buildInfo`: build types
+with `isDebuggable = true` are skipped, including `initWith(debug)` ones such as `staging` and
+a release-derived type that sets `isDebuggable = true`. Crashes from those builds are not
+native-symbolicated unless you set `plugin.ndk.allBuildTypes=true` (the runtime native-crash
+module is still added for every variant). A one-line lifecycle message names the skip. After a successful upload of the
+unstripped-libraries directory the plugin records a digest of the library names, sizes and
+contents in `<root>/.gradle/bugsee/native-symbol-cache.json` (keyed by token, variant and
+endpoint); a later build with identical libraries skips the CLI run. Failed uploads are not
+recorded and are retried; `forceDebugSymbolsUpload` bypasses the check, and deleting
+`<root>/.gradle/bugsee` clears it. The key also covers `cliVersion` and `cliPath`. CI without a
+persisted `.gradle` uploads every time (the server deduplicates); a server-side wipe, or an app
+re-created with the same token and endpoint, cannot be detected locally, so use
+`forceDebugSymbolsUpload` once in those cases.
 
 ### Leak detection
 

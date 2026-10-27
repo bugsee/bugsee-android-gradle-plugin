@@ -49,6 +49,7 @@ internal object SettingDefinitions {
         boolDef("optimizeExtensionsLoading", SettingScope.VARIANT) { it.optimizeExtensionsLoading },
         boolDef("sdkAutoLoad", SettingScope.GLOBAL) { it.sdkAutoLoad },
         boolDef("ndk.enabled", SettingScope.VARIANT) { it.ndk.enabled },
+        boolDef("ndk.allBuildTypes", SettingScope.VARIANT) { it.ndk.allBuildTypes },
         boolDef("ndk.forceDebugSymbolsUpload", SettingScope.VARIANT) { it.ndk.forceDebugSymbolsUpload },
         boolDef("ndk.useMergedNativeLibs", SettingScope.VARIANT) { it.ndk.useMergedNativeLibs },
         boolDef("leak.enabled", SettingScope.GLOBAL) { it.leak.enabled },
