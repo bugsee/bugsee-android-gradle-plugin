@@ -234,7 +234,13 @@ internal object CliBinaryResolver {
                     version, triple, cacheRoot, binaryName, logger, debug,
                     exec = { execOps.exec(it) },
                 )
-                maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+                val resolved = maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+                // Cancellation that landed during the (non-interruptible)
+                // download must not hand a binary to a cancelled thread.
+                if (Thread.currentThread().isInterrupted) {
+                    throw InterruptedException("bugsee-cli resolution cancelled")
+                }
+                resolved
             }
         } catch (e: InterruptedException) {
             // Build cancellation is not a download failure: do not fall back
