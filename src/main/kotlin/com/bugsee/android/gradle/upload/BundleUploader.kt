@@ -565,6 +565,12 @@ internal object BundleUploader {
             } else if (debug) {
                 logger.warn("Bugsee: $label upload complete.")
             }
+        } catch (e: java.io.IOException) {
+            if (HttpRetry.isInterruption(e)) {
+                Thread.currentThread().interrupt()
+                throw e
+            }
+            logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         } catch (e: Exception) {
             logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         }

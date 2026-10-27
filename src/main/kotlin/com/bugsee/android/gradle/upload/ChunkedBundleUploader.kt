@@ -348,6 +348,11 @@ internal object ChunkedBundleUploader {
                     throw IOException("chunk PUT status=$status: ${BundleUploader.redactBodyForLog(body)}")
                 }
             } catch (e: IOException) {
+                // A cancelled build must stay cancelled, not be retried.
+                if (HttpRetry.isInterruption(e)) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                }
                 lastError = e
                 if (attempt < CHUNK_PUT_MAX_ATTEMPTS) {
                     Thread.sleep(CHUNK_PUT_BACKOFF_MS * attempt)
