@@ -45,6 +45,7 @@ internal object SettingDefinitions {
         boolDef("cliAutoUpdate", SettingScope.GLOBAL) { it.cliAutoUpdate },
         enumDef("uploader", SettingScope.GLOBAL, UploaderStrategy::class.java) { it.uploader },
         boolDef("debug", SettingScope.VARIANT) { it.debug },
+        boolDef("failOnUploadError", SettingScope.VARIANT) { it.failOnUploadError },
         boolDef("feedback", SettingScope.GLOBAL) { it.feedback },
         boolDef("optimizeExtensionsLoading", SettingScope.VARIANT) { it.optimizeExtensionsLoading },
         boolDef("sdkAutoLoad", SettingScope.GLOBAL) { it.sdkAutoLoad },

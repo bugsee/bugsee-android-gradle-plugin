@@ -5,8 +5,6 @@ import org.apache.http.client.methods.HttpGet
 import org.apache.http.client.utils.URIBuilder
 import org.apache.http.conn.ssl.DefaultHostnameVerifier
 import org.apache.http.impl.client.HttpClients
-import org.apache.http.impl.client.StandardHttpRequestRetryHandler
-import org.apache.http.util.EntityUtils
 import org.gradle.api.logging.Logger
 import org.json.JSONObject
 
@@ -58,6 +56,7 @@ internal object BaselineClient {
         buildConfiguration: String?,
         logger: Logger,
         debug: Boolean,
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
     ): Baseline? {
         val url = try {
             val base = ApiEndpoint.buildsUrl(endpoint, appToken, "/baseline")
@@ -89,12 +88,13 @@ internal object BaselineClient {
                 .useSystemProperties()
                 .setDefaultRequestConfig(requestConfig)
                 .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
-                .setRetryHandler(StandardHttpRequestRetryHandler())
+                .disableAutomaticRetries() // HttpRetry owns retries (I/O errors and transient statuses)
                 .build()
                 .use { client ->
-                    val response = client.execute(httpGet)
-                    val statusCode = response.statusLine.statusCode
-                    val body = response.entity?.let { EntityUtils.toString(it, "utf-8") } ?: ""
+                    // A read-only GET: safe to repeat, so 429/5xx and I/O errors are retried (bounded).
+                    val reply = HttpRetry.execute(client, httpGet, "size-check baseline lookup", logger, retryPolicy)
+                    val statusCode = reply.status
+                    val body = reply.body ?: ""
 
                     if (statusCode !in 200..299) {
                         logger.warn(

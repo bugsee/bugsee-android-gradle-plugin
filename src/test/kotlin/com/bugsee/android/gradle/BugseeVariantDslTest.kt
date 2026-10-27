@@ -59,6 +59,14 @@ class BugseeVariantDslTest {
     }
 
     @Test
+    fun failOnUploadErrorIsPerVariant() {
+        val ext = newExt()
+        ext.variant("staging", Action { it.failOnUploadError.set(true) })
+        assertTrue(ext.variantBlocks.getValue("staging").failOnUploadError.get())
+        assertFalse(ext.failOnUploadError.get())
+    }
+
+    @Test
     fun blocksAreIndependent() {
         val ext = newExt()
         ext.variant("a", Action { it.endpoint.set("https://a") })

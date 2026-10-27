@@ -3,34 +3,22 @@ package com.bugsee.android.gradle.upload
 import org.apache.http.client.config.RequestConfig
 import org.apache.http.client.methods.HttpPost
 import org.apache.http.client.methods.HttpPut
-import org.apache.http.client.methods.HttpUriRequest
-import org.apache.http.conn.ConnectTimeoutException
 import org.apache.http.conn.ssl.DefaultHostnameVerifier
 import org.apache.http.entity.FileEntity
 import org.apache.http.entity.StringEntity
-import org.apache.http.impl.client.CloseableHttpClient
 import org.apache.http.impl.client.HttpClients
 import org.apache.http.message.BasicHeader
 import org.apache.http.protocol.HTTP
-import org.apache.http.util.EntityUtils
 import org.gradle.api.logging.Logger
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
 
 internal object SymbolUploader {
 
     private const val CONNECT_TIMEOUT_MS = 30_000
     private const val SOCKET_TIMEOUT_MS = 120_000
 
-    /** Attempts per request (1 try + 2 retries); the backoff before retry N is `N * RETRY_BACKOFF_MS`. */
-    private const val MAX_ATTEMPTS = 3
-    private const val RETRY_BACKOFF_MS = 500L
-    private const val RETRY_AFTER_CAP_MS = 10_000L
-    private const val MAX_RETRY_AFTER_SECONDS = 3_600L
-    private const val RETRY_BUDGET_MS = 180_000L
     private val QUERY_IN_MESSAGE = Regex("\\?[^\\r\\n]*")
 
     /**
@@ -65,12 +53,12 @@ internal object SymbolUploader {
         logger: Logger,
         debug: Boolean,
         uploaderTag: String = "kotlin",
-        retryPolicy: RetryPolicy = RetryPolicy(),
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
     ): Boolean = try {
         doUpload(file, json, appToken, endpoint, logger, debug, uploaderTag, retryPolicy)
     } catch (e: IOException) {
         // A cancelled build (Ctrl-C, daemon stop) must stay cancelled, not turn into a warning.
-        if (isInterruption(e)) {
+        if (HttpRetry.isInterruption(e)) {
             Thread.currentThread().interrupt()
             throw e
         }
@@ -101,71 +89,6 @@ internal object SymbolUploader {
     private fun sanitize(text: String, appToken: String): String =
         text.replace(appToken, BundleUploader.maskAppToken(appToken)).replace(QUERY_IN_MESSAGE, "?<redacted>")
 
-    /** True when the thread was interrupted or [e] says the request was cancelled (not a plain timeout). */
-    private fun isInterruption(e: IOException): Boolean =
-        Thread.currentThread().isInterrupted ||
-            (e is InterruptedIOException && e !is SocketTimeoutException && e !is ConnectTimeoutException)
-
-    /** Retry knobs; the defaults are production values, tests inject small ones. */
-    internal class RetryPolicy(
-        val backoffMs: Long = RETRY_BACKOFF_MS,
-        val retryAfterCapMs: Long = RETRY_AFTER_CAP_MS,
-        val budgetMs: Long = RETRY_BUDGET_MS,
-    )
-
-    /**
-     * Run [request], retrying I/O errors and transient statuses ([isRetryable]) up to [MAX_ATTEMPTS]
-     * times. Permanent statuses (4xx, notably 401/403/404) are returned at once. The wait before a retry
-     * is the server's `Retry-After` (seconds, capped) when sent, else a linear backoff. A read timeout
-     * ([SocketTimeoutException]) is never retried: the server already held the request for the full
-     * socket timeout, so retrying would stall the build for minutes per upload. No retry starts once
-     * [RetryPolicy.budgetMs] would be exceeded. The last attempt's reply is returned (or its I/O error
-     * thrown) when the attempts run out. This loop owns all retries (the client has its own disabled),
-     * so one upload sends at most [MAX_ATTEMPTS] requests. Both entities used here ([StringEntity],
-     * [FileEntity]) are repeatable, so the request can be re-sent.
-     */
-    private fun executeWithRetry(
-        client: CloseableHttpClient,
-        request: HttpUriRequest,
-        step: String,
-        logger: Logger,
-        policy: RetryPolicy,
-    ): Reply {
-        val started = System.nanoTime()
-        fun elapsedMs() = (System.nanoTime() - started) / 1_000_000
-        for (attempt in 1..MAX_ATTEMPTS) {
-            val last = attempt == MAX_ATTEMPTS
-            var waitMs = policy.backoffMs * attempt
-            try {
-                val reply = client.execute(request).use { response ->
-                    val retryAfterMs = response.getFirstHeader("Retry-After")?.value?.trim()?.toLongOrNull()
-                        ?.takeIf { it >= 0 }?.let { minOf(it.coerceAtMost(MAX_RETRY_AFTER_SECONDS) * 1000, policy.retryAfterCapMs) }
-                    Reply(response.statusLine.statusCode, response.entity?.let { EntityUtils.toString(it, "utf-8") }, retryAfterMs)
-                }
-                if (!isRetryable(reply.status) || last) return reply
-                waitMs = reply.retryAfterMs ?: waitMs
-                if (elapsedMs() + waitMs >= policy.budgetMs) return reply
-                logger.warn("Bugsee: $step returned status ${reply.status}, retrying (attempt $attempt of $MAX_ATTEMPTS)")
-            } catch (e: IOException) {
-                if (last || isInterruption(e) || e is SocketTimeoutException || elapsedMs() + waitMs >= policy.budgetMs) throw e
-                logger.warn("Bugsee: $step failed (${e.javaClass.simpleName}), retrying (attempt $attempt of $MAX_ATTEMPTS)")
-            }
-            if (waitMs > 0) {
-                try {
-                    Thread.sleep(waitMs)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw e
-                }
-            }
-        }
-        error("unreachable")
-    }
-
-    private fun isRetryable(status: Int): Boolean = status == 429 || status in 500..599
-
-    private class Reply(val status: Int, val body: String?, val retryAfterMs: Long? = null)
-
     private fun doUpload(
         file: File,
         json: String,
@@ -174,7 +97,7 @@ internal object SymbolUploader {
         logger: Logger,
         debug: Boolean,
         uploaderTag: String,
-        retryPolicy: RetryPolicy,
+        retryPolicy: HttpRetry.RetryPolicy,
     ): Boolean {
         if (debug) logger.warn("Bugsee: Starting upload. Body: $json")
 
@@ -198,11 +121,11 @@ internal object SymbolUploader {
             .useSystemProperties()
             .setDefaultRequestConfig(requestConfig)
             .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
-            .disableAutomaticRetries() // executeWithRetry owns retries; stacking both multiplied full-body PUTs
+            .disableAutomaticRetries() // HttpRetry owns retries; stacking both multiplied full-body PUTs
             .build()
 
         return httpClient.use { client ->
-            val reply = executeWithRetry(client, httpPost, "metadata request", logger, retryPolicy)
+            val reply = HttpRetry.execute(client, httpPost, "metadata request", logger, retryPolicy)
             val statusCode = reply.status
 
             // Accept the full 2xx range. S3 and CDN proxies routinely
@@ -280,7 +203,7 @@ internal object SymbolUploader {
             if (debug) logger.warn("Bugsee: Uploading to endpoint: ${BundleUploader.redactPresignedUrl(presignedEndpoint)}")
             val httpPut = HttpPut(presignedEndpoint)
             httpPut.entity = FileEntity(file)
-            val putReply = executeWithRetry(client, httpPut, "file upload", logger, retryPolicy)
+            val putReply = HttpRetry.execute(client, httpPut, "file upload", logger, retryPolicy)
 
             // Same 2xx-range relaxation as the POST step above —
             // presigned-URL PUTs land on S3 (or whichever CDN the

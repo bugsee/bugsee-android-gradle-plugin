@@ -101,6 +101,7 @@ internal object ChunkedBundleUploader {
         depsJsonFile: File? = null,
         timingsJsonFile: File? = null,
         legacyBuildInfoGzip: Boolean = false,
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
     ): String {
         val http = newHttpClient()
         try {
@@ -128,7 +129,7 @@ internal object ChunkedBundleUploader {
             }
             if (debug) logger.warn("Bugsee: computed ${chunkHashes.size} chunks")
 
-            val check = checkChunks(http, endpoint, appToken, chunkHashes)
+            val check = checkChunks(http, endpoint, appToken, chunkHashes, logger, retryPolicy)
             val missing = check.getJSONArray("missing").let { arr ->
                 List(arr.length()) { arr.getString(it) }
             }
@@ -166,7 +167,7 @@ internal object ChunkedBundleUploader {
                 }
             }
 
-            val submitResult = submitChunked(http, endpoint, appToken, metadata, chunkHashes)
+            val submitResult = submitChunked(http, endpoint, appToken, metadata, chunkHashes, logger, retryPolicy)
             if (debug) logger.warn("Bugsee: chunked upload complete build_id=${submitResult.buildId}")
 
             // Follow-up auxiliary blob PUTs. Mirror the single-PUT
@@ -283,20 +284,21 @@ internal object ChunkedBundleUploader {
 
     private fun checkChunks(http: CloseableHttpClient,
                             endpoint: String, appToken: String,
-                            hashes: List<String>): JSONObject {
+                            hashes: List<String>,
+                            logger: Logger, retryPolicy: HttpRetry.RetryPolicy): JSONObject {
         val post = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken, "/chunks/check"))
         post.setHeader("Content-Type", "application/json")
         val body = JSONObject().apply {
             put("sha1_list", JSONArray(hashes))
         }.toString()
         post.entity = StringEntity(body, "UTF-8")
-        http.execute(post).use { response ->
-            val responseBody = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
-            if (response.statusLine.statusCode !in 200..299) {
-                throw RuntimeException("chunks/check failed: ${response.statusLine} ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
-            }
-            return ApiEndpoint.unwrapResult(JSONObject(responseBody))
+        // Retried on transient gateway statuses only (429/502/503/504); see HttpRetry.
+        val reply = HttpRetry.execute(http, post, "chunks/check", logger, retryPolicy, idempotent = false)
+        val responseBody = reply.body ?: ""
+        if (reply.status !in 200..299) {
+            throw RuntimeException("chunks/check failed: status=${reply.status} ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
         }
+        return ApiEndpoint.unwrapResult(JSONObject(responseBody))
     }
 
     /**
@@ -357,7 +359,8 @@ internal object ChunkedBundleUploader {
 
     private fun submitChunked(http: CloseableHttpClient,
                               endpoint: String, appToken: String,
-                              metadata: JSONObject, hashes: List<String>): ChunkedSubmitResult {
+                              metadata: JSONObject, hashes: List<String>,
+                              logger: Logger, retryPolicy: HttpRetry.RetryPolicy): ChunkedSubmitResult {
         val post = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken, "/chunked"))
         post.setHeader("Content-Type", "application/json")
         // Clone so we don't mutate the caller's object. The doc on
@@ -369,34 +372,34 @@ internal object ChunkedBundleUploader {
             put("chunks", JSONArray(hashes))
         }
         post.entity = StringEntity(body.toString(), "UTF-8")
-        http.execute(post).use { response ->
-            val responseBody = response.entity?.let { EntityUtils.toString(it, "UTF-8") } ?: ""
-            if (response.statusLine.statusCode !in 200..299) {
-                throw RuntimeException("/builds/chunked failed: ${response.statusLine} ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
-            }
-            val payload = ApiEndpoint.unwrapResult(JSONObject(responseBody))
-            val buildId = if (payload.has("build_id")) payload.optString("build_id", "") else ""
-            if (buildId.isBlank()) {
-                // A 2xx without a build_id means the server accepted the
-                // submission but didn't tell us what to key on — the
-                // worker pipeline is effectively off the rails. Fail
-                // loud so the caller falls back to single-PUT.
-                throw RuntimeException("/builds/chunked returned 2xx without build_id: ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
-            }
-            // Optional auxiliary URLs. Empty when the caller didn't
-            // ask for them (via `request_*_upload` flags inside
-            // `metadata`); the auxiliary-PUT helper treats an empty
-            // URL paired with a non-null gz file as a server-side
-            // bug and warns. Either way, we don't fail the submit
-            // on a missing URL — the artefact stitch has already
-            // landed and the build doc exists; aux blobs are
-            // best-effort enrichment.
-            return ChunkedSubmitResult(
-                buildId = buildId,
-                depsUploadEndpoint = payload.optString("dependencies_upload_endpoint", ""),
-                timingsUploadEndpoint = payload.optString("timings_upload_endpoint", ""),
-                buildInfoUploadEndpoint = payload.optString("build_info_upload_endpoint", ""),
-            )
+        // Registers the build, so retried on transient gateway statuses only (429/502/503/504); see HttpRetry.
+        val reply = HttpRetry.execute(http, post, "/builds/chunked", logger, retryPolicy, idempotent = false)
+        val responseBody = reply.body ?: ""
+        if (reply.status !in 200..299) {
+            throw RuntimeException("/builds/chunked failed: status=${reply.status} ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
         }
+        val payload = ApiEndpoint.unwrapResult(JSONObject(responseBody))
+        val buildId = if (payload.has("build_id")) payload.optString("build_id", "") else ""
+        if (buildId.isBlank()) {
+            // A 2xx without a build_id means the server accepted the
+            // submission but didn't tell us what to key on — the
+            // worker pipeline is effectively off the rails. Fail
+            // loud so the caller falls back to single-PUT.
+            throw RuntimeException("/builds/chunked returned 2xx without build_id: ${BundleUploader.redactBodyForLog(responseBody, appToken)}")
+        }
+        // Optional auxiliary URLs. Empty when the caller didn't
+        // ask for them (via `request_*_upload` flags inside
+        // `metadata`); the auxiliary-PUT helper treats an empty
+        // URL paired with a non-null gz file as a server-side
+        // bug and warns. Either way, we don't fail the submit
+        // on a missing URL — the artefact stitch has already
+        // landed and the build doc exists; aux blobs are
+        // best-effort enrichment.
+        return ChunkedSubmitResult(
+            buildId = buildId,
+            depsUploadEndpoint = payload.optString("dependencies_upload_endpoint", ""),
+            timingsUploadEndpoint = payload.optString("timings_upload_endpoint", ""),
+            buildInfoUploadEndpoint = payload.optString("build_info_upload_endpoint", ""),
+        )
     }
 }

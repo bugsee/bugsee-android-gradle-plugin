@@ -117,7 +117,7 @@ class SymbolUploaderHttpTest {
         endpoint = endpoint,
         logger = logger,
         debug = false,
-        retryPolicy = SymbolUploader.RetryPolicy(backoffMs = 0),
+        retryPolicy = HttpRetry.RetryPolicy(backoffMs = 0),
     )
 
     @Test fun `502 then 502 then 200 on the POST succeeds after three requests`() {
@@ -201,7 +201,7 @@ class SymbolUploaderHttpTest {
         val ok = SymbolUploader.uploadData(
             file = tempFile(), json = sampleJson, appToken = appToken, endpoint = server.baseUrl,
             logger = logger, debug = false,
-            retryPolicy = SymbolUploader.RetryPolicy(backoffMs = 0, retryAfterCapMs = 300),
+            retryPolicy = HttpRetry.RetryPolicy(backoffMs = 0, retryAfterCapMs = 300),
         )
         val elapsedMs = (System.nanoTime() - started) / 1_000_000
         assertTrue(ok)
@@ -214,7 +214,7 @@ class SymbolUploaderHttpTest {
         val ok = SymbolUploader.uploadData(
             file = tempFile(), json = sampleJson, appToken = appToken, endpoint = server.baseUrl,
             logger = logger, debug = false,
-            retryPolicy = SymbolUploader.RetryPolicy(backoffMs = 1_000, budgetMs = 500),
+            retryPolicy = HttpRetry.RetryPolicy(backoffMs = 1_000, budgetMs = 500),
         )
         assertFalse(ok)
         assertEquals(1, server.postCallCount(), "no retry may start when its wait alone exceeds the budget")

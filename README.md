@@ -178,9 +178,17 @@ dotted-path form as the DSL field names.
 |---|---|---|---|
 | `plugin.endpoint` | String | `https://api.bugsee.com` | `bugsee { endpoint.set(…) }` |
 | `plugin.debug` | Boolean | `false` | `bugsee { debug.set(…) }` |
+| `plugin.failOnUploadError` | Boolean | `false` | `bugsee { failOnUploadError.set(…) }` |
 | `plugin.feedback` | Boolean | `false` | `bugsee { feedback.set(…) }` |
 | `plugin.sdkAutoLoad` | Boolean | `true` | `bugsee { sdkAutoLoad.set(…) }` |
 | `plugin.optimizeExtensionsLoading` | Boolean | `true` | `bugsee { optimizeExtensionsLoading.set(…) }` |
+
+`failOnUploadError` makes an upload that does not complete (mapping, native symbols or build
+registration: a network error, an HTTP error that persists after the plugin's bounded retry, or a
+rejection such as an invalid app token) fail the build. By default it only logs a warning and the build
+stays green. Skipped uploads (no app token, nothing to upload), symbols the server already has and
+failures of the auxiliary build-info blobs (dependencies, timings) never fail the build. It can be set
+per variant.
 
 ### NDK integration
 

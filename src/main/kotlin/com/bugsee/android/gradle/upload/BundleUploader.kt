@@ -199,6 +199,7 @@ internal object BundleUploader {
         depsJsonFile: File? = null,
         timingsJsonFile: File? = null,
         legacyBuildInfoGzip: Boolean = false,
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
     ) {
         if (debug) logger.warn("Bugsee: Starting bundle upload. Body: $json")
 
@@ -226,22 +227,21 @@ internal object BundleUploader {
             .build()
 
         httpClient.use { client ->
-            val response = client.execute(httpPost)
-            val statusCode = response.statusLine.statusCode
+            // The registration POST creates a record, so only the statuses that mean "not processed"
+            // (429/502/503/504) are retried; see HttpRetry.
+            val reply = HttpRetry.execute(client, httpPost, "bundle upload step 1", logger, retryPolicy, idempotent = false)
+            val statusCode = reply.status
 
             // 2xx is success; some reverse proxies normalise to 201/204.
             // Anything outside that is a hard failure — surface it rather
             // than quietly returning and letting the Gradle task report
             // green while the backend never saw the build.
             if (statusCode !in 200..299) {
-                val body = EntityUtils.toString(response.entity, "utf-8")
-                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): ${redactBodyForLog(body, appToken)}")
+                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): ${redactBodyForLog(reply.body, appToken)}")
             }
 
-            val resEntity = response.entity
+            val contentText = reply.body
                 ?: throw RuntimeException("Bugsee bundle upload step 1: no response body")
-
-            val contentText = EntityUtils.toString(resEntity, "utf-8")
             // NEVER log `contentText` verbatim — the response contains
             // presigned PUT URLs that grant 7-day arbitrary-write
             // access to known S3 keys. See `redactedResponseSummary`.

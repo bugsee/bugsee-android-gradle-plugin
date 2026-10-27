@@ -53,6 +53,9 @@ interface BugseeVariantSettings {
     /** Verbose plugin logging. See [BugseePluginExtension.debug]. */
     val debug: Property<Boolean>
 
+    /** Fail the build when an upload does not complete. See [BugseePluginExtension.failOnUploadError]. */
+    val failOnUploadError: Property<Boolean>
+
     /** Consolidate extension ContentProviders. See [BugseePluginExtension.optimizeExtensionsLoading]. */
     val optimizeExtensionsLoading: Property<Boolean>
 

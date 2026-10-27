@@ -143,6 +143,7 @@ class VariantWiringTest {
             cliVersion.set("9.8.7")
             cliAutoUpdate.set(false)
             uploader.set(UploaderStrategy.KOTLIN)
+            failOnUploadError.set(true)
             buildInfo { b ->
                 b.sizeAnalysis { it.chunkedUpload.set(false); it.enabled.set(true) }
                 b.sizeCheck { it.warningPercent.set(5.0); it.failBytes.set(4096L) }
@@ -171,6 +172,7 @@ class VariantWiringTest {
         for (task in listOf(h.mappingTask("Release"), h.nativeTask("Release")!!)) {
             assertEquals(ext.endpoint.get(), task.inputValue("endpoint"))
             assertEquals(ext.debug.get(), task.inputValue("debug"))
+            assertEquals(true, task.inputValue("failOnUploadError"))
             assertEquals("9.8.7", task.inputValue("cliVersion"))
             assertEquals(false, task.inputValue("cliAutoUpdate"))
             assertEquals(UploaderStrategy.KOTLIN, task.inputValue("uploader"))
@@ -185,6 +187,7 @@ class VariantWiringTest {
             val bundle = h.project.tasks.getByName("uploadBugseeRelease$cap")
             assertEquals(ext.endpoint.get(), bundle.inputValue("endpoint"))
             assertEquals(ext.debug.get(), bundle.inputValue("debug"))
+            assertEquals(true, bundle.inputValue("failOnUploadError"))
             assertEquals("9.8.7", bundle.inputValue("cliVersion"))
             assertEquals(oldToken, bundle.inputValue("preResolvedAppToken"))
             assertEquals(info.sizeAnalysis.chunkedUpload.get(), bundle.inputValue("chunkedUpload"))
