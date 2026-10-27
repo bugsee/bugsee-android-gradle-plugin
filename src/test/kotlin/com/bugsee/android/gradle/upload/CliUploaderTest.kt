@@ -832,6 +832,31 @@ class CliUploaderTest {
         assertFalse(log.all().contains("deadbeefcafe0123456789"), log.all())
     }
 
+    @Test fun `stdout is forwarded scrubbed at lifecycle level, independent of stderr`() {
+        val log = AllLevelsLogger()
+        runUploadMapping(FakeExec(cliExitValue = 0, stdout = "build_id=42 $presigned"), executableCliStub(), log.logger)
+        val lifecycle = log.lines.filter { it.first == "lifecycle" }.joinToString("\n") { it.second }
+        assertTrue(lifecycle.contains("build_id=42"), log.all())
+        assertNoSecrets(log.all())
+    }
+
+    @Test fun `a truncated unterminated secret JSON value and a huge value neither leak nor overflow the stack`() {
+        val truncated = "body={\"upload_token\":\"" + "S".repeat(3000) + "\n" + "retry warn\n".repeat(30) + "error: \"Service Unavailable\""
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(truncated) }, "small-stack", 256 * 1024)
+        t.start(); t.join()
+        assertFalse(out.contains("SSSS"), out)
+        assertTrue(out.contains("Service Unavailable"), out)
+    }
+
+    @Test fun `long output keeps head and tail so the final error line survives`() {
+        val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
+        val out = CliUploader.scrubCliOutput(text)
+        assertTrue(out.startsWith("first line"), out)
+        assertTrue(out.endsWith("error: upload rejected (403)"), out)
+        assertTrue(out.length < 4300, "len=${out.length}")
+    }
+
     @Test fun `scrubCliOutput bounds the length and keeps short plain text`() {
         assertEquals("connection refused (os error 111)", CliUploader.scrubCliOutput("connection refused (os error 111)\n"))
         assertTrue(CliUploader.scrubCliOutput("x".repeat(100_000)).length <= 4100)

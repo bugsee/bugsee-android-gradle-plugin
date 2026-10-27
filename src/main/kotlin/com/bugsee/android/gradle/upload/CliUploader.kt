@@ -325,11 +325,24 @@ internal object CliUploader {
         RegexOption.IGNORE_CASE,
     )
     private val CLI_SECRET_JSON_PAIR = Regex(
-        "\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\"\\s*:\\s*\"(?:[^\"\\\\]|\\\\.)*\"",
+        "\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\"\\s*:\\s*\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?",
         RegexOption.IGNORE_CASE,
     )
     private val CLI_SECRET_QUERY_PAIR =
         Regex("\\b(X-Amz-[A-Za-z-]+|Signature|Token|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
+
+    private const val CLI_OUTPUT_KEEP = 2000
+
+    /**
+     * Keeps the first and last ~2000 chars of long output, cut at line boundaries: the CLI prints its
+     * summary `error:` line last, after any retry warnings, so a plain head cap would lose it.
+     */
+    private fun headAndTail(text: String): String {
+        if (text.length <= CLI_OUTPUT_KEEP * 2) return text
+        val head = text.take(CLI_OUTPUT_KEEP).substringBeforeLast('\n', "")
+        val tail = text.takeLast(CLI_OUTPUT_KEEP).substringAfter('\n', "")
+        return "$head\n…[output truncated]…\n$tail"
+    }
 
     /**
      * Log-safe rendering of bugsee-cli's stderr/stdout. The CLI embeds raw HTTP response bodies, presigned
@@ -338,17 +351,29 @@ internal object CliUploader {
      * XML elements; capped at 4096 chars) plus the CLI-specific patterns above, and is trimmed.
      */
     internal fun scrubCliOutput(text: String, appToken: String? = null): String =
-        BundleUploader.scrubForLog(text, appToken)
+        BundleUploader.scrubForLog(headAndTail(text), appToken)
             .replace(CLI_SECRET_FIELD) { "${it.groupValues[1]}: <redacted>" }
             .replace(CLI_SECRET_JSON_PAIR, "\"$1\":\"<redacted>\"")
             .replace(CLI_SECRET_QUERY_PAIR) { "${it.groupValues[1]}=<redacted>" }
             .trim()
 
     /**
-     * Forwards the CLI's captured stderr (warn) and stdout (info) to [logger], scrubbed by [scrubCliOutput].
+     * Forwards the CLI's captured stderr (warn) and stdout (lifecycle, its prior visibility) to [logger], scrubbed by [scrubCliOutput].
      * Called on success and failure alike; it has no effect on the exit-code / fallback decision.
      */
     private fun forwardCliOutput(
+        logger: Logger,
+        stdout: ByteArrayOutputStream,
+        stderr: ByteArrayOutputStream,
+        exitCode: Int,
+        appToken: String?,
+    ) {
+        // Scrubbing must never fail the task (even a StackOverflowError): on any failure, log nothing of the output.
+        runCatching { forwardScrubbed(logger, stdout, stderr, exitCode, appToken) }
+            .onFailure { logger.warn("Bugsee: bugsee-cli output suppressed (exit $exitCode): could not be scrubbed safely.") }
+    }
+
+    private fun forwardScrubbed(
         logger: Logger,
         stdout: ByteArrayOutputStream,
         stderr: ByteArrayOutputStream,
@@ -361,7 +386,7 @@ internal object CliUploader {
         }
         val out = scrubCliOutput(stdout.toString(Charsets.UTF_8), appToken)
         if (out.isNotEmpty()) {
-            logger.info("Bugsee: bugsee-cli stdout (exit $exitCode):\n$out")
+            logger.lifecycle("Bugsee: bugsee-cli stdout (exit $exitCode):\n$out")
         }
     }
 
@@ -421,7 +446,7 @@ internal object CliUploader {
                 // The CLI logs all diagnostics to stderr via the `tracing` crate;
                 // forward to the Gradle logger so users see what happened.
                 // stdout is captured too (it would otherwise reach the Gradle log raw) and
-                // forwarded scrubbed at info level; it is reserved for future structured output.
+                // forwarded scrubbed at lifecycle level; it is reserved for future structured output.
                 spec.standardOutput = stdout
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
