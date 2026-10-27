@@ -19,6 +19,7 @@ import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
+import com.bugsee.android.gradle.instrumentation.BugseeSdkDeclarations
 import com.bugsee.android.gradle.manifest.ExtensionStripGate
 import com.bugsee.android.gradle.manifest.BugseeAssetInjectionTask
 import com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask
@@ -475,14 +476,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // version the consumer already declared for the core SDK; otherwise the dynamic range
         // floored at MIN_SDK_VERSION. Extensions are published under the SDK's version line, so
         // they must track the SDK version (never the plugin version — see autoAddModule).
-        val sdkVersion = declaredCoreSdkVersion(project, ignore)
+        val inDeps = lazy { BugseeSdkDeclarations.inDependencyProjects(project) }
+        val sdkVersion = declaredCoreSdkVersion(project, ignore, inDeps)
             ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
 
         // Auto-add the core Bugsee SDK if the consuming app has not declared one. If the user has
         // declared their own version on any configuration (`api`, `compileOnly`, variant configs,
         // …), defer to it rather than layering a dynamic dep on top. Opt-out via
         // `bugsee { sdkAutoLoad.set(false) }`.
-        if (!isCoreSdkPresent(project, ignore)) {
+        if (!isCoreSdkPresent(project, ignore, inDeps)) {
             if (isDebug) notes.add("Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion")
             out.add(project.dependencies.create("com.bugsee:bugsee-android:$sdkVersion"))
         }
@@ -1676,12 +1678,21 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * graph, and adding a duplicate dynamic-version dep on top would let
      * Gradle's conflict resolver silently override the user's pin.
      */
-    private fun isCoreSdkPresent(project: Project, ignore: Set<Dependency> = emptySet()): Boolean {
+    private fun isCoreSdkPresent(
+        project: Project,
+        ignore: Set<Dependency> = emptySet(),
+        inDeps: Lazy<List<BugseeSdkDeclarations.Declaration>> = lazy { BugseeSdkDeclarations.inDependencyProjects(project) },
+    ): Boolean {
         return project.configurations.any { config ->
             config.dependencies.any { dep ->
                 !isIgnored(ignore, dep) && (isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep))
             }
-        }
+        } || inDeps.value.any { it.isCore && it.exposed }
+        // ^ A core declared by a project this one depends on counts only when it is
+        // `api`-exposed (or the SDK's own local project). An `implementation`-only pin
+        // in a library is on the runtime classpath but invisible at compile time, so
+        // the core is still added to the app — at the library's version (see
+        // declaredCoreSdkVersion) so the two never conflict.
     }
 
     private fun isCoreSdkExternal(dep: Dependency): Boolean {
@@ -1702,25 +1713,46 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     /**
-     * The version string of the consumer-declared core
-     * `com.bugsee:bugsee-android` dependency on any configuration, or `null`
-     * when none is declared with an explicit version. Auto-added extension
-     * modules use this so they always resolve at the SAME version as the core
-     * SDK the app actually consumes, rather than the plugin's own version.
+     * The SDK version the build already declares, or `null` when nothing declares
+     * one explicitly (the caller then falls back to the MIN_SDK_VERSION range).
+     * The auto-added core AND every auto-added extension module use it, so they
+     * all resolve at the SAME version rather than the plugin's own version.
+     *
+     * Precedence (first non-empty tier wins; within a tier the HIGHEST parseable
+     * version, which is what Gradle's conflict resolution picks):
+     * 1. `bugsee-android` declared on the app (any configuration);
+     * 2. `bugsee-android` declared by a project the app depends on (see
+     *    [BugseeSdkDeclarations]);
+     * 3. any `bugsee-android-*` extension declared on the app;
+     * 4. any extension declared by a dependency project.
+     *
+     * A library's pin can therefore take the core BELOW MIN_SDK_VERSION, exactly as
+     * an app-declared version can. The SDK-version gates (AppStartup / ExtensionsInit)
+     * read a declared version through `DependencyDetector.getBugseeDependencyVersion`,
+     * which also recurses into project dependencies but is NOT identical to this
+     * function: it matches by `bugsee-android` prefix (extensions included), returns the
+     * first hit in configuration order and scans every configuration of dependency
+     * projects. In simple builds the numbers agree; unifying the two is a follow-up.
      */
-    private fun declaredCoreSdkVersion(project: Project, ignore: Set<Dependency> = emptySet()): String? {
-        for (config in project.configurations) {
-            for (dep in config.dependencies) {
-                if (!isIgnored(ignore, dep) &&
-                    dep.group == BUGSEE_GROUP &&
-                    dep.name == "bugsee-android" &&
-                    !dep.version.isNullOrBlank()
-                ) {
-                    return dep.version
-                }
+    private fun declaredCoreSdkVersion(
+        project: Project,
+        ignore: Set<Dependency> = emptySet(),
+        inDeps: Lazy<List<BugseeSdkDeclarations.Declaration>> = lazy { BugseeSdkDeclarations.inDependencyProjects(project) },
+    ): String? {
+        val own = project.configurations.flatMap { it.dependencies }
+            .filter {
+                !isIgnored(ignore, it) &&
+                    BugseeSdkDeclarations.isSdkModule(it.group, it.name) && !it.version.isNullOrBlank()
             }
-        }
-        return null
+        BugseeSdkDeclarations.highestVersion(own.filter { it.name == "bugsee-android" }.mapNotNull { it.version })
+            ?.let { return it }
+        BugseeSdkDeclarations.highestVersion(
+            inDeps.value.filter { it.isCore }.mapNotNull { it.version }
+        )?.let { return it }
+        BugseeSdkDeclarations.highestVersion(own.mapNotNull { it.version })?.let { return it }
+        return BugseeSdkDeclarations.highestVersion(
+            inDeps.value.filter { !it.isCore }.mapNotNull { it.version }
+        )
     }
 
     /**

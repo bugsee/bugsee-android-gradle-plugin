@@ -139,7 +139,7 @@ internal object DependencyDetector {
      * the target project to evaluate first. Failures (evaluation cycles, test
      * fixtures without a real build) fall back to the project as-is.
      */
-    private fun evaluated(from: Project, dependencyProject: Project): Project {
+    internal fun evaluated(from: Project, dependencyProject: Project): Project {
         return try {
             from.evaluationDependsOn(dependencyProject.path)
         } catch (t: Throwable) {
