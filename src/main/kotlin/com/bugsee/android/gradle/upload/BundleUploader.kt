@@ -79,9 +79,10 @@ internal object BundleUploader {
      * lines and S3 secret XML elements (StringToSign, ...). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
      */
     internal fun scrubForLog(text: String, appToken: String? = null): String {
-        val bounded = if (text.length > MAX_SCRUBBED_TEXT_CHARS) text.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else text
-        val masked = if (!appToken.isNullOrEmpty()) bounded.replace(appToken, maskAppToken(appToken)) else bounded
-        return masked
+        // Mask first: truncating first could cut the token in half so the exact match no longer fires.
+        val masked = if (!appToken.isNullOrEmpty()) text.replace(appToken, maskAppToken(appToken)) else text
+        val bounded = if (masked.length > MAX_SCRUBBED_TEXT_CHARS) masked.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else masked
+        return bounded
             .replace(QUERY_WITH_PARAMS, "?<redacted>")
             .replace(SIGV4_PAIR, "$1=<redacted>")
             .replace(BEARER, "$1 <redacted>")
@@ -126,7 +127,7 @@ internal object BundleUploader {
         } catch (e: Exception) {
             val code = XML_ERROR_CODE.find(body)?.groupValues?.get(1)
             val title = HTML_TITLE.find(body)?.groupValues?.get(1)?.trim()
-            val plain = if ('<' !in body && '{' !in body) scrubForLog(body.trim().take(MAX_PLAIN_TEXT_CHARS), appToken) else null
+            val plain = if ('<' !in body && '{' !in body) scrubForLog(body.trim(), appToken).take(MAX_PLAIN_TEXT_CHARS) else null
             "<non-JSON body, ${body.length} chars" +
                 (if (code != null) ", code=$code" else "") +
                 (if (title != null) ", title=${scrubForLog(title, appToken)}" else "") +

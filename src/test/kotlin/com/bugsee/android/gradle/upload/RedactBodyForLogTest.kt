@@ -97,4 +97,11 @@ class RedactBodyForLogTest {
         BundleUploader.redactBodyForLog("""{"m":"${"?".repeat(1_000_000)}"}""")
         assertTrue((System.nanoTime() - start) / 1_000_000 < 5_000)
     }
+
+    @Test fun `token crossing the plain-text prefix cut is masked, not partially logged`() {
+        val token = "0123456789abcdef0123456789abcdef"
+        val body = "x".repeat(100) + " /apps/$token/symbols"
+        val out = BundleUploader.redactBodyForLog(body, token)
+        assertFalse(out.contains(token.take(8)), out)
+    }
 }
