@@ -60,13 +60,12 @@ internal object ProjectDependencyCompat {
         pathOf: (ProjectDependency) -> String? = ::reflectedPath,
     ): Project? {
         if (isolatedProjects) return null
-        pathOf(dep).let { path ->
-            if (path != null) {
-                // getPath() returns an absolute project path (":lib"), which findProject
-                // resolves from any project in the build, so there is no need to go through
-                // the root project object. Only reached when Isolated Projects is off.
-                return from.findProject(path)
-            }
+        val path = pathOf(dep)
+        if (path != null) {
+            // getPath() returns an absolute project path (":lib"), which findProject
+            // resolves from any project in the build, so there is no need to go through
+            // the root project object. Only reached when Isolated Projects is off.
+            return from.findProject(path)
         }
         return getDependencyProjectMethod?.let { method ->
             runCatching { method.invoke(dep) as? Project }.getOrNull()
