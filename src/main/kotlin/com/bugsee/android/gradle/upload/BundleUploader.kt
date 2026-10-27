@@ -360,6 +360,9 @@ internal object BundleUploader {
                     } else if (debug) {
                         logger.warn("Bugsee: Bundle upload complete.")
                     }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
                 } catch (e: java.io.IOException) {
                     if (HttpRetry.isInterruption(e)) {
                         Thread.currentThread().interrupt()
