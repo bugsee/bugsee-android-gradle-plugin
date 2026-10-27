@@ -68,7 +68,7 @@ internal object BundleUploader {
     private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
-    private val SECRET_XML_TAG = Regex("<(StringToSign|SignatureProvided|AWSAccessKeyId|CanonicalRequest|Signature|Credential|Policy)>[^<]*</\\1>")
+    private val SECRET_XML_TAG = Regex("<(StringToSign|SignatureProvided|AWSAccessKeyId|CanonicalRequest|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
     private val XML_ERROR_CODE = Regex("<Code>([A-Za-z0-9_.\\-]{1,64})</Code>")
     private val HTML_TITLE = Regex("<title>([^<]{1,100})</title>", RegexOption.IGNORE_CASE)
 
@@ -81,13 +81,13 @@ internal object BundleUploader {
     internal fun scrubForLog(text: String, appToken: String? = null): String {
         // Mask first: truncating first could cut the token in half so the exact match no longer fires.
         val masked = if (!appToken.isNullOrEmpty()) text.replace(appToken, maskAppToken(appToken)) else text
-        val bounded = if (masked.length > MAX_SCRUBBED_TEXT_CHARS) masked.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else masked
+        val unxml = masked.replace(SECRET_XML_TAG, "<$1><redacted></$1>")
+        val bounded = if (unxml.length > MAX_SCRUBBED_TEXT_CHARS) unxml.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else unxml
         return bounded
             .replace(QUERY_WITH_PARAMS, "?<redacted>")
             .replace(SIGV4_PAIR, "$1=<redacted>")
             .replace(BEARER, "$1 <redacted>")
             .replace(SECRET_HEADER, "$1: <redacted>")
-            .replace(SECRET_XML_TAG, "<$1><redacted></$1>")
     }
 
     /**

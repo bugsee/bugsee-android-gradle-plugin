@@ -104,4 +104,12 @@ class RedactBodyForLogTest {
         val out = BundleUploader.redactBodyForLog(body, token)
         assertFalse(out.contains(token.take(8)), out)
     }
+
+    @Test fun `unterminated or far-closed secret XML element is redacted`() {
+        val far = "<Signature>FARSECRET" + "x".repeat(5000) + "</Signature>"
+        val unterminated = "<StringToSign>OPENSECRET and more"
+        assertFalse(BundleUploader.scrubForLog(far).contains("FARSECRET"))
+        assertFalse(BundleUploader.scrubForLog(unterminated).contains("OPENSECRET"))
+        assertFalse(BundleUploader.redactBodyForLog("""{"m":"$far"}""").contains("FARSECRET"))
+    }
 }
