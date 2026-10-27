@@ -310,18 +310,56 @@ class AutoAddScopeTest {
     }
 
     /**
-     * KNOWN LIMITATION (documented in the README): the rule is name-based, so a flavor or build type
-     * whose name ends in a capitalised `Test` word (`latestTest`, `uiTest`) has its configurations
-     * (`latestTestImplementation`) classified as test configurations and its libraries are not
-     * detected. A name-only rule cannot tell it from `testImplementation`-style names; the fix is to
-     * use the variants' configuration hierarchy once variants exist (tracked with #50).
+     * A flavor or build type whose name ends in a capitalised `Test` word is a production
+     * configuration when the Android DSL declares that name (the auto-add reads the declared names;
+     * the harness has no Android plugin, so the predicate is driven directly with them).
      */
     @Test
-    fun knownLimitationFlavorNameEndingInTestIsNotDetected() {
-        val h = Harness(null)
-        h.project.configurations.maybeCreate("latestTestImplementation")
-        h.declareOn("latestTestImplementation", "com.squareup.okhttp3:okhttp:4.12.0")
-        assertEquals(emptySet(), h.autoAdded())
+    fun declaredFlavorNamedLikeATestWordIsProduction() {
+        val declared = setOf("latestTest", "uiTest", "release", "debug", "free")
+        val production = listOf(
+            "latestTestImplementation", "latestTestReleaseApi", "freeUiTestDebugRuntimeOnly",
+            "releaseLatestTestImplementation", "uiTestImplementation",
+        )
+        val test = listOf(
+            "latestTestUnitTestImplementation", "latestTestDebugAndroidTestImplementation",
+            "testLatestTestImplementation", "androidTestLatestTestImplementation",
+            "testImplementation", "jvmTestImplementation", "latestTestFixturesApi",
+        )
+        production.forEach {
+            assertTrue(DependencyDetector.isProductionConfiguration(it, declared), "$it is production")
+        }
+        test.forEach {
+            assertFalse(DependencyDetector.isProductionConfiguration(it, declared), "$it is still test")
+        }
+        // Without declared names the plain name rule applies (no Android DSL yet / KMP source set).
+        assertFalse(DependencyDetector.isProductionConfiguration("latestTestImplementation"))
+    }
+
+    @Test
+    fun reservedTestNamesDoNotMaskTestConfigurations() {
+        // AGP rejects these as flavor / build type names; were they declared they must not turn
+        // `testImplementation` into a production configuration.
+        val names = setOf("test", "androidTest", "main")
+        assertTrue(DependencyDetector.declaredVariantNames(ProjectBuilder.builder().build()).isEmpty())
+        assertFalse(DependencyDetector.isProductionConfiguration("testImplementation", names))
+    }
+
+    @Test
+    fun debugConfigurationsAreIncludedOrExcludedPerCaller() {
+        val include = DependencyDetector.DebugConfigurations.INCLUDE
+        val exclude = DependencyDetector.DebugConfigurations.EXCLUDE
+        for (name in listOf("debugImplementation", "freeDebugApi", "debugRuntimeOnly")) {
+            assertTrue(DependencyDetector.isProductionConfiguration(name, debug = include), name)
+            assertFalse(DependencyDetector.isProductionConfiguration(name, debug = exclude), name)
+        }
+        for (name in listOf("implementation", "releaseApi", "debuggerImplementation", "freeImplementation")) {
+            assertTrue(DependencyDetector.isProductionConfiguration(name, debug = exclude), name)
+        }
+        // compileOnly is excluded under both, whatever the prefix.
+        for (d in listOf(include, exclude)) {
+            assertFalse(DependencyDetector.isProductionConfiguration("releaseCompileOnlyApi", debug = d))
+        }
     }
 
     /**

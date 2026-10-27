@@ -54,8 +54,9 @@ internal object BugseeSdkDeclarations {
         }
         // Edges leaving the app are "exposed" (the lib's `api` surface is on the app's
         // COMPILE classpath) unless declared `runtimeOnly`, which is runtime-only.
+        val appNames = DependencyDetector.declaredVariantNames(project)
         for (config in project.configurations) {
-            if (!isProductionConfiguration(config.name)) continue
+            if (!isProductionConfiguration(config.name, appNames)) continue
             val exposed = !(config.name == "runtimeOnly" || config.name.endsWith("RuntimeOnly"))
             for (dep in config.dependencies) {
                 if (dep is ProjectDependency) visit(project, dep, exposed, visited, out)
@@ -83,8 +84,9 @@ internal object BugseeSdkDeclarations {
             out.add(Declaration(null, isCore = true, exposed = true))
             return
         }
+        val libNames = DependencyDetector.declaredVariantNames(lib)
         for (config in lib.configurations) {
-            if (!isProductionConfiguration(config.name)) continue
+            if (!isProductionConfiguration(config.name, libNames)) continue
             val api = isApi(config.name)
             for (dep in config.dependencies) {
                 when {
@@ -136,32 +138,20 @@ internal object BugseeSdkDeclarations {
         return highestVersion(inDeps.value.filter { !it.isCore }.mapNotNull { it.version })
     }
 
-    private val TEST_WORD = Regex("(^test|Test)(?=[A-Z]|$)")
-    private val DEBUG_WORD = Regex("(^debug|Debug)(?=[A-Z]|$)")
-
     /**
-     * Declaration configurations (of the app, or of a dependency project) that put
-     * a dependency on a RELEASE consumer's runtime classpath: `api` / `implementation`
-     * / `runtimeOnly`, optionally with a source-set or variant prefix (KMP:
-     * `commonMainApi`, `androidMainImplementation`; flavors: `latestImplementation`).
-     * Excluded: `compileOnly*` (not shipped), test configurations (camelCase `test` /
-     * `Test` words only — a flavor named `latest` or `attestation` is NOT a test config),
-     * and `debug*`: a debug-only edge or pin is not on the release classpath, and
-     * counting it would switch the release auto-add (and instrumentation) off. The cost
-     * is the opposite error on debug builds — a debug-only pin is ignored there and the
-     * default range is added as before this analysis existed; that is the established,
-     * safe fallback. Note the app's OWN declarations are still read by [declaredCoreSdkVersion] across every
-     * configuration by the caller (unchanged legacy behaviour).
-     *
-     * TODO: unify with `DependencyDetector.isProductionConfiguration` once #68 merges.
+     * Declaration configurations (of the app, or of a dependency project) that put a dependency on
+     * a RELEASE consumer's runtime classpath: the shared [DependencyDetector.isProductionConfiguration]
+     * rule with `debug*` EXCLUDED. A debug-only edge or pin is not on the release classpath, and
+     * counting it would switch the release auto-add (and instrumentation) off. The cost is the
+     * opposite error on debug builds: a debug-only pin is ignored there and the default range is
+     * added as before this analysis existed; that is the established, safe fallback. The app's
+     * OWN declarations are still read by [declaredCoreSdkVersion] across every configuration
+     * (unchanged legacy behaviour).
      */
-    private fun isProductionConfiguration(name: String): Boolean {
-        if (name.startsWith("compileOnly") || TEST_WORD.containsMatchIn(name) || DEBUG_WORD.containsMatchIn(name)) {
-            return false
-        }
-        return name == "api" || name == "implementation" || name == "runtimeOnly" ||
-            name.endsWith("Api") || name.endsWith("Implementation") || name.endsWith("RuntimeOnly")
-    }
+    private fun isProductionConfiguration(name: String, declaredNames: Set<String>): Boolean =
+        DependencyDetector.isProductionConfiguration(
+            name, declaredNames, DependencyDetector.DebugConfigurations.EXCLUDE,
+        )
 
     /**
      * The version Gradle's conflict resolution would pick among exact versions: the
