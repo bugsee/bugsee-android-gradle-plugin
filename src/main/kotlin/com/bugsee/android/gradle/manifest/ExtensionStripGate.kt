@@ -46,6 +46,20 @@ internal object ExtensionStripGate {
     fun isBelowFloor(sdkVersion: BugseeSdkVersion?): Boolean =
         sdkVersion != null && sdkVersion < MIN_SDK_VERSION_WITH_EXTENSIONS_INIT
 
+    /**
+     * `true` when the only reason [shouldStrip] says no is the SDK being below the floor:
+     * every other precondition holds, so the user would otherwise get no hint why the
+     * optimisation is off.
+     */
+    fun shouldWarnBelowFloor(
+        optimizeExtensionsLoading: Boolean,
+        instrumentationGloballyEnabled: Boolean,
+        excludes: Set<String>,
+        sdkVersion: BugseeSdkVersion?,
+    ): Boolean = optimizeExtensionsLoading && instrumentationGloballyEnabled &&
+        isBelowFloor(sdkVersion) &&
+        !InstrumentationExcludes.isExcluded(ExtensionsInitClassVisitorFactory.TARGET_CLASS_FQN, excludes)
+
     /** Warning for the otherwise silent no-strip in [shouldStrip] when the declared SDK is below the floor. */
     fun belowFloorWarning(declaredVersion: String?): String =
         "Bugsee gradle plugin: extension provider stripping (optimizeExtensionsLoading) requires " +

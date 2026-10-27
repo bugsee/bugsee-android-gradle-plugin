@@ -344,8 +344,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // only on a dependency project's debug* edge is not seen (null => strip).
             val declaredSdkVersionRaw = BugseeSdkDeclarations.declaredCoreSdkVersion(project)
             val declaredSdkVersion = BugseeSdkVersion.parse(declaredSdkVersionRaw)
-            if (instrumentationGloballyEnabled && effective.optimizeExtensionsLoading.get() &&
-                ExtensionStripGate.isBelowFloor(declaredSdkVersion) &&
+            if (ExtensionStripGate.shouldWarnBelowFloor(
+                    optimizeExtensionsLoading = effective.optimizeExtensionsLoading.get(),
+                    instrumentationGloballyEnabled = instrumentationGloballyEnabled,
+                    excludes = effective.instrumentation.excludes.getOrElse(emptySet()),
+                    sdkVersion = declaredSdkVersion,
+                ) &&
                 BugseeBuildState.claim(project, "extensions-init-sdk-below-floor:${project.buildTreePath}")
             ) {
                 project.logger.warn(ExtensionStripGate.belowFloorWarning(declaredSdkVersionRaw))
