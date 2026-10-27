@@ -94,11 +94,8 @@ internal class FixtureProject private constructor(
             add("--stacktrace")
             addAll(extraArgs)
         }
-        return GradleRunner.create()
-            .withProjectDir(projectDir)
+        return runner(projectDir)
             .withArguments(args)
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
             .run()
     }
 
@@ -299,7 +296,7 @@ internal class FixtureProject private constructor(
          * The target must be empty; the caller is responsible for
          * creating it (typically via JUnit `TemporaryFolder`).
          */
-        fun materialize(name: String, targetDir: File): FixtureProject {
+        fun materialize(name: String, targetDir: File, toolchainOverrides: Boolean = true): FixtureProject {
             require(targetDir.isDirectory && targetDir.listFiles().isNullOrEmpty()) {
                 "target dir must be an empty directory: $targetDir"
             }
@@ -307,7 +304,8 @@ internal class FixtureProject private constructor(
                 .resolve("src/integrationTest/resources/fixtures/$name")
             require(source.isDirectory) { "fixture not found: $source" }
             copyTree(source.toPath(), targetDir.toPath())
-            applyToolchainVersions(File(targetDir, "build.gradle.kts"))
+            // A fixture that pins its own toolchain on purpose (old-agp) opts out of the matrix overrides.
+            if (toolchainOverrides) applyToolchainVersions(File(targetDir, "build.gradle.kts"))
 
             // Append `org.gradle.java.home=<jdk17>` to gradle.properties so
             // AGP (which mandates JDK 17 since AGP 8.0) can run, regardless

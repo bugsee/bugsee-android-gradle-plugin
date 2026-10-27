@@ -230,16 +230,13 @@ class BugseeLibraryVariantGatingTest {
     }
 
     private fun runTasks(projectDir: File, vararg tasks: String): org.gradle.testkit.runner.BuildResult =
-        GradleRunner.create()
-            .withProjectDir(projectDir)
+        FixtureProject.runner(projectDir)
             .withArguments(
                 *tasks,
                 "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
                 "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
                 "--stacktrace",
             )
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
             .build()
 
     private fun buildLibAssembleDebug(projectDir: File): org.gradle.testkit.runner.BuildResult {
