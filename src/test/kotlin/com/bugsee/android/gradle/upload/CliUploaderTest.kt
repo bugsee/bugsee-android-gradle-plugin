@@ -497,6 +497,7 @@ class CliUploaderTest {
     private class FakeExec(
         private val cliExitValue: Int,
         private val stderr: String = "",
+        private val stdout: String = "",
     ) : ExecOperations {
         /** The argv and environment the production code gave the process, as recorded from the spec. */
         var recordedArgs: List<String> = emptyList()
@@ -510,6 +511,7 @@ class CliUploaderTest {
             // clash with the Java `exitValue` property → infinite recursion).
             val resultExit = cliExitValue
             var capturedErr: java.io.OutputStream? = null
+            var capturedOut: java.io.OutputStream? = null
             val spec = java.lang.reflect.Proxy.newProxyInstance(
                 ExecSpec::class.java.classLoader,
                 arrayOf(ExecSpec::class.java),
@@ -522,6 +524,8 @@ class CliUploaderTest {
                         proxy
                     }
                     "getErrorOutput" -> capturedErr
+                    "setStandardOutput" -> { capturedOut = args[0] as? java.io.OutputStream; proxy }
+                    "getStandardOutput" -> capturedOut
                     // Defaults for the few getters Gradle might probe — the
                     // production code only sets executable/args/errorOutput.
                     "hashCode" -> System.identityHashCode(proxy)
@@ -532,6 +536,10 @@ class CliUploaderTest {
             } as ExecSpec
 
             action.execute(spec)
+            if (stdout.isNotEmpty()) {
+                capturedOut?.write(stdout.toByteArray(Charsets.UTF_8))
+                capturedOut?.flush()
+            }
             if (stderr.isNotEmpty()) {
                 capturedErr?.write(stderr.toByteArray(Charsets.UTF_8))
                 capturedErr?.flush()
@@ -555,18 +563,22 @@ class CliUploaderTest {
         return f
     }
 
-    private fun runUploadMapping(exec: ExecOperations, cli: File): CliUploadResult =
+    private fun runUploadMapping(
+        exec: ExecOperations,
+        cli: File,
+        logger: org.gradle.api.logging.Logger = Logging.getLogger("test"),
+    ): CliUploadResult =
         CliUploader.uploadMapping(
             execOps = exec,
             cliBinary = cli,
             mappingFile = mappingFile,
             iconFile = null,
-            appToken = "tok",
+            appToken = envToken,
             endpoint = "https://api.bugsee.com",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
-            logger = Logging.getLogger("test"),
+            logger = logger,
             debug = false,
         )
 
@@ -737,5 +749,92 @@ class CliUploaderTest {
         assertEquals(-1, result.exitCode)
         assertTrue(result.shouldFallback)
         assertEquals("exec-failed", result.fallbackReason)
+    }
+
+    // ── CLI stderr/stdout is scrubbed before it reaches any log level (#109) ──
+
+    /** A [org.gradle.api.logging.Logger] proxy recording every message (and argument) at every level. */
+    private class AllLevelsLogger {
+        val lines = mutableListOf<Pair<String, String>>()
+        val logger: org.gradle.api.logging.Logger = java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { proxy, method, args ->
+            val level = method.name
+            if (level in setOf("trace", "debug", "info", "lifecycle", "quiet", "warn", "error", "log")) {
+                lines += level to (args ?: emptyArray()).joinToString(" ") { it.toString() }
+            }
+            when {
+                method.name.startsWith("is") && method.returnType == java.lang.Boolean.TYPE -> true
+                method.name == "hashCode" -> System.identityHashCode(proxy)
+                method.name == "equals" -> proxy === args[0]
+                method.name == "toString" -> "AllLevelsLogger"
+                method.name == "getName" -> "all-levels"
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
+        fun all(): String = lines.joinToString("\n") { "${it.first}: ${it.second}" }
+    }
+
+    private val presigned = "https://bucket.s3.amazonaws.com/builds/abc.zst?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+        "&X-Amz-Credential=AKIAEXAMPLEKEY%2F20260101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=deadbeefcafe0123456789"
+    private val s3Error = "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIAEXAMPLEKEY</AWSAccessKeyId>" +
+        "<StringToSign>AWS4-HMAC-SHA256\n20260101T000000Z</StringToSign><SignatureProvided>deadbeefcafe0123456789</SignatureProvided></Error>"
+
+    private fun assertNoSecrets(text: String) {
+        for (secret in listOf(envToken, "deadbeefcafe0123456789", "AKIAEXAMPLEKEY", "20260101T000000Z", "SECRETSESSION")) {
+            assertFalse(text.contains(secret), "'$secret' leaked into the log:\n$text")
+        }
+    }
+
+    private val noisyStderr = "upload failed: PUT $presigned\n" +
+        "for https://api.bugsee.com/v2/apps/$envToken/builds status=403 body=$s3Error\n" +
+        "response {\"error\":\"bad\",\"X-Amz-Security-Token\":\"SECRETSESSION\"}\n" +
+        "Authorization: Bearer $envToken\n" +
+        "StringToSign: AWS4-HMAC-SHA256 20260101T000000Z\n"
+
+    @Test fun `failure stderr and stdout never leak the presigned URL signature or app token at any level`() {
+        val log = AllLevelsLogger()
+        val result = CliUploader.uploadMapping(
+            execOps = FakeExec(cliExitValue = 31, stderr = noisyStderr, stdout = noisyStderr),
+            cliBinary = executableCliStub(), mappingFile = mappingFile, iconFile = null, appToken = envToken,
+            endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = log.logger, debug = true,
+        )
+        assertNoSecrets(log.all())
+        // Diagnostic value is kept: exit code, the failing host/path and the S3 error code.
+        assertTrue(log.all().contains("exit 31"), log.all())
+        assertTrue(log.all().contains("bucket.s3.amazonaws.com/builds/abc.zst"), log.all())
+        assertTrue(log.all().contains("SignatureDoesNotMatch"), log.all())
+        // Semantics unchanged.
+        assertFalse(result.success); assertFalse(result.shouldFallback); assertEquals(31, result.exitCode)
+    }
+
+    @Test fun `success and fallback exits scrub too and keep their result`() {
+        for (code in listOf(0, 1)) {
+            val log = AllLevelsLogger()
+            val result = runUploadMapping(FakeExec(cliExitValue = code, stderr = noisyStderr, stdout = noisyStderr), executableCliStub(), log.logger)
+            assertNoSecrets(log.all())
+            assertEquals(code == 0, result.success)
+            assertEquals(code == 1, result.shouldFallback)
+        }
+    }
+
+    @Test fun `packUploadZip scrubs the CLI output`() {
+        val log = AllLevelsLogger()
+        val out = File.createTempFile("pack", ".zip").also { it.deleteOnExit() }
+        CliUploader.packUploadZip(
+            execOps = FakeExec(cliExitValue = 1, stderr = noisyStderr, stdout = noisyStderr),
+            cliBinary = executableCliStub(), artifactFile = mappingFile, mappingFile = null, outZip = out,
+            logger = log.logger, debug = true,
+        )
+        for (s in listOf("AKIAEXAMPLEKEY", "20260101T000000Z", "SECRETSESSION")) assertFalse(log.all().contains(s), log.all())
+        assertFalse(log.all().contains("deadbeefcafe0123456789"), log.all())
+    }
+
+    @Test fun `scrubCliOutput bounds the length and keeps short plain text`() {
+        assertEquals("connection refused (os error 111)", CliUploader.scrubCliOutput("connection refused (os error 111)\n"))
+        assertTrue(CliUploader.scrubCliOutput("x".repeat(100_000)).length <= 4100)
+        assertEquals("", CliUploader.scrubCliOutput("  \n"))
     }
 }

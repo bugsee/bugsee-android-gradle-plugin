@@ -283,11 +283,13 @@ internal object CliUploader {
         }
 
         val stderr = ByteArrayOutputStream()
+        val stdout = ByteArrayOutputStream()
         val exitCode = try {
             execOps.exec { spec ->
                 spec.executable = cliBinary.absolutePath
                 spec.args = argv
                 spec.environment(proxyEnvForCli())
+                spec.standardOutput = stdout
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }.exitValue
@@ -299,10 +301,7 @@ internal object CliUploader {
             return false
         }
 
-        val stderrText = stderr.toString(Charsets.UTF_8).trim()
-        if (stderrText.isNotEmpty()) {
-            logger.warn("Bugsee: bugsee-cli output:\n$stderrText")
-        }
+        forwardCliOutput(logger, stdout, stderr, exitCode, appToken = null)
 
         // Require a non-empty output, not just presence: an exit-0 that left a
         // 0-byte / truncated ZIP (a future CLI bug, or a reaped-but-killed
@@ -315,6 +314,55 @@ internal object CliUploader {
                 "using the native packer.",
         )
         return false
+    }
+
+    // Line-level secrets scrubForLog does not know: S3 error fields printed as `Name: value` / `Name=value`
+    // (a raw 403 body echoes StringToSign / SignatureProvided / AWSAccessKeyId), JSON string values under
+    // credential-looking keys (the CLI embeds response bodies verbatim), and bare query pairs whose `?` was
+    // cut off (e.g. a wrapped or truncated URL).
+    private val CLI_SECRET_FIELD = Regex(
+        "\\b(StringToSign|SignatureProvided|AWSAccessKeyId|CanonicalRequest|SecretAccessKey|SessionToken)\\b[ \\t]*[:=][^\\r\\n]*",
+        RegexOption.IGNORE_CASE,
+    )
+    private val CLI_SECRET_JSON_PAIR = Regex(
+        "\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\"\\s*:\\s*\"(?:[^\"\\\\]|\\\\.)*\"",
+        RegexOption.IGNORE_CASE,
+    )
+    private val CLI_SECRET_QUERY_PAIR =
+        Regex("\\b(X-Amz-[A-Za-z-]+|Signature|Token|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
+
+    /**
+     * Log-safe rendering of bugsee-cli's stderr/stdout. The CLI embeds raw HTTP response bodies, presigned
+     * URLs and request URLs in its diagnostics, so the text goes through [BundleUploader.scrubForLog]
+     * (masks [appToken], drops URL query strings, SigV4 pairs, bearer tokens, credential headers and S3 secret
+     * XML elements; capped at 4096 chars) plus the CLI-specific patterns above, and is trimmed.
+     */
+    internal fun scrubCliOutput(text: String, appToken: String? = null): String =
+        BundleUploader.scrubForLog(text, appToken)
+            .replace(CLI_SECRET_FIELD) { "${it.groupValues[1]}: <redacted>" }
+            .replace(CLI_SECRET_JSON_PAIR, "\"$1\":\"<redacted>\"")
+            .replace(CLI_SECRET_QUERY_PAIR) { "${it.groupValues[1]}=<redacted>" }
+            .trim()
+
+    /**
+     * Forwards the CLI's captured stderr (warn) and stdout (info) to [logger], scrubbed by [scrubCliOutput].
+     * Called on success and failure alike; it has no effect on the exit-code / fallback decision.
+     */
+    private fun forwardCliOutput(
+        logger: Logger,
+        stdout: ByteArrayOutputStream,
+        stderr: ByteArrayOutputStream,
+        exitCode: Int,
+        appToken: String?,
+    ) {
+        val err = scrubCliOutput(stderr.toString(Charsets.UTF_8), appToken)
+        if (err.isNotEmpty()) {
+            logger.warn("Bugsee: bugsee-cli output (exit $exitCode):\n$err")
+        }
+        val out = scrubCliOutput(stdout.toString(Charsets.UTF_8), appToken)
+        if (out.isNotEmpty()) {
+            logger.info("Bugsee: bugsee-cli stdout (exit $exitCode):\n$out")
+        }
     }
 
     private fun verifyAndExec(
@@ -357,6 +405,7 @@ internal object CliUploader {
         }
 
         val stderr = ByteArrayOutputStream()
+        val stdout = ByteArrayOutputStream()
 
         val exitCode = try {
             val result = execOps.exec { spec ->
@@ -371,8 +420,9 @@ internal object CliUploader {
                 appToken?.let { spec.environment(APP_TOKEN_ENV, it) }
                 // The CLI logs all diagnostics to stderr via the `tracing` crate;
                 // forward to the Gradle logger so users see what happened.
-                // stdout stays untouched — currently unused, reserved for future
-                // structured (JSON) output.
+                // stdout is captured too (it would otherwise reach the Gradle log raw) and
+                // forwarded scrubbed at info level; it is reserved for future structured output.
+                spec.standardOutput = stdout
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }
@@ -390,12 +440,7 @@ internal object CliUploader {
             )
         }
 
-        val stderrText = stderr.toString(Charsets.UTF_8).trim()
-        if (stderrText.isNotEmpty()) {
-            // Forward the CLI's own logs unprocessed — let the user read what
-            // the binary said about its own failure rather than paraphrasing.
-            logger.warn("Bugsee: bugsee-cli output:\n$stderrText")
-        }
+        forwardCliOutput(logger, stdout, stderr, exitCode, appToken)
 
         return when {
             exitCode == 0 -> CliUploadResult(

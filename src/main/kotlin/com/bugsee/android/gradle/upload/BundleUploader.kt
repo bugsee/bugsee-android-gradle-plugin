@@ -64,7 +64,8 @@ internal object BundleUploader {
 
     // `?` is excluded from the character classes so a run of `?` cannot be rescanned per position (O(n^2)).
     private val QUERY_WITH_PARAMS = Regex("\\?[^\\s\"'<>?]*=[^\\s\"'<>?]*")
-    private val SENSITIVE_JSON_KEY = Regex("signature|secret|token|credential|authoriz|password|x-amz|key|stringtosign|canonicalrequest|policy", RegexOption.IGNORE_CASE)
+    internal const val SENSITIVE_KEY_PATTERN = "signature|secret|token|credential|authoriz|password|x-amz|key|stringtosign|canonicalrequest|policy"
+    private val SENSITIVE_JSON_KEY = Regex(SENSITIVE_KEY_PATTERN, RegexOption.IGNORE_CASE)
     private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
