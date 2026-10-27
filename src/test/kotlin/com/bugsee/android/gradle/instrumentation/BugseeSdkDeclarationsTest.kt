@@ -28,20 +28,17 @@ class BugseeSdkDeclarationsTest {
         )
     }
 
-    @Test fun `library flavor ending in Test word is read when declared in its DSL`() {
-        fun named(n: String): Any = java.lang.reflect.Proxy.newProxyInstance(
-            org.gradle.api.Named::class.java.classLoader, arrayOf(org.gradle.api.Named::class.java),
-        ) { _, m, _ -> if (m.name == "getName") n else null }
-        fun container(vararg names: String): Any = java.lang.reflect.Proxy.newProxyInstance(
-            org.gradle.api.NamedDomainObjectContainer::class.java.classLoader,
-            arrayOf(org.gradle.api.NamedDomainObjectContainer::class.java),
-        ) { _, m, _ -> if (m.name == "iterator") names.map { named(it) }.iterator() else null }
-        lib.declare("latestTestApi", "com.bugsee:bugsee-android:7.0.0")
-        lib.declare("latestTestDebugApi", "com.bugsee:bugsee-android:6.5.0")
-        dependOnLib()
-        // Undeclared: the name rule says test, so the pin is invisible.
-        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
-        lib.extensions.add(
+    private fun named(n: String): Any = java.lang.reflect.Proxy.newProxyInstance(
+        org.gradle.api.Named::class.java.classLoader, arrayOf(org.gradle.api.Named::class.java),
+    ) { _, m, _ -> if (m.name == "getName") n else null }
+
+    private fun container(vararg names: String): Any = java.lang.reflect.Proxy.newProxyInstance(
+        org.gradle.api.NamedDomainObjectContainer::class.java.classLoader,
+        arrayOf(org.gradle.api.NamedDomainObjectContainer::class.java),
+    ) { _, m, _ -> if (m.name == "iterator") names.map { named(it) }.iterator() else null }
+
+    private fun Project.declareFlavors(vararg flavors: String) {
+        extensions.add(
             com.android.build.api.dsl.CommonExtension::class.java, "android",
             java.lang.reflect.Proxy.newProxyInstance(
                 com.android.build.api.dsl.CommonExtension::class.java.classLoader,
@@ -49,11 +46,32 @@ class BugseeSdkDeclarationsTest {
             ) { _, m, _ ->
                 when (m.name) {
                     "getBuildTypes" -> container("debug", "release")
-                    "getProductFlavors" -> container("latestTest")
+                    "getProductFlavors" -> container(*flavors)
                     else -> null
                 }
             } as com.android.build.api.dsl.CommonExtension<*, *, *, *, *, *>,
         )
+    }
+
+    @Test fun `app flavored pins are read using the declared flavors (#114)`() {
+        app.declare("freeDebugImplementation", "com.bugsee:bugsee-android:6.5.0")
+        app.declare("latestTestImplementation", "com.bugsee:bugsee-android:7.0.0")
+        // Undeclared flavors: latestTest reads as a test configuration.
+        assertEquals("6.5.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        app.declareFlavors("free", "latestTest")
+        assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        // AGP's unit-test configuration of that flavor stays test.
+        app.declare("testLatestTestImplementation", "com.bugsee:bugsee-android:7.9.0")
+        assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `library flavor ending in Test word is read when declared in its DSL`() {
+        lib.declare("latestTestApi", "com.bugsee:bugsee-android:7.0.0")
+        lib.declare("latestTestDebugApi", "com.bugsee:bugsee-android:6.5.0")
+        dependOnLib()
+        // Undeclared: the name rule says test, so the pin is invisible.
+        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        lib.declareFlavors("latestTest")
         // 7.0.0 from latestTestApi; the debug-variant 6.5.0 stays excluded for declarations.
         assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
