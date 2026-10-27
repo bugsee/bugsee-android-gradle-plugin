@@ -35,6 +35,10 @@ internal object ProjectDependencyCompat {
         runCatching { ProjectDependency::class.java.getMethod("getDependencyProject") }.getOrNull()
     }
 
+    /** `ProjectDependency.getPath()` via reflection; null on Gradle < 8.11. */
+    private fun reflectedPath(dep: ProjectDependency): String? =
+        getPathMethod?.let { method -> runCatching { method.invoke(dep) as? String }.getOrNull() }
+
     /**
      * The project [dep] points at, or `null` if it cannot be resolved on this Gradle version.
      *
@@ -49,14 +53,19 @@ internal object ProjectDependencyCompat {
         targetProject(from, dep, ProjectAccess.isIsolatedProjects(from))
 
     /** [targetProject] with the Isolated Projects decision supplied, for tests. */
-    internal fun targetProject(from: Project, dep: ProjectDependency, isolatedProjects: Boolean): Project? {
+    internal fun targetProject(
+        from: Project,
+        dep: ProjectDependency,
+        isolatedProjects: Boolean,
+        pathOf: (ProjectDependency) -> String? = ::reflectedPath,
+    ): Project? {
         if (isolatedProjects) return null
-        getPathMethod?.let { method ->
-            val path = runCatching { method.invoke(dep) as? String }.getOrNull()
+        pathOf(dep).let { path ->
             if (path != null) {
                 // getPath() returns an absolute project path (":lib"), which findProject
-                // resolves from any project in the build.
-                return from.rootProject.findProject(path)
+                // resolves from any project in the build, so there is no need to go through
+                // the root project object. Only reached when Isolated Projects is off.
+                return from.findProject(path)
             }
         }
         return getDependencyProjectMethod?.let { method ->
