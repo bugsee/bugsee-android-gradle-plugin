@@ -338,8 +338,10 @@ internal object CliUploader {
     private const val SQ_VALUE = "\\\\?'[^'\\\\\\r\\n]*+(?:\\\\.[^'\\\\\\r\\n]*+)*+'?"
     private val CLI_SECRET_QUERY_PAIR =
         Regex(
-            "\\b(X-Amz-[A-Za-z-]+|[A-Za-z0-9_-]{0,32}(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[A-Za-z0-9_-]{0,32}|Expires)" +
-                "(?:=(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|[ \\t]*:[ \\t]*(?:$DQ_VALUE|$SQ_VALUE))",
+            "\\b(X-Amz-[A-Za-z-]+|[A-Za-z0-9_-]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[A-Za-z0-9_-]*|Expires)" +
+                "(?:=(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|" +
+                // Debug output of Option<String> / newtype fields: `name: Some("v")`, `name: Secret("v")`.
+                "[ \\t]*:[ \\t]*(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE))",
             RegexOption.IGNORE_CASE,
         )
 

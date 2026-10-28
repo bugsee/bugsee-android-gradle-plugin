@@ -888,6 +888,11 @@ class CliUploaderTest {
                 "client_secret=\"abc\\\"RESTSECRET\" oauth2_access_token=OSECRET error: token expired",
         )
         for (s in listOf("DBGSECRET", "hunter2", "RESTSECRET", "OSECRET")) assertFalse(out.contains(s), out)
+        val wrapped = CliUploader.scrubCliOutput(
+            "Resp { upload_token: Some(\"OPTSECRET\"), session_secret: Secret(\"WRAP\") } " +
+                "${"a".repeat(40)}_api_key=LONGKEY api_key_${"a".repeat(40)}=LONGKEY2",
+        )
+        for (s in listOf("OPTSECRET", "WRAP", "LONGKEY")) assertFalse(wrapped.contains(s), wrapped)
         assertTrue(out.contains("error: token expired"), out)
     }
 
@@ -897,6 +902,12 @@ class CliUploaderTest {
         val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-3", 64 * 1024)
         t.start(); t.join()
         assertTrue(out.contains("<redacted>"), out)
+    }
+
+    @Test fun `a long run of credential-looking word characters scrubs in bounded time`() {
+        val start = System.nanoTime()
+        CliUploader.scrubCliOutput("token".repeat(790) + " " + "key_".repeat(900))
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 2000, "scrub took too long")
     }
 
     @Test fun `long output keeps head and tail so the final error line survives`() {
