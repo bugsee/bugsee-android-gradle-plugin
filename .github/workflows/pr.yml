@@ -77,18 +77,21 @@ jobs:
 
       - name: Real-binary bugsee-cli contract test
         if: success() || failure()
+        timeout-minutes: 15
         env:
           BUGSEE_CLI_BIN: ${{ steps.cli.outputs.bin }}
         run: |
           set -euo pipefail
-          ./gradlew :test --tests '*CliUploaderRealBinaryTest*'
-          # Every test in the class Assume-skips without the binary, and a skip is green:
-          # fail unless the class actually ran.
-          report=build/test-results/test/TEST-com.bugsee.android.gradle.upload.CliUploaderRealBinaryTest.xml
-          if ! grep -q 'skipped="0"' "$report" || grep -q 'tests="0"' "$report"; then
-            echo "real-binary tests were skipped or did not run" >&2
-            exit 1
-          fi
+          ./gradlew :test --tests '*CliUploaderRealBinaryTest*' --tests '*CliNoProxyContractTest*'
+          # Every test in these classes Assume-skips without the binary, and a skip is green:
+          # fail unless each class actually ran.
+          for cls in CliUploaderRealBinaryTest CliNoProxyContractTest; do
+            report=build/test-results/test/TEST-com.bugsee.android.gradle.upload.$cls.xml
+            if [ ! -f "$report" ] || ! grep -q 'skipped="0"' "$report" || grep -q 'tests="0"' "$report"; then
+              echo "real-binary tests ($cls) were skipped or did not run" >&2
+              exit 1
+            fi
+          done
 
       # Only on failure, and kept briefly: the org's Actions artifact storage is
       # shared across every repo and capped, and a green run needs no reports.

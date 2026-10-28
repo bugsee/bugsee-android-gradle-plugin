@@ -43,9 +43,12 @@ internal fun proxyEnvFromSystemProperties(
         if (raw == null) {
             // Mirror the JDK built-in default so loopback stays direct.
             if (result.isNotEmpty()) result["NO_PROXY"] = JDK_LOOPBACK_NO_PROXY
-        } else if (raw.isNotBlank()) {
+        } else if (raw.isNotEmpty()) {
             // The JDK appends its loopback set to any non-empty list; an empty value means empty.
-            val translated = raw.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+            val translated = raw.split('|').filter { it.isNotEmpty() }
+                // The JDK splits only on `|` and does not trim, so a comma/space in an entry is a literal that
+                // matches no host, whereas NO_PROXY would split it (`foo, *, bar` would bypass all).
+                .filter { e -> e.none { it == ',' || it.isWhitespace() } }
                 .mapNotNull { nonProxyEntryToNoProxy(it) }
             result["NO_PROXY"] = (translated + JDK_LOOPBACK_NO_PROXY).joinToString(",")
         }
@@ -65,17 +68,26 @@ private fun enc(v: String): String = java.net.URLEncoder.encode(v, "UTF-8").repl
 /**
  * One JDK `http.nonProxyHosts` pattern (`*` allowed only at the start or end) to a NO_PROXY entry.
  * NO_PROXY has no globs: exact host, domain suffix (`.b`) or CIDR. Returns null (dropped) for a
- * pattern that cannot be expressed. Note `*.b` -> `.b` may additionally bypass the apex `b` on
- * clients such as reqwest (JDK: subdomains only); the opposite (narrower) direction is used elsewhere.
+ * pattern that cannot be expressed.
+ *
+ * The pinned bugsee-cli's matching is pinned by `CliNoProxyContractTest`: an entry `b` or `.b`
+ * matches `b` AND every subdomain (case-insensitively; `notb` is not matched), so `*.b` -> `.b`
+ * also bypasses the apex `b`, and a plain host entry `b` also bypasses its subdomains, where the
+ * JDK matches subdomains only / the exact host only. No NO_PROXY form is narrower, so these
+ * slight widenings are accepted (a widened bypass connects directly instead of via the proxy:
+ * the apex of a listed `*.b` domain, or the subdomains of a listed plain host); a `*x` suffix pattern
+ * becomes `x`, which is narrower than the JDK's. A `.b` or CIDR-looking entry is a literal that
+ * matches nothing in the JDK but is honoured by the CLI, which is what the user meant.
+ * Bracketed IPv6 (`[::1]`) does NOT match in the CLI, hence the brackets are stripped.
  */
 private fun nonProxyEntryToNoProxy(p: String): String? = when {
     p == "*" -> "*"
     p.length > 1 && p.startsWith("*") && p.endsWith("*") -> null
-    p.startsWith("*.") -> p.substring(1).takeUnless { '*' in it }
-    p.startsWith("*") -> p.substring(1).takeUnless { '*' in it }
+    p.startsWith("*.") -> p.substring(1).takeUnless { '*' in it || '/' in it }
+    p.startsWith("*") -> p.substring(1).takeUnless { '*' in it || '/' in it }
     p.endsWith(".*") -> {
         val octets = p.dropLast(2).split('.')
-        if (octets.size in 1..3 && octets.all { o -> o.toIntOrNull()?.let { it in 0..255 } == true }) {
+        if (octets.size in 1..3 && octets.all { o -> o.all { c -> c in '0'..'9' } && (o == "0" || !o.startsWith("0")) && o.toIntOrNull()?.let { it in 0..255 } == true }) {
             val full = octets + List(4 - octets.size) { "0" }
             full.joinToString(".") + "/" + octets.size * 8
         } else {
@@ -83,7 +95,7 @@ private fun nonProxyEntryToNoProxy(p: String): String? = when {
         }
     }
     p.endsWith("*") -> null
-    p.length > 2 && p.startsWith("[") && p.endsWith("]") -> p.substring(1, p.length - 1)
+    p.length > 2 && p.startsWith("[") && p.endsWith("]") -> p.substring(1, p.length - 1).takeIf { ':' in it && '*' !in it && '/' !in it }
     else -> p
 }
 
