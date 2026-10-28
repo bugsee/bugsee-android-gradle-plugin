@@ -464,6 +464,29 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun compileOnlyCorePinBelowFirstReleaseSkipsExtensionWithWarning() {
+        for (conf in listOf("compileOnly", "compileOnlyApi", "debugCompileOnly")) {
+            val h = Harness(null, declareCore = false) {
+                ndk.enabled.set(true)
+                feedback.set(true)
+            }
+            h.declareOnCreating(conf, "com.bugsee:bugsee-android:7.0.0-beta1")
+            h.project.extensions.add("android", Any())
+            val lines = captureOutput {
+                val added = h.autoAdded()
+                assertFalse("bugsee-android-ndk" in added, conf)
+                assertTrue("bugsee-android-feedback" in added, conf)
+                (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+            }.filter { it.startsWith("Bugsee:") && "not auto-added" in it }
+            assertEquals(
+                listOf(ExtensionFirstRelease.skipWarning("bugsee-android-ndk", "7.0.0-beta1", "7.0.0-beta6")),
+                lines,
+                conf,
+            )
+        }
+    }
+
+    @Test
     fun extensionBelowFirstReleaseIsNotWarnedWhenDeclaredByTheUser() {
         val h = Harness(null, declareCore = false) { ndk.enabled.set(true) }
         h.declare("com.bugsee:bugsee-android:7.0.0-beta1")
