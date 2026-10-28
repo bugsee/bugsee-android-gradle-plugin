@@ -49,12 +49,20 @@ class Kotlin19ComposePipelineTest {
 
     /** `bugseeTag` call count per top-level composable of the fixture, from the emitted bytecode. */
     private fun compileAndCountTags(bugseeFirst: Boolean): Map<String, Int> {
+        val work = Files.createTempDirectory("bugsee-k19-compose-").toFile()
+        try {
+            return compileAndCountTagsIn(work, bugseeFirst)
+        } finally {
+            work.deleteRecursively()
+        }
+    }
+
+    private fun compileAndCountTagsIn(work: File, bugseeFirst: Boolean): Map<String, Int> {
         val bugseeJar = requireProperty("bugsee.variantJar.k21")
         val composeCompilerJar = requireProperty("bugsee.compose19.compilerPlugin")
         val composeRuntimeJar = requireProperty("bugsee.compose19.runtime")
         val compilerClasspath = requireProperty("bugsee.kotlinClasspath.$KOTLIN")
         val java = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
-        val work = Files.createTempDirectory("bugsee-k19-compose-").toFile()
 
         // Compiled as its own module: a `bugseeTag` declared in the module being compiled is a
         // source declaration, not the library function a consumer resolves, and codegen rejects

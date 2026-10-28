@@ -21,9 +21,10 @@ package com.bugsee.android.gradle
  * ### Kotlin 1.9: limited, not unsupported
  *
  * The plugin loads and rewrites on 1.9 (verified through 1.9.25 with Compose compiler 1.5.15 by
- * `Kotlin19ComposePipelineTest`), but with a real Compose compiler only call sites that pass
- * `modifier` explicitly are tagged. Compose compiler releases that register through the legacy
- * `ComponentRegistrar` service (verified: 1.5.15; 1.5.0 does not) are run by the 1.9 compiler ahead of
+ * `Kotlin19ComposePipelineTest`), but with a Compose compiler that registers through the legacy
+ * `ComponentRegistrar` service (verified: 1.5.15; 1.5.0 does not, and with it omitted-`modifier` sites
+ * were tagged when Bugsee ran first) only call sites that pass `modifier` explicitly are tagged. Such
+ * registrations are run by the 1.9 compiler ahead of
  * any `CompilerPluginRegistrar` such as ours, so
  * Compose's default-argument lowering has already turned every OMITTED `modifier` into a
  * `DEFAULT_VALUE` composite when we see it; we skip those on purpose because the callee's

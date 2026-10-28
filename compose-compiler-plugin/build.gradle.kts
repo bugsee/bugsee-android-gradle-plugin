@@ -253,9 +253,11 @@ val compose19Runtime by configurations.creating {
     isCanBeResolved = true
     isTransitive = false
 }
+val compose19CompilerCoordinates = "androidx.compose.compiler:compiler:1.5.15"
+val compose19RuntimeCoordinates = "org.jetbrains.compose.runtime:runtime-desktop:1.6.11"
 dependencies {
-    compose19Compiler("androidx.compose.compiler:compiler:1.5.15")
-    compose19Runtime("org.jetbrains.compose.runtime:runtime-desktop:1.6.11")
+    compose19Compiler(compose19CompilerCoordinates)
+    compose19Runtime(compose19RuntimeCoordinates)
 }
 
 val variantTest: SourceSet by sourceSets.creating {
@@ -305,7 +307,7 @@ val composeVariantMatrix by tasks.registering(Test::class) {
         )
     })
 
-    inputs.property("compose19Coordinates", "compiler:1.5.15,runtime-desktop:1.6.11")
+    inputs.property("compose19Coordinates", "$compose19CompilerCoordinates,$compose19RuntimeCoordinates")
 
     // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
     // is no need to hash ~400 MB of compiler distributions on every up-to-date check.
