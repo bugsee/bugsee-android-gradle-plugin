@@ -439,6 +439,43 @@ class AutoAddScopeTest {
 
     // ── Core / extension presence is judged from production configurations (#124) ──
 
+    /** #141: an extension absent at the declared core version is skipped with one warning, not left to fail resolution. */
+    @Test
+    fun extensionsBelowTheirFirstReleaseAreSkippedWithOneWarning() {
+        val h = Harness(null, declareCore = false) {
+            ndk.enabled.set(true)
+            leak.enabled.set(true)
+            feedback.set(true)
+        }
+        h.declare("com.bugsee:bugsee-android:7.0.0-beta8")
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            val added = h.autoAdded()
+            assertTrue("bugsee-android-ndk" in added, "ndk exists from beta6")
+            assertTrue("bugsee-android-feedback" in added, "feedback exists from beta1")
+            assertFalse("bugsee-android-leak" in added, "leak starts at beta13")
+            h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(
+            listOf(ExtensionFirstRelease.skipWarning("bugsee-android-leak", "7.0.0-beta8", "7.0.0-beta13")),
+            lines,
+        )
+    }
+
+    @Test
+    fun extensionBelowFirstReleaseIsNotWarnedWhenDeclaredByTheUser() {
+        val h = Harness(null, declareCore = false) { ndk.enabled.set(true) }
+        h.declare("com.bugsee:bugsee-android:7.0.0-beta1")
+        h.declare("com.bugsee:bugsee-android-ndk:7.0.0-beta1")
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), lines)
+    }
+
     private val core = "com.bugsee:bugsee-android:$SDK_VERSION"
 
     private fun Harness.declareOnCreating(configuration: String, coordinate: String) {
@@ -749,8 +786,8 @@ class AutoAddScopeTest {
     /** #130: the deferral must not let an auto-added extension pull a newer core transitively. */
     @Test
     fun compileOnlyCorePinSetsTheExtensionVersion() {
-        // 7.9.0 is at or above and 6.5.0 below the MIN_SDK_VERSION floor: both are used as declared.
-        for ((conf, version) in listOf("compileOnly" to "7.9.0", "compileOnlyApi" to "6.5.0", "debugCompileOnly" to "6.5.0")) {
+        // 7.9.0 is at or above and 7.0.0 below the MIN_SDK_VERSION floor: both are used as declared.
+        for ((conf, version) in listOf("compileOnly" to "7.9.0", "compileOnlyApi" to "7.0.0", "debugCompileOnly" to "7.0.0")) {
             val h = Harness(null, declareCore = false) { feedback.set(true) }
             h.declareOnCreating(conf, "com.bugsee:bugsee-android:$version")
             val feedback = h.project.configurations.getByName("implementation").incoming.dependencies
@@ -764,10 +801,10 @@ class AutoAddScopeTest {
     fun compileOnlyCorePinSetsTheOkHttpExtensionVersion() {
         val h = Harness(null, declareCore = false)
         h.declare("com.squareup.okhttp3:okhttp:4.12.0")
-        h.declareOnCreating("compileOnly", "com.bugsee:bugsee-android:6.5.0")
+        h.declareOnCreating("compileOnly", "com.bugsee:bugsee-android:7.0.0")
         val okhttp = h.project.configurations.getByName("implementation").incoming.dependencies
             .single { it.name == "bugsee-android-okhttp" }
-        assertEquals("6.5.0", okhttp.version)
+        assertEquals("7.0.0", okhttp.version)
     }
 
     @Test

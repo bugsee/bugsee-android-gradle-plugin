@@ -1796,6 +1796,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         notes: MutableList<String>,
     ) {
         if (!isModuleDeclared(project, artifactName, projectName, ignore)) {
+            // A pin below the extension's first release has no such coordinate (#141): skip, don't fail resolution.
+            ExtensionFirstRelease.firstReleaseIfOlder(artifactName, sdkVersion)?.let { first ->
+                notes.add(ExtensionFirstRelease.skipWarning(artifactName, sdkVersion, first))
+                return
+            }
             // [sdkVersion] tracks the CORE SDK version, NOT the plugin version.
             // Extension AARs (bugsee-android-ndk, -okhttp, -feedback, …) are
             // published under the SDK's version line, so versioning them with
