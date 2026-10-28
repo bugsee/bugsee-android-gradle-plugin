@@ -38,8 +38,7 @@ internal data class CliUploadResult(
      * uploads are idempotent by contract (duplicate 16004 is success). A repeated
      * registration is believed safe too (the appserver replaces a build with the
      * same uuid, as `HttpRetry` relies on; confirmed by code reading during #118,
-     * not verified end to end), but as that is unverified this gate stays
-     * conservative: a signal
+     * not verified end to end), so this gate stays conservative: a signal
      * exit (> 128) or a Windows crash/kill status (< -1, other than loader failures
      * such as 0xC0000135) — where the CLI DID run and may have already registered
      * the build before dying — does not trigger a retry. Only 1, 2, 126, 127, 128,

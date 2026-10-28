@@ -282,6 +282,7 @@ class NativeMergedLibsE2ETest {
         val (ok, out) = assembleFailingOnUploadError(constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
         assertTrue("exit 10 is 'nothing to upload', not a failure:\n$out", ok)
         assertTrue("the directory upload ran:\n$out", out.contains("Uploading unstripped native libraries"))
+        assertTrue("the CLI answered 10:\n$out", out.contains("(bugsee-cli exit 10)"))
         assertTrue("no AGP source exists:\n$out", out.contains("no native symbols found"))
         assertFalse(out.contains("Native symbols file found"))
         assertFalse(out.contains("Intermediate symbols folder found"))
@@ -291,17 +292,24 @@ class NativeMergedLibsE2ETest {
     fun `failOnUploadError fails on directory exit 11 when there is no AGP source`() {
         val (ok, out) = assembleFailingOnUploadError(constantShim(11).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
         assertTrue("a failed directory upload with nothing else uploaded must fail:\n$out", !ok)
-        assertTrue("the failure must name the setting:\n$out", out.contains("failOnUploadError"))
+        assertTrue("the CLI answered 11:\n$out", out.contains("(bugsee-cli exit 11)"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native libraries for variant release was not uploaded"),
+        )
     }
 
     @Test
-    fun `failOnUploadError still fails on exit 10 from the AGP zip (an I-O error, not an empty archive)`() {
+    fun `failOnUploadError still fails on exit 10 from the AGP zip (missing input, not an empty archive)`() {
         val (ok, out) = assembleFailingOnUploadError(
             constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
         )
         assertTrue("zip exit 10 is a real failure:\n$out", !ok)
         assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
-        assertTrue(out.contains("failOnUploadError"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native symbols for variant release was not uploaded"),
+        )
     }
 
     @Test
@@ -311,7 +319,10 @@ class NativeMergedLibsE2ETest {
         )
         assertTrue("a real CLI failure must fail the build:\n$out", !ok)
         assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
-        assertTrue(out.contains("failOnUploadError"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native symbols for variant release was not uploaded"),
+        )
     }
 
     @Test
