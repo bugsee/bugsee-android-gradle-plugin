@@ -497,6 +497,7 @@ class CliUploaderTest {
     private class FakeExec(
         private val cliExitValue: Int,
         private val stderr: String = "",
+        private val stdout: String = "",
     ) : ExecOperations {
         /** The argv and environment the production code gave the process, as recorded from the spec. */
         var recordedArgs: List<String> = emptyList()
@@ -510,6 +511,7 @@ class CliUploaderTest {
             // clash with the Java `exitValue` property → infinite recursion).
             val resultExit = cliExitValue
             var capturedErr: java.io.OutputStream? = null
+            var capturedOut: java.io.OutputStream? = null
             val spec = java.lang.reflect.Proxy.newProxyInstance(
                 ExecSpec::class.java.classLoader,
                 arrayOf(ExecSpec::class.java),
@@ -522,6 +524,8 @@ class CliUploaderTest {
                         proxy
                     }
                     "getErrorOutput" -> capturedErr
+                    "setStandardOutput" -> { capturedOut = args[0] as? java.io.OutputStream; proxy }
+                    "getStandardOutput" -> capturedOut
                     // Defaults for the few getters Gradle might probe — the
                     // production code only sets executable/args/errorOutput.
                     "hashCode" -> System.identityHashCode(proxy)
@@ -532,6 +536,10 @@ class CliUploaderTest {
             } as ExecSpec
 
             action.execute(spec)
+            if (stdout.isNotEmpty()) {
+                capturedOut?.write(stdout.toByteArray(Charsets.UTF_8))
+                capturedOut?.flush()
+            }
             if (stderr.isNotEmpty()) {
                 capturedErr?.write(stderr.toByteArray(Charsets.UTF_8))
                 capturedErr?.flush()
@@ -555,18 +563,22 @@ class CliUploaderTest {
         return f
     }
 
-    private fun runUploadMapping(exec: ExecOperations, cli: File): CliUploadResult =
+    private fun runUploadMapping(
+        exec: ExecOperations,
+        cli: File,
+        logger: org.gradle.api.logging.Logger = Logging.getLogger("test"),
+    ): CliUploadResult =
         CliUploader.uploadMapping(
             execOps = exec,
             cliBinary = cli,
             mappingFile = mappingFile,
             iconFile = null,
-            appToken = "tok",
+            appToken = envToken,
             endpoint = "https://api.bugsee.com",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
-            logger = Logging.getLogger("test"),
+            logger = logger,
             debug = false,
         )
 
@@ -737,5 +749,208 @@ class CliUploaderTest {
         assertEquals(-1, result.exitCode)
         assertTrue(result.shouldFallback)
         assertEquals("exec-failed", result.fallbackReason)
+    }
+
+    // ── CLI stderr/stdout is scrubbed before it reaches any log level (#109) ──
+
+    /** A [org.gradle.api.logging.Logger] proxy recording every message (and argument) at every level. */
+    private class AllLevelsLogger {
+        val lines = mutableListOf<Pair<String, String>>()
+        val logger: org.gradle.api.logging.Logger = java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { proxy, method, args ->
+            val level = method.name
+            if (level in setOf("trace", "debug", "info", "lifecycle", "quiet", "warn", "error", "log")) {
+                lines += level to (args ?: emptyArray()).joinToString(" ") { it.toString() }
+            }
+            when {
+                method.name.startsWith("is") && method.returnType == java.lang.Boolean.TYPE -> true
+                method.name == "hashCode" -> System.identityHashCode(proxy)
+                method.name == "equals" -> proxy === args[0]
+                method.name == "toString" -> "AllLevelsLogger"
+                method.name == "getName" -> "all-levels"
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
+        fun all(): String = lines.joinToString("\n") { "${it.first}: ${it.second}" }
+    }
+
+    private val presigned = "https://bucket.s3.amazonaws.com/builds/abc.zst?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+        "&X-Amz-Credential=AKIAEXAMPLEKEY%2F20260101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=deadbeefcafe0123456789"
+    private val s3Error = "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIAEXAMPLEKEY</AWSAccessKeyId>" +
+        "<StringToSign>AWS4-HMAC-SHA256\n20260101T000000Z</StringToSign><SignatureProvided>deadbeefcafe0123456789</SignatureProvided></Error>"
+
+    private fun assertNoSecrets(text: String) {
+        for (secret in listOf(envToken, "deadbeefcafe0123456789", "AKIAEXAMPLEKEY", "20260101T000000Z", "SECRETSESSION")) {
+            assertFalse(text.contains(secret), "'$secret' leaked into the log:\n$text")
+        }
+    }
+
+    private val noisyStderr = "upload failed: PUT $presigned\n" +
+        "for https://api.bugsee.com/v2/apps/$envToken/builds status=403 body=$s3Error\n" +
+        "response {\"error\":\"bad\",\"X-Amz-Security-Token\":\"SECRETSESSION\"}\n" +
+        "Authorization: Bearer $envToken\n" +
+        "StringToSign: AWS4-HMAC-SHA256 20260101T000000Z\n"
+
+    @Test fun `failure stderr and stdout never leak the presigned URL signature or app token at any level`() {
+        val log = AllLevelsLogger()
+        val result = CliUploader.uploadMapping(
+            execOps = FakeExec(cliExitValue = 31, stderr = noisyStderr, stdout = noisyStderr),
+            cliBinary = executableCliStub(), mappingFile = mappingFile, iconFile = null, appToken = envToken,
+            endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = log.logger, debug = true,
+        )
+        assertNoSecrets(log.all())
+        // Diagnostic value is kept: exit code, the failing host/path and the S3 error code.
+        assertTrue(log.all().contains("exit 31"), log.all())
+        assertTrue(log.all().contains("bucket.s3.amazonaws.com/builds/abc.zst"), log.all())
+        assertTrue(log.all().contains("SignatureDoesNotMatch"), log.all())
+        // Semantics unchanged.
+        assertFalse(result.success); assertFalse(result.shouldFallback); assertEquals(31, result.exitCode)
+    }
+
+    @Test fun `success and fallback exits scrub too and keep their result`() {
+        for (code in listOf(0, 1)) {
+            val log = AllLevelsLogger()
+            val result = runUploadMapping(FakeExec(cliExitValue = code, stderr = noisyStderr, stdout = noisyStderr), executableCliStub(), log.logger)
+            assertNoSecrets(log.all())
+            assertEquals(code == 0, result.success)
+            assertEquals(code == 1, result.shouldFallback)
+        }
+    }
+
+    @Test fun `packUploadZip scrubs the CLI output`() {
+        val log = AllLevelsLogger()
+        val out = File.createTempFile("pack", ".zip").also { it.deleteOnExit() }
+        CliUploader.packUploadZip(
+            execOps = FakeExec(cliExitValue = 1, stderr = noisyStderr, stdout = noisyStderr),
+            cliBinary = executableCliStub(), artifactFile = mappingFile, mappingFile = null, outZip = out,
+            logger = log.logger, debug = true,
+        )
+        for (s in listOf("AKIAEXAMPLEKEY", "20260101T000000Z", "SECRETSESSION")) assertFalse(log.all().contains(s), log.all())
+        assertFalse(log.all().contains("deadbeefcafe0123456789"), log.all())
+    }
+
+    @Test fun `stdout is forwarded scrubbed at lifecycle level, independent of stderr`() {
+        val log = AllLevelsLogger()
+        runUploadMapping(FakeExec(cliExitValue = 0, stdout = "build_id=42 $presigned"), executableCliStub(), log.logger)
+        val lifecycle = log.lines.filter { it.first == "lifecycle" }.joinToString("\n") { it.second }
+        assertTrue(lifecycle.contains("build_id=42"), log.all())
+        assertNoSecrets(log.all())
+    }
+
+    @Test fun `a truncated unterminated secret JSON value and a huge value neither leak nor overflow the stack`() {
+        val truncated = "body={\"upload_token\":\"" + "S".repeat(3000) + "\n" + "retry warn\n".repeat(30) + "error: \"Service Unavailable\""
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(truncated) }, "small-stack", 256 * 1024)
+        t.start(); t.join()
+        assertFalse(out.contains("SSSS"), out)
+        assertTrue(out.contains("Service Unavailable"), out)
+    }
+
+    @Test fun `ANSI colour codes and underscored token keys do not defeat the scrubber`() {
+        val out = CliUploader.scrubCliOutput("\u001B[3mtoken\u001B[0m=ANSISECRET upload_token=UNDERSECRET")
+        assertFalse(out.contains("ANSISECRET") || out.contains("UNDERSECRET"), out)
+    }
+
+    @Test fun `escaped-quote JSON bodies and colon-delimited SGR codes are scrubbed`() {
+        val escaped = CliUploader.scrubCliOutput("body=\"{\\\"upload_token\\\":\\\"ESCSECRET\\\"}\" status=403")
+        assertFalse(escaped.contains("ESCSECRET"), escaped)
+        val sgr = CliUploader.scrubCliOutput("token\u001B[38:5:1m=COLONSECRET")
+        assertFalse(sgr.contains("COLONSECRET"), sgr)
+    }
+
+    @Test fun `escape-heavy secret value does not overflow a small stack`() {
+        val nasty = "{\"upload_token\":\"" + "\\\"".repeat(1900) + "\"}\nerror: done"
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-2", 64 * 1024)
+        t.start(); t.join()
+        assertTrue(out.contains("<redacted>"), out)
+    }
+
+    @Test fun `non-SGR escape sequences glued to a key do not defeat the scrubber`() {
+        val out = CliUploader.scrubCliOutput("\u001B[2Ktoken=KSECRET")
+        assertFalse(out.contains("KSECRET"), out)
+    }
+
+    @Test fun `quoted tracing-style field values and other credential-named keys are scrubbed`() {
+        val out = CliUploader.scrubCliOutput(
+            "WARN upload_token=\"QSECRET\" signature=\"deadbeef\" client_secret=CSECRET password=hunter2 api_key=k1 retries=3",
+        )
+        for (s in listOf("QSECRET", "deadbeef", "CSECRET", "hunter2", "k1 ")) assertFalse(out.contains(s), out)
+        assertTrue(out.contains("retries=3"), out)
+    }
+
+    @Test fun `Debug-struct, single-quoted, escaped-quote and digit-bearing credential fields are scrubbed`() {
+        val out = CliUploader.scrubCliOutput(
+            "Resp { upload_url: \"https://x\", upload_token: \"DBGSECRET\" } password='hunter2' " +
+                "client_secret=\"abc\\\"RESTSECRET\" oauth2_access_token=OSECRET error: token expired",
+        )
+        for (s in listOf("DBGSECRET", "hunter2", "RESTSECRET", "OSECRET")) assertFalse(out.contains(s), out)
+        val wrapped = CliUploader.scrubCliOutput(
+            "Resp { upload_token: Some(\"OPTSECRET\"), session_secret: Secret(\"WRAP\") } " +
+                "${"a".repeat(40)}_api_key=LONGKEY api_key_${"a".repeat(40)}=LONGKEY2",
+        )
+        for (s in listOf("OPTSECRET", "WRAP", "LONGKEY")) assertFalse(wrapped.contains(s), wrapped)
+        assertTrue(out.contains("error: token expired"), out)
+    }
+
+    @Test fun `quoted credential value with long escape run does not overflow a small stack`() {
+        val nasty = "client_secret=\"" + "\\\"".repeat(950) + "\nx password: '" + "\\'".repeat(950)
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-3", 64 * 1024)
+        t.start(); t.join()
+        assertTrue(out.contains("<redacted>"), out)
+    }
+
+    @Test fun `a long run of credential-looking word characters scrubs in bounded time`() {
+        // Each input is < 4000 chars with no newline, so head+tail trimming keeps it and the key regex runs.
+        for (nasty in listOf("token".repeat(790), "-key".repeat(990), "-token".repeat(660), "key_".repeat(990) + "=x")) {
+            val start = System.nanoTime()
+            val out = CliUploader.scrubCliOutput(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 2000, "scrub took too long for ${nasty.take(12)}")
+            assertFalse(out.contains("output truncated"), "input must survive trimming")
+        }
+        val eqWrapped = CliUploader.scrubCliOutput("upload_token=Some(\"EQSECRET\") x=1")
+        assertFalse(eqWrapped.contains("EQSECRET"), eqWrapped)
+        // A secret nested inside a non-credential quoted value is still found.
+        val nested = CliUploader.scrubCliOutput("msg=\"retry token=NESTEDSECRET later\"")
+        assertFalse(nested.contains("NESTEDSECRET"), nested)
+    }
+
+    @Test fun `scrubCliOutput is bounded-time on adversarial 1 MB inputs`() {
+        val mb = 1_000_000
+        val inputs = listOf(
+            "token".repeat(mb / 5), "-key".repeat(mb / 4), "?a=".repeat(mb / 3), "\\\"".repeat(mb / 2),
+            "\"token\":\"".repeat(mb / 9), "<StringToSign>".repeat(mb / 14), "Bearer ".repeat(mb / 7),
+            "\u001B[".repeat(mb / 2), "token=\"".repeat(mb / 7), "line with token=x\n".repeat(mb / 18),
+            "a".repeat(mb),
+        )
+        for (nasty in inputs) {
+            val start = System.nanoTime()
+            CliUploader.scrubCliOutput(nasty)
+            val ms = (System.nanoTime() - start) / 1_000_000
+            assertTrue(ms < 10_000, "scrub took ${ms}ms for ${nasty.take(12)}")
+        }
+    }
+
+    @Test fun `S3 CanonicalRequestBytes element is redacted`() {
+        val out = CliUploader.scrubCliOutput("<Error><CanonicalRequestBytes>41 4b 49 41 53 45 43</CanonicalRequestBytes></Error>")
+        assertFalse(out.contains("41 4b 49"), out)
+    }
+
+    @Test fun `long output keeps head and tail so the final error line survives`() {
+        val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
+        val out = CliUploader.scrubCliOutput(text)
+        assertTrue(out.startsWith("first line"), out)
+        assertTrue(out.endsWith("error: upload rejected (403)"), out)
+        assertTrue(out.length < 4300, "len=${out.length}")
+    }
+
+    @Test fun `scrubCliOutput bounds the length and keeps short plain text`() {
+        assertEquals("connection refused (os error 111)", CliUploader.scrubCliOutput("connection refused (os error 111)\n"))
+        assertTrue(CliUploader.scrubCliOutput("x".repeat(100_000)).length <= 4100)
+        assertEquals("", CliUploader.scrubCliOutput("  \n"))
     }
 }
