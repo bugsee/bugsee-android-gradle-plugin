@@ -357,6 +357,7 @@ private class BugseeComposeTransformer(
      * textual: only a top-level `*Kt` class that directly owns a static (receiver-less) function
      * qualifies, so a member of an ordinary class is never rewritten. The allowlist is still matched
      * on the full package, so a same-named function in a non-androidx `...Kt` facade does not match.
+     * Limitation: a facade renamed with `@file:JvmName` that lacks the `Kt` suffix is not stripped.
      */
     private fun withoutFileFacade(callee: IrFunction, calleeFqName: String): String {
         val owner = callee.parent as? IrClass ?: return calleeFqName

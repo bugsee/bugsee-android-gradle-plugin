@@ -157,6 +157,8 @@ class ComposePluginOrderTest {
         val SECURE_ALL = linkedMapOf(
             "ProdSecureMaterial" to 1, "ProdSecureMaterialOutlined" to 1, "ProdSecureMaterial3" to 1,
             "ProdSecureMaterial3Outlined" to 1, "ProdSecureBasic" to 1,
+            // Same-module non-androidx look-alike: never secured.
+            "ProdSecureFake" to 0,
         )
         val METHOD_HEADER = Regex("""^\s{2}\S[^(]*?\b([\w$]+)\(.*;$""")
     }
