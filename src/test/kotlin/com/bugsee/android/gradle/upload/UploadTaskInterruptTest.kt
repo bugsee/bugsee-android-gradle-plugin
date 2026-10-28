@@ -30,8 +30,9 @@ class UploadTaskInterruptTest {
 
     @After
     fun clearFlag() {
-        interrupter?.let { it.interrupt(); it.join() }
+        // Clear the test thread's own flag first: join() would throw on an interrupted thread.
         Thread.interrupted()
+        interrupter?.let { it.interrupt(); it.join() }
     }
 
     @Test
