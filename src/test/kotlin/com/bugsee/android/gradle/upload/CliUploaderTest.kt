@@ -874,6 +874,14 @@ class CliUploaderTest {
         assertFalse(out.contains("KSECRET"), out)
     }
 
+    @Test fun `quoted tracing-style field values and other credential-named keys are scrubbed`() {
+        val out = CliUploader.scrubCliOutput(
+            "WARN upload_token=\"QSECRET\" signature=\"deadbeef\" client_secret=CSECRET password=hunter2 api_key=k1 retries=3",
+        )
+        for (s in listOf("QSECRET", "deadbeef", "CSECRET", "hunter2", "k1 ")) assertFalse(out.contains(s), out)
+        assertTrue(out.contains("retries=3"), out)
+    }
+
     @Test fun `long output keeps head and tail so the final error line survives`() {
         val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
         val out = CliUploader.scrubCliOutput(text)

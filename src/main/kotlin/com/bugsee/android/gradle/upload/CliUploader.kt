@@ -332,7 +332,11 @@ internal object CliUploader {
     // tracing-subscriber may colour its output even on a pipe; escapes split `key=value` pairs.
     private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;:?]*[A-Za-z]")
     private val CLI_SECRET_QUERY_PAIR =
-        Regex("\\b(X-Amz-[A-Za-z-]+|[A-Za-z_-]{0,32}(?:Signature|Token)|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
+        Regex(
+            "\\b(X-Amz-[A-Za-z-]+|[A-Za-z_-]{0,32}(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[A-Za-z_-]{0,32}|Expires)" +
+                "=(?:\\\\?\"[^\"\\r\\n]*+\"?|[^\\s&\"'<>]+)",
+            RegexOption.IGNORE_CASE,
+        )
 
     private const val CLI_OUTPUT_KEEP = 2000
 
