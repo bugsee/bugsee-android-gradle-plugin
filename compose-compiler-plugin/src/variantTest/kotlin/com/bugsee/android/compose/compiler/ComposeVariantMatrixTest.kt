@@ -258,7 +258,7 @@ class ComposeVariantMatrixTest {
                 import androidx.compose.ui.Modifier
 
                 @Composable fun LibButton(modifier: Modifier = Modifier) { println("LibButton") }
-                fun libHelper(modifier: Modifier) { println("libHelper") }
+                fun libHelper(modifier: Modifier = Modifier) { println("libHelper") }
 
                 // Called through a subclass: the callee is a fake override that must keep the annotation.
                 open class BaseKit { @Composable fun Panel(modifier: Modifier = Modifier) { println("Panel") } }
@@ -361,6 +361,7 @@ class ComposeVariantMatrixTest {
                     describe(Modifier)
                     describeDefault()
                     libHelper(Modifier)
+                    libHelper()
                     LibButton(Modifier)
                     object : BaseKit() {}.Panel(Modifier)
                     Slot { println("Slot content") }
@@ -391,6 +392,7 @@ class ComposeVariantMatrixTest {
             // Plain helpers: no tag, in-module and cross-module (issue #147).
             "describe",
             "describeDefault",
+            "libHelper",
             "libHelper",
             // A cross-module @Composable callee IS still tagged: its annotation is read from the
             // dependency's class files, which must work on every compiler line.

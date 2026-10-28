@@ -80,7 +80,7 @@ class Kotlin19ComposePipelineTest {
                 "ProdCustomDefault" to listOf("tag:marker"),
                 "ProdCross" to listOf("plain"),
                 "ProdCrossExplicit" to listOf("tag:ProdCrossExplicit"),
-                "ProdHelper" to listOf("plain", "plain"),
+                "ProdHelper" to listOf("plain", "plain", "plain"),
             ),
             result.received,
         )
@@ -102,7 +102,7 @@ class Kotlin19ComposePipelineTest {
                 "ProdCustomDefault" to listOf("tag:marker"),
                 "ProdCross" to listOf("plain"),
                 "ProdCrossExplicit" to listOf("tag:ProdCrossExplicit"),
-                "ProdHelper" to listOf("plain", "plain"),
+                "ProdHelper" to listOf("plain", "plain", "plain"),
             ),
             result.received,
         )
@@ -186,7 +186,7 @@ class Kotlin19ComposePipelineTest {
             @Composable fun LibChild(modifier: Modifier = Modifier) { received += describe(modifier) }
 
             // A plain, non-composable helper from another module that merely takes a Modifier.
-            fun libHelper(modifier: Modifier) { received += describe(modifier) }
+            fun libHelper(modifier: Modifier = Modifier) { received += describe(modifier) }
             """.trimIndent()
         )
         val lib2Out = File(work, "lib2-out").apply { mkdirs() }
@@ -226,7 +226,7 @@ class Kotlin19ComposePipelineTest {
             // Plain helpers that merely accept a Modifier must be left alone, in-module and
             // cross-module (issue #147).
             fun plainHelper(modifier: Modifier) { received += describe(modifier) }
-            @Composable fun ProdHelper() { plainHelper(Modifier); libHelper(Modifier) }
+            @Composable fun ProdHelper() { plainHelper(Modifier); libHelper(Modifier); libHelper() }
             """.trimIndent()
         )
         // Runs the composables without a composition: a recording `Composer` stand-in whose
