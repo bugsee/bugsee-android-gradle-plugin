@@ -510,6 +510,16 @@ the upload tasks skip with a single info-level message instead of failing or war
   enabled globally or in any variant scope (DSL block or `variant.*` key). A
   variant that disabled the feature may carry an unused runtime module; its
   upload task and bytecode transform stay exact.
+- **Core / extension presence is judged from production configurations and `compileOnly`.**
+  A `com.bugsee:bugsee-android` pin (an extension pin likewise suppresses only that extension's auto-add) on `implementation`, `api`,
+  `runtimeOnly`, `debug*` and their flavor equivalents, or on `compileOnly` (the app
+  supplies the SDK itself at runtime), suppresses the auto-add and sets the version used
+  for auto-added extensions (`compileOnly` pins only suppress); so does one on a custom
+  configuration those extend. A `debugImplementation`-only pin counts for every variant.
+  Test / androidTest-only pins never do, so the release still gets the SDK; the unit-test
+  classpath then also sees the auto-added dependency and Gradle's conflict resolution
+  picks the version. Not detected: custom configurations wired only into a resolvable
+  classpath (`releaseRuntimeClasspath.extendsFrom(...)`) and test-named KMP source sets, and a core pinned by a library that the app adds through a custom configuration.
 - **Library detection reads production configurations of the app module only.**
   The OkHttp / Compose / Ktor / Cronet detectors (including the Compose
   compiler-plugin and Compose input-capture gates) look at `implementation`,
