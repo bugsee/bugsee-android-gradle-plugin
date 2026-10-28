@@ -660,8 +660,8 @@ class AutoAddScopeTest {
     /** #130: the deferral must not let an auto-added extension pull a newer core transitively. */
     @Test
     fun compileOnlyCorePinSetsTheExtensionVersion() {
-        // 7.2.0 is above and 6.5.0 below the MIN_SDK_VERSION floor: both are used as declared.
-        for ((conf, version) in listOf("compileOnly" to "7.2.0", "compileOnlyApi" to "6.5.0", "debugCompileOnly" to "6.5.0")) {
+        // 7.9.0 is at or above and 6.5.0 below the MIN_SDK_VERSION floor: both are used as declared.
+        for ((conf, version) in listOf("compileOnly" to "7.9.0", "compileOnlyApi" to "6.5.0", "debugCompileOnly" to "6.5.0")) {
             val h = Harness(null, declareCore = false) { feedback.set(true) }
             h.declareOnCreating(conf, "com.bugsee:bugsee-android:$version")
             val feedback = h.project.configurations.getByName("implementation").incoming.dependencies
