@@ -285,6 +285,58 @@ class CliBinaryResolverTest {
         )
     }
 
+    @Test fun `self-update output is scrubbed before it reaches any log level`() {
+        val home = gradleHomeWithCachedBinary()
+        val secretLine = "update failed: GET https://dl.example/x?X-Amz-Signature=SIGSECRET status=403 token=TOKSECRET"
+        val exec = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult {
+                var out: java.io.OutputStream? = null
+                var err: java.io.OutputStream? = null
+                val spec = java.lang.reflect.Proxy.newProxyInstance(
+                    ExecSpec::class.java.classLoader, arrayOf(ExecSpec::class.java),
+                ) { proxy, method, args ->
+                    when (method.name) {
+                        "setStandardOutput" -> { out = args[0] as java.io.OutputStream; proxy }
+                        "setErrorOutput" -> { err = args[0] as java.io.OutputStream; proxy }
+                        "hashCode" -> System.identityHashCode(proxy)
+                        "equals" -> proxy === args[0]
+                        else -> if (method.returnType == java.lang.Boolean.TYPE) false else proxy
+                    }
+                } as ExecSpec
+                action.execute(spec)
+                out?.write(secretLine.toByteArray())
+                err?.write(secretLine.toByteArray())
+                return object : ExecResult {
+                    override fun getExitValue(): Int = 0
+                    override fun assertNormalExitValue(): ExecResult = this
+                    override fun rethrowFailure(): ExecResult = this
+                }
+            }
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+        val logged = StringBuilder()
+        val recordingLogger = java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader, arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { proxy, method, args ->
+            logged.append(method.name).append(": ").append((args ?: emptyArray()).joinToString(" ")).append('\n')
+            when {
+                method.returnType == java.lang.Boolean.TYPE -> true
+                method.name == "hashCode" -> System.identityHashCode(proxy)
+                method.name == "equals" -> proxy === args[0]
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
+
+        CliBinaryResolver.resolve(
+            cliVersion = null, cliPath = null, execOps = exec, gradleUserHome = home,
+            logger = recordingLogger, debug = true, autoUpdate = true,
+        )
+
+        assertTrue(logged.contains("update failed"), "diagnostic text must still be logged: $logged")
+        assertFalse(logged.contains("SIGSECRET") || logged.contains("TOKSECRET"), "secret leaked: $logged")
+    }
+
     @Test fun `resolve with autoUpdate false does NOT invoke update`() {
         // Opt-out path: a user who disabled cliAutoUpdate must never have the
         // binary self-replace. The cached binary is still returned verbatim.

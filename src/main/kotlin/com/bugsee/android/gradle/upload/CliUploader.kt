@@ -340,7 +340,7 @@ internal object CliUploader {
     // runs) and judged sensitive in code by [isSensitiveKey]; see [scrubKeyValuePairs].
     private val CLI_KEY_VALUE_PAIR =
         Regex(
-            "\\b([A-Za-z0-9_-]++)" +
+            "(?<![A-Za-z0-9_-])([A-Za-z0-9_-]++)" +
                 // Debug output of Option<String> / newtype fields: `name: Some("v")`, `name=Secret("v")`.
                 "(?:=(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|" +
                 "[ \\t]*:[ \\t]*(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE))",
