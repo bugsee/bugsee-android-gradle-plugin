@@ -124,15 +124,16 @@ class CliNoProxyContractTest {
     private fun check(cases: List<Case>) {
         val bin = requireBinary()
         val work = Files.createTempDirectory("bugsee-noproxy").toFile()
-        val port = closedPort()
         try {
             RecordingProxy().use { proxy ->
+                // After the proxy is bound, so the two can never share a port.
+                val port = closedPort()
                 val wrong = cases.mapNotNull { c ->
                     val o = proxy.run(bin, work, c, port)
                     // The hit alone is not enough: a CLI that failed before sending anything
                     // would look like a bypass. Require the failure each path really produces.
                     val sane = when {
-                        c.https -> true
+                        c.https && o.proxied -> true // a recorded CONNECT is evidence enough
                         o.proxied -> "502" in o.output
                         else -> "error sending request" in o.output
                     }
@@ -238,7 +239,10 @@ class CliNoProxyContractTest {
         val corp = noProxyFor("*.corp.invalid")
         val exact = noProxyFor("internal.invalid")
         val suffix = noProxyFor("*corp.invalid")
-        val net = noProxyFor("127.*")
+        // Without the appended loopback set, which would bypass 127.0.0.1 regardless.
+        val loopback = ",localhost,127.0.0.0/8,::1,0.0.0.0,::"
+        val net = noProxyFor("127.*").removeSuffix(loopback)
+        val narrowNet = noProxyFor("127.0.1.*").removeSuffix(loopback)
         check(
             listOf(
                 Case("www.corp.invalid", corp, bypass = true),
@@ -249,6 +253,7 @@ class CliNoProxyContractTest {
                 Case("other.invalid", exact, bypass = false),
                 Case("xcorp.invalid", suffix, bypass = false),
                 Case("127.0.0.1", net, bypass = true),
+                Case("127.0.0.1", narrowNet, bypass = false),
             ),
         )
     }
