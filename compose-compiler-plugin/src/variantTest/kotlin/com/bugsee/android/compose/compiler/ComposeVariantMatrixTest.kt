@@ -333,7 +333,7 @@ class ComposeVariantMatrixTest {
                 import androidx.compose.runtime.Composable
                 import androidx.compose.ui.Modifier
                 import androidx.compose.material.TextField
-import androidx.compose.material.OutlinedTextField
+                import androidx.compose.material.OutlinedTextField
                 import androidx.compose.ui.text.input.PasswordVisualTransformation
                 import com.example.kit.LibButton
                 import com.example.kit.libHelper
@@ -394,6 +394,7 @@ import androidx.compose.material.OutlinedTextField
                     libHelper()
                     LibButton()
                     LibButton(Modifier)
+                    object : BaseKit() {}.Panel()
                     object : BaseKit() {}.Panel(Modifier)
                     Slot { println("Slot content") }
                 }
@@ -439,6 +440,8 @@ import androidx.compose.material.OutlinedTextField
             // A cross-module @Composable callee with an EXPLICIT modifier IS still tagged: its annotation is read from the
             // dependency's class files, which must work on every compiler line.
             "TAG:Screen", "LibButton",
+            // Fake override with the modifier OMITTED: untagged (no visible default; documented trade-off).
+            "Panel",
             // Fake-override member composable from a library, called through a subclass: still tagged.
             "TAG:Screen", "Panel",
             // The @Composable function-type invocation is untouched (regression pin; passed before #147 too).
