@@ -582,11 +582,13 @@ the upload tasks skip with a single info-level message instead of failing or war
   and Bugsee's transform runs before Compose's default-argument lowering, an injected
   `Modifier.bugseeTag(..)` would turn the omitted slot into a supplied argument, so a callee declared
   `modifier: Modifier = Modifier.fillMaxWidth()` would silently lose that default. An omitted `modifier`
-  is therefore tagged only when the callee's default is visible in the module being compiled and is the
+  is therefore tagged only when the callee's default is visible to the compiler invocation and is the
   bare `Modifier` (`modifier: Modifier = Modifier`). **Trade-off:** an omitted-`modifier` call to a
   composable from ANOTHER module (a library or a UI kit, whose default is not visible to the compiler
-  plugin) or to one with any other default is left untagged on Kotlin 2.x too; calls that pass a
-  `modifier` explicitly are tagged as before. An untagged site only affects the view-hierarchy naming,
+  plugin), from another file of an incremental compile (so an incremental build can leave untagged a
+  site that a clean build tagged: safe, but nondeterministic across builds), resolving to an
+  overriding member or fake override, or with any other default is left untagged on Kotlin 2.x too;
+  calls that pass a `modifier` explicitly are tagged as before. An untagged site only affects the view-hierarchy naming,
   a dropped default would change the layout. The `bugseeSecure` pass is exempt for its fixed list of
   androidx text fields, whose default is the bare `Modifier`, so an omitted `modifier` on a password
   field is still marked. Chaining the tag onto the callee's own default instead was evaluated and
