@@ -181,6 +181,7 @@ dotted-path form as the DSL field names.
 | `plugin.failOnUploadError` | Boolean | `false` | `bugsee { failOnUploadError.set(…) }` |
 | `plugin.feedback` | Boolean | `false` | `bugsee { feedback.set(…) }` |
 | `plugin.sdkAutoLoad` | Boolean | `true` | `bugsee { sdkAutoLoad.set(…) }` |
+| `plugin.warnDebugOnlySdk` | Boolean | `true` | `bugsee { warnDebugOnlySdk.set(…) }` |
 | `plugin.optimizeExtensionsLoading` | Boolean | `true` | `bugsee { optimizeExtensionsLoading.set(…) }` |
 
 `failOnUploadError` makes an upload that does not complete (mapping, native symbols or build
@@ -426,7 +427,7 @@ setting, so `variant("x") { feedback true }`, `leak { … }`, `appToken { … }`
 | Scope | Settings |
 |---|---|
 | Per variant | `app_token`; `endpoint`, `debug`, `optimizeExtensionsLoading`; `ndk.*`; `buildInfo.*`; `instrumentation.*` (every toggle and `startupTier`) |
-| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
+| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `warnDebugOnlySdk`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
 | Global, DSL only | `instrumentation.excludes` (no `plugin.*` file key) |
 
 `cliPath` may be relative. In the DSL (`cliPath.set("../tools/bugsee-cli")`) it is relative
@@ -518,7 +519,8 @@ the upload tasks skip with a single info-level message instead of failing or war
   configuration those extend. A `debugImplementation`-only pin counts for every variant (the auto-add runs before
   variants exist), as does a pin only on a flavor or custom build type, so variants outside the pinned
   configuration may ship without the SDK (unless an extension pulls it in); for a debug-only pin that is the
-  intended choice for debug-only setups. The plugin logs a warning when the core is declared only on `debug*`; it
+  intended choice for debug-only setups. The plugin logs a warning when the core is declared only on `debug*` (set
+  `warnDebugOnlySdk=false` to silence it when that is deliberate; the auto-add itself is unchanged); it
   stays silent when an extension is added or declared outside `debug*`, when a dependency project declares an SDK
   module through a non-debug edge (with Isolated Projects on: on any non-debug project dependency), and with
   `sdkAutoLoad=false` (which also disables every other auto-add). A `debug*` edge to an intermediate dependency

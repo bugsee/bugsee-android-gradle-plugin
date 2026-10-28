@@ -48,6 +48,7 @@ class PluginPropertiesApplierTest {
         assertEquals(false, ext.failOnUploadError.get())
         assertEquals(true, ext.optimizeExtensionsLoading.get())
         assertEquals(true, ext.sdkAutoLoad.get())
+        assertEquals(true, ext.warnDebugOnlySdk.get())
         assertEquals(true, ext.buildInfo.enabled.get())
         // Optional module lanes default off (opt-in).
         assertEquals(false, ext.ndk.enabled.get())
@@ -389,6 +390,7 @@ class PluginPropertiesApplierTest {
             "plugin.feedback=true",
             "plugin.optimizeExtensionsLoading=false",
             "plugin.sdkAutoLoad=false",
+            "plugin.warnDebugOnlySdk=false",
             // ndk
             "plugin.ndk.enabled=true",
             "plugin.ndk.allBuildTypes=true",
@@ -439,6 +441,7 @@ class PluginPropertiesApplierTest {
         assertEquals(true, ext.feedback.get())
         assertEquals(false, ext.optimizeExtensionsLoading.get())
         assertEquals(false, ext.sdkAutoLoad.get())
+        assertEquals(false, ext.warnDebugOnlySdk.get())
         // ndk
         assertEquals(true, ext.ndk.enabled.get())
         assertEquals(true, ext.ndk.allBuildTypes.get())

@@ -537,6 +537,54 @@ class AutoAddScopeTest {
         }
     }
 
+    /** The Bugsee lines for a debug-only core pin, plus what was auto-added (must stay empty: the setting only gates the warning). */
+    private fun debugOnlyCoreRun(h: Harness): Pair<Set<String>, List<String>> {
+        h.declareOnCreating("debugImplementation", core)
+        h.project.extensions.add("android", Any())
+        var added = emptySet<String>()
+        val lines = captureOutput {
+            added = h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        return added to lines
+    }
+
+    @Test
+    fun warnDebugOnlySdkFalseInTheDslSilencesTheWarningWithoutChangingAutoAdd() {
+        val (added, lines) = debugOnlyCoreRun(Harness(null, declareCore = false) { warnDebugOnlySdk.set(false) })
+        assertEquals(emptySet<String>(), added)
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkFalseInBugseePropertiesSilencesTheWarning() {
+        val (added, lines) = debugOnlyCoreRun(Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false))
+        assertEquals(emptySet<String>(), added)
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkTrueStillWarns() {
+        val h = Harness("plugin.warnDebugOnlySdk=true\n", declareCore = false) { warnDebugOnlySdk.set(true) }
+        val (added, lines) = debugOnlyCoreRun(h)
+        assertEquals(emptySet<String>(), added)
+        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkDslWinsOverTheFile() {
+        val (_, lines) = debugOnlyCoreRun(
+            Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) { warnDebugOnlySdk.set(true) },
+        )
+        assertEquals(1, lines.size, lines.toString())
+    }
+
+    @Test
+    fun warnDebugOnlySdkFalseDoesNotSuppressTheCoreAutoAddWhenNothingIsDeclared() {
+        val h = Harness(null, declareCore = false) { warnDebugOnlySdk.set(false) }
+        assertEquals(setOf("bugsee-android"), h.autoAdded())
+    }
+
     @Test
     fun corePinOnANonDebugConfigurationAlongsideDebugDoesNotWarn() {
         for (other in listOf("implementation", "releaseImplementation", "compileOnly")) {
