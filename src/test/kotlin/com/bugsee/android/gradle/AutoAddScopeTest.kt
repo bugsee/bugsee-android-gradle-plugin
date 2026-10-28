@@ -437,6 +437,70 @@ class AutoAddScopeTest {
         assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded())
     }
 
+    // ── Core / extension presence is judged from production configurations (#124) ──
+
+    private val core = "com.bugsee:bugsee-android:$SDK_VERSION"
+
+    private fun Harness.declareOnCreating(configuration: String, coordinate: String) {
+        project.configurations.maybeCreate(configuration)
+        declareOn(configuration, coordinate)
+    }
+
+    @Test
+    fun testOnlyCorePinDoesNotSuppressCoreAutoAdd() {
+        for (conf in listOf("testImplementation", "androidTestImplementation", "testCompileOnly", "debugUnitTestImplementation")) {
+            val h = Harness(null, declareCore = false)
+            h.declareOnCreating(conf, core)
+            assertEquals(setOf("bugsee-android"), h.autoAdded(), conf)
+        }
+    }
+
+    @Test
+    fun productionCorePinIsNotAutoAddedAgain() {
+        for (conf in listOf("implementation", "api", "debugImplementation", "freeReleaseApi")) {
+            val h = Harness(null, declareCore = false)
+            h.declareOnCreating(conf, core)
+            assertEquals(emptySet<String>(), h.autoAdded(), conf)
+        }
+    }
+
+    @Test
+    fun testPinAlongsideProductionPinStillDefersToProduction() {
+        val h = Harness(null)
+        h.declareOnCreating("testImplementation", core)
+        assertEquals(emptySet<String>(), h.autoAdded())
+    }
+
+    /** compileOnly is the documented deferral: the app supplies the SDK at runtime. */
+    @Test
+    fun compileOnlyCorePinStillDefersTheAutoAdd() {
+        for (conf in listOf("compileOnly", "compileOnlyApi", "debugCompileOnly")) {
+            val h = Harness(null, declareCore = false)
+            h.declareOnCreating(conf, core)
+            assertEquals(emptySet<String>(), h.autoAdded(), conf)
+        }
+    }
+
+    @Test
+    fun testOnlyExtensionPinDoesNotSuppressExtensionAutoAdd() {
+        val h = Harness(null) { feedback.set(true) }
+        h.declareOnCreating("androidTestImplementation", "com.bugsee:bugsee-android-feedback:$SDK_VERSION")
+        assertEquals(setOf("bugsee-android-feedback"), h.autoAdded())
+    }
+
+    @Test
+    fun isSdkDeclarationConfigurationClassifiesNames() {
+        for (n in listOf("implementation", "api", "debugImplementation", "compileOnly", "compileOnlyApi", "debugCompileOnly")) {
+            assertTrue(DependencyDetector.isSdkDeclarationConfiguration(n), n)
+        }
+        for (n in listOf("testImplementation", "androidTestImplementation", "testCompileOnly", "debugUnitTestCompileOnly", "lintChecks", "kapt")) {
+            assertFalse(DependencyDetector.isSdkDeclarationConfiguration(n), n)
+        }
+        // A declared flavor named like a test word is production / compileOnly of that flavor.
+        assertTrue(DependencyDetector.isSdkDeclarationConfiguration("latestTestCompileOnly", setOf("latestTest")))
+        assertFalse(DependencyDetector.isSdkDeclarationConfiguration("testLatestTestCompileOnly", setOf("latestTest")))
+    }
+
     // ── Backward compatibility (no per-variant input) ───────────────
 
     /**

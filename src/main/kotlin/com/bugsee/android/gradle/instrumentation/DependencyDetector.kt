@@ -38,7 +38,10 @@ internal object DependencyDetector {
     // testFixturesApi). Not a substring match: a flavor named `testing` or `latest` stays production.
     private val TEST_WORD = Regex("(^test|Test)(?=[A-Z]|$)")
 
-    private val PRODUCTION_SUFFIX_TAIL = Regex("(Implementation|Api|RuntimeOnly)$")
+    private val PRODUCTION_SUFFIX_TAIL = Regex("(Implementation|Api|RuntimeOnly|CompileOnly|CompileOnlyApi)$")
+
+    // `compileOnly` / `compileOnlyApi` with any variant prefix (`debugCompileOnly`).
+    private val COMPILE_ONLY = Regex("^compileOnly(Api)?$|(CompileOnly|CompileOnlyApi)$")
 
     // A camelCase word `debug`/`Debug` (debugImplementation, freeDebugApi, debugCompilationImplementation).
     private val DEBUG_WORD = Regex("(^debug|Debug)(?=[A-Z]|$)")
@@ -91,6 +94,21 @@ internal object DependencyDetector {
         }
         if (debug == DebugConfigurations.EXCLUDE && DEBUG_WORD.containsMatchIn(name)) return false
         return !TEST_WORD.containsMatchIn(name) || isDeclaredVariantConfiguration(name, declaredNames)
+    }
+
+    /**
+     * Whether a dependency declared on a configuration named [name] means the app is supplying
+     * the Bugsee SDK itself, for the core / extension auto-add decision: a production
+     * configuration (see [isProductionConfiguration], `debug*` included) or a `compileOnly` /
+     * `compileOnlyApi` one (an intended deferral: the app provides the SDK at runtime). Test,
+     * androidTest, unitTest and testFixtures configurations never count; a test-only pin must
+     * not suppress the auto-add, since the release would then ship without the SDK. The same
+     * declared-name rule as [isProductionConfiguration] applies to flavors named like a test word.
+     */
+    fun isSdkDeclarationConfiguration(name: String, declaredNames: Set<String> = emptySet()): Boolean {
+        if (isProductionConfiguration(name, declaredNames)) return true
+        return COMPILE_ONLY.containsMatchIn(name) &&
+            (!TEST_WORD.containsMatchIn(name) || isDeclaredVariantConfiguration(name, declaredNames))
     }
 
     /**
