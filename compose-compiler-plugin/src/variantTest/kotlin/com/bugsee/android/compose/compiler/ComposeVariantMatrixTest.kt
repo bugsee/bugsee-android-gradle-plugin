@@ -295,6 +295,24 @@ class ComposeVariantMatrixTest {
                 ) { println("TextField(value=" + value + ", enabled=" + enabled + ")") }
                 """.trimIndent()
             )
+            // Pins the secure pass's `defaultKnownBare` exemption: this stand-in for an allowlisted
+            // field declares a NON-bare default, so only the exemption (not the visible-default check)
+            // lets the omitted `modifier` be rewritten. The real androidx fields all default to the
+            // bare Modifier, which a library callee's lazy IR cannot show.
+            File(appDir, "MaterialOutlined.kt").writeText(
+                """
+                package androidx.compose.material
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.text.input.VisualTransformation
+
+                val OutlinedDefault: Modifier = object : Modifier {}
+                @Composable fun OutlinedTextField(
+                    modifier: Modifier = OutlinedDefault,
+                    visualTransformation: VisualTransformation? = null
+                ) { println("OutlinedTextField(default=" + (modifier === OutlinedDefault) + ")") }
+                """.trimIndent()
+            )
             // The injected helpers PRINT, so running the output reports what was injected, where,
             // and with which argument — far stronger than finding the name in a constant pool.
             File(libDir, "BugseeRuntime.kt").writeText(
@@ -315,6 +333,7 @@ class ComposeVariantMatrixTest {
                 import androidx.compose.runtime.Composable
                 import androidx.compose.ui.Modifier
                 import androidx.compose.material.TextField
+import androidx.compose.material.OutlinedTextField
                 import androidx.compose.ui.text.input.PasswordVisualTransformation
                 import com.example.kit.LibButton
                 import com.example.kit.libHelper
@@ -365,6 +384,7 @@ class ComposeVariantMatrixTest {
                     Child(enabled = false)
                     ChildCustom()
                     TextField("pw", visualTransformation = PasswordVisualTransformation())
+                    OutlinedTextField(visualTransformation = PasswordVisualTransformation())
                     Holder().Member(Modifier, false)
                     TextField("secret", Modifier, true, PasswordVisualTransformation())
                     NullableChild(null, true)
@@ -398,6 +418,8 @@ class ComposeVariantMatrixTest {
             // Secure pass on an OMITTED modifier: the allowlisted text fields' default is the bare
             // Modifier, so it is still rewritten.
             "SECURE", "TextField(value=pw, enabled=true)",
+            // Allowlisted field with a non-bare default: the exemption still rewrites it (default replaced).
+            "SECURE", "OutlinedTextField(default=false)",
             "TAG:Screen", "Member(enabled=false)",
             "SECURE", "TextField(value=secret, enabled=true)",
             // No "TAG:Screen" here on purpose. The argument is a literal null, so the

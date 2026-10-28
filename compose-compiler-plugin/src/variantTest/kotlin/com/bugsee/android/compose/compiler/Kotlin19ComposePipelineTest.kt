@@ -7,7 +7,9 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * Kotlin 1.9 with the REAL Compose compiler plugin (issues #119 and #138).
+ * The REAL Compose compiler plugin on Kotlin 1.9 (issues #119 and #138) and on Kotlin 2.1, 2.2 and
+ * 2.4 (issue #146: an omitted `modifier` must keep the callee's own default; the 2.x rows run the
+ * Compose 1.5 runtime, which is enough for `Composer`).
  *
  * [ComposeVariantMatrixTest] cannot see this line's behaviour: its fixture uses stub Compose
  * artifacts, so no Compose lowering ever runs and every call site reaches the transform in its

@@ -610,10 +610,10 @@ the upload tasks skip with a single info-level message instead of failing or war
   and any site where Bugsee's plugin ends up BEHIND a legacy-registered Compose compiler (for example a
   hand-written `-Xplugin=` for it in `freeCompilerArgs`, or the Compose Multiplatform Gradle plugin
   applied before Bugsee, where the order follows plugin application order). The skip does not apply to
-  `bugseeSecure` on a password field that omits `modifier` (see the next item). None of these affect
+  `bugseeSecure` on a password field that omits `modifier` (see the previous item). None of these affect
   the build. With the Compose compiler bundled with Kotlin 2.x (modern registration) whether Bugsee's
   plugin runs ahead of Compose's decides whether omitted-`modifier` sites are seen at all, and the same
-  default-preserving rule applies (see the next item). Pinned by real-compiler, real-Compose tests that also execute the compiled call
+  default-preserving rule applies (see the previous item). Pinned by real-compiler, real-Compose tests that also execute the compiled call
   paths. The `k21` artifact now also requires the embeddable Kotlin compiler (the one Gradle uses) on
   Kotlin 1.9 to 2.1: a compiler with unshaded IntelliJ classes (the standalone `kotlinc`, some Bazel or
   Maven setups) fails with `AbstractMethodError`.
