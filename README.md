@@ -514,7 +514,7 @@ the upload tasks skip with a single info-level message instead of failing or war
   A `com.bugsee:bugsee-android` pin (an extension pin likewise suppresses only that extension's auto-add) on `implementation`, `api`,
   `runtimeOnly`, `debug*` and their flavor equivalents, or on `compileOnly` (the app
   supplies the SDK itself at runtime), suppresses the auto-add and sets the version used
-  for auto-added extensions (`compileOnly` pins only suppress); so does one on a custom
+  for auto-added extensions; so does one on a custom
   configuration those extend. A `debugImplementation`-only pin counts for every variant (the auto-add runs before
   variants exist), as does a pin only on a flavor or custom build type, so variants outside the pinned
   configuration may ship without the SDK (unless an extension pulls it in); for a debug-only pin that is the
@@ -524,7 +524,7 @@ the upload tasks skip with a single info-level message instead of failing or war
   `sdkAutoLoad=false` (which also disables every other auto-add). A `debug*` edge to an intermediate dependency
   project does not suppress the auto-add, but a direct `debug*` dependency on the SDK's own `:library` / `:stub`
   project does. Declare the core with `implementation` (or also `releaseImplementation`) to include it in release.
-  Test / androidTest-only pins never do, so the release still gets the SDK; the unit-test
+  A `compileOnly` core pin (not an extension one; `debugCompileOnly` and `compileOnlyApi` too, applying to every variant like `debugImplementation`) also sets that version, but only when no production core, dependency-project core or extension declaration does, so auto-added extensions follow the version the app compiles against instead of pulling a newer core; a pin below the floor is used as-is, like a production one. Test / androidTest-only pins neither suppress the auto-add nor set the version, so the release still gets the SDK; the unit-test
   classpath then also sees the auto-added dependency and Gradle's conflict resolution
   picks the version. Not detected: custom configurations wired only into a resolvable
   classpath (`releaseRuntimeClasspath.extendsFrom(...)`) and test-named KMP source sets, and a core pinned by a library that the app adds through a custom configuration.
@@ -655,7 +655,7 @@ Gradle log level:
 | `variant.<name>.plugin.<key>` for a global-only setting | `warn` | Ignored; use the root `plugin.<key>`. |
 | `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
 | Resolved `com.bugsee:*` modules on different versions (checked when the variant's runtime classpath resolves, so not on a configuration-cache hit; Maven modules only, project dependencies are not compared) | `warn`, once per variant | Mixed SDK releases can fail at runtime; the message lists each `group:name:version`. Never fails the build. |
-| Declared Bugsee SDK version (the core, or an extension when the core is not declared) older than the `initializeExtensions` floor while `optimizeExtensionsLoading` is on | `warn`, once per module | Extension providers are then left in the manifest (no strip); upgrade the SDK or turn the option off. |
+| Declared Bugsee SDK version (the core on a production configuration, else an extension, else a `compileOnly` core pin) older than the `initializeExtensions` floor while `optimizeExtensionsLoading` is on | `warn`, once per module | Extension providers are then left in the manifest (no strip); upgrade the SDK or turn the option off. |
 | Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |
 
 An empty root `app_token=` warns once, when the root token is actually consulted

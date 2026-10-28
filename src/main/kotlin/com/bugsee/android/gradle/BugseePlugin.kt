@@ -340,7 +340,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // (`initializeExtensions`) which only exists from a certain SDK release.
             // Same resolver as the auto-add, so gate and auto-added version cannot disagree.
             // Scope (#114): the app's own pins are read from production configurations only
-            // (debugImplementation counts; test / compileOnly do not). Accepted limit: a pin
+            // (debugImplementation counts; test never; compileOnly only as the last tier, #130). Accepted limit: a pin
             // only on a debug* edge toward a dependency project, or on a dependency project's own
             // debug* configuration, is not seen (null => strip), because counting it would instead
             // break the release auto-add. Also, app debug* pins count for every variant, so a
@@ -493,8 +493,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
 
         // Version shared by EVERY auto-added Bugsee module — core AND extensions. Prefer the
-        // version the consumer declared for the core SDK on a production configuration (test /
-        // compileOnly pins are not read, #114); otherwise the dynamic range
+        // version the consumer declared for the core SDK on a production configuration or, failing
+        // that, on `compileOnly` (#130; test pins are never read, #114); otherwise the dynamic range
         // floored at MIN_SDK_VERSION. Extensions are published under the SDK's version line, so
         // they must track the SDK version (never the plugin version — see autoAddModule).
         val inDeps = lazy { BugseeSdkDeclarations.inDependencyProjects(project) }
@@ -503,10 +503,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         // Auto-add the core Bugsee SDK if the consuming app has not declared one. If the user has
         // declared their own core dependency on a production configuration (`api`, variant configs,
-        // …) or `compileOnly`, defer to it rather than layering a dynamic dep on top. Presence is
-        // slightly broader than the version above: a compileOnly-only pin suppresses the auto-add
-        // (an intended deferral: the app supplies the SDK) but does not set the version used for
-        // auto-added extensions. Test / androidTest pins count for neither (#124). Opt-out via
+        // …) or `compileOnly`, defer to it rather than layering a dynamic dep on top. A
+        // compileOnly-only pin suppresses the auto-add (an intended deferral: the app supplies the
+        // SDK) AND, as the lowest-precedence tier of the version resolver, sets the version of
+        // auto-added extensions so they cannot pull a newer core transitively (#130). Test /
+        // androidTest pins count for neither (#124). Opt-out via
         // `bugsee { sdkAutoLoad.set(false) }`.
         var debugOnlyCore = false
         if (!isCoreSdkPresent(project, ignore, inDeps)) {

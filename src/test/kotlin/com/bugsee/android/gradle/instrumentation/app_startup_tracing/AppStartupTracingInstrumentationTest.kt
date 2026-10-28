@@ -106,6 +106,13 @@ class AppStartupTracingInstrumentationTest {
         org.junit.Assert.assertFalse(instrumentation.shouldApply(project, false, null))
     }
 
+    @Test fun `compileOnly-only too-old core pin refuses (#130)`() {
+        project.dependencies.add(project.configurations.maybeCreate("compileOnly").name, "com.bugsee:bugsee-android:6.5.0")
+        extension.startupTier.set(StartupTier.STANDARD)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertFalse(instrumentation.shouldApply(project, false, null))
+    }
+
     @Test fun `tier STANDARD with unparseable version still returns true`() {
         // Dynamic / range versions (e.g. `7.+`, version catalogs that
         // haven't resolved at config time) parse to null and the gate

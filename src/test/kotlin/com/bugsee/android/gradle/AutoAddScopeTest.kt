@@ -657,6 +657,40 @@ class AutoAddScopeTest {
         }
     }
 
+    /** #130: the deferral must not let an auto-added extension pull a newer core transitively. */
+    @Test
+    fun compileOnlyCorePinSetsTheExtensionVersion() {
+        // 7.9.0 is at or above and 6.5.0 below the MIN_SDK_VERSION floor: both are used as declared.
+        for ((conf, version) in listOf("compileOnly" to "7.9.0", "compileOnlyApi" to "6.5.0", "debugCompileOnly" to "6.5.0")) {
+            val h = Harness(null, declareCore = false) { feedback.set(true) }
+            h.declareOnCreating(conf, "com.bugsee:bugsee-android:$version")
+            val feedback = h.project.configurations.getByName("implementation").incoming.dependencies
+                .single { it.name == "bugsee-android-feedback" }
+            assertEquals(version, feedback.version, conf)
+            assertEquals(emptyList<String?>(), h.coreVersionsOnImplementation(), conf)
+        }
+    }
+
+    @Test
+    fun compileOnlyCorePinSetsTheOkHttpExtensionVersion() {
+        val h = Harness(null, declareCore = false)
+        h.declare("com.squareup.okhttp3:okhttp:4.12.0")
+        h.declareOnCreating("compileOnly", "com.bugsee:bugsee-android:6.5.0")
+        val okhttp = h.project.configurations.getByName("implementation").incoming.dependencies
+            .single { it.name == "bugsee-android-okhttp" }
+        assertEquals("6.5.0", okhttp.version)
+    }
+
+    @Test
+    fun productionCorePinWinsOverCompileOnlyForTheExtensionVersion() {
+        val h = Harness(null, declareCore = false) { feedback.set(true) }
+        h.declareOnCreating("compileOnly", "com.bugsee:bugsee-android:7.9.0")
+        h.declareOn("implementation", "com.bugsee:bugsee-android:7.2.0")
+        val feedback = h.project.configurations.getByName("implementation").incoming.dependencies
+            .single { it.name == "bugsee-android-feedback" }
+        assertEquals("7.2.0", feedback.version)
+    }
+
     @Test
     fun testOnlyExtensionPinDoesNotSuppressExtensionAutoAdd() {
         val h = Harness(null) { feedback.set(true) }

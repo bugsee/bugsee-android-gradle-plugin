@@ -20,7 +20,9 @@ import org.gradle.api.artifacts.ProjectDependency
  * dependency project (see [isProductionConfiguration]); the app's own
  * configurations are read by [declaredCoreSdkVersion] (tier 1) through the same predicate but
  * with `debug*` INCLUDED (and the configurations those extend), so a `debugImplementation`-only pin on the app counts while a
- * test / androidTest / `compileOnly` pin does not (#114).
+ * test / androidTest pin does not (#114). An app `compileOnly` core pin is read too, but only as a
+ * lower-precedence tier (#130): it defers the core auto-add (the app supplies the SDK), so the
+ * auto-added extensions must follow the version it pins.
  */
 internal object BugseeSdkDeclarations {
 
@@ -118,7 +120,14 @@ internal object BugseeSdkDeclarations {
      * 2. `bugsee-android` declared by a project [project] depends on (production
      *    configurations only, see [inDependencyProjects]);
      * 3. any `bugsee-android-*` extension declared on [project] (same configurations as tier 1);
-     * 4. any extension declared by a dependency project.
+     * 4. any extension declared by a dependency project;
+     * 5. `bugsee-android` declared on [project] only through `compileOnly` / `compileOnlyApi` (any
+     *    prefix, and the configurations those extend; see
+     *    [DependencyDetector.isSdkDeclarationConfiguration]; #130). Such a pin defers the core
+     *    auto-add (the app supplies the SDK at runtime), so when nothing on the runtime classpath
+     *    sets a version it is the one auto-added extensions must follow, rather than a newer core
+     *    pulled in transitively. It is the LAST tier: a production extension declaration puts a real
+     *    core on the runtime classpath, which is the better evidence. Test configurations stay out.
      *
      * A library's pin can therefore take the core BELOW MIN_SDK_VERSION, exactly as an
      * app-declared version can. [ignore] holds dependencies (by identity) the plugin
@@ -144,8 +153,30 @@ internal object BugseeSdkDeclarations {
             ?.let { return it }
         highestVersion(inDeps.value.filter { it.isCore }.mapNotNull { it.version })?.let { return it }
         highestVersion(own.mapNotNull { it.version })?.let { return it }
-        return highestVersion(inDeps.value.filter { !it.isCore }.mapNotNull { it.version })
+        highestVersion(inDeps.value.filter { !it.isCore }.mapNotNull { it.version })?.let { return it }
+        // Tier 5 (#130): a compileOnly-only core pin. Presence already counts it (the auto-add is
+        // deferred), so its version must set the extensions' version too; below MIN_SDK_VERSION it
+        // is used as-is, exactly like a production pin.
+        return highestVersion(compileOnlyCoreVersions(project, appNames, ignore))
     }
+
+    /** Core versions pinned on the app's `compileOnly`-style configurations (production ones were read by tier 1). */
+    private fun compileOnlyCoreVersions(project: Project, appNames: Set<String>, ignore: Set<Dependency>): List<String> =
+        project.configurations
+            .filter {
+                // The second test only drops production roots (tier 1 read them); a hierarchy
+                // member of a compileOnly root is kept by the flatMap below.
+                DependencyDetector.isSdkDeclarationConfiguration(it.name, appNames) &&
+                    !DependencyDetector.isProductionConfiguration(it.name, appNames)
+            }
+            .flatMap { it.hierarchy }
+            .distinct()
+            .flatMap { it.dependencies }
+            .filter { dep ->
+                ignore.none { it === dep } && dep.group == BUGSEE_GROUP && dep.name == CORE_ARTIFACT &&
+                    !dep.version.isNullOrBlank()
+            }
+            .mapNotNull { it.version }
 
     /**
      * Declaration configurations (of the app, or of a dependency project) that put a dependency on
