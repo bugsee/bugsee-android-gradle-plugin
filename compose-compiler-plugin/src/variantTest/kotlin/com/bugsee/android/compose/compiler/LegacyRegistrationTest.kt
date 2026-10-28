@@ -14,7 +14,7 @@ import java.util.zip.ZipFile
  * `CompilerPluginRegistrar` and the legacy `ComponentRegistrar`. What this pins:
  *
  *  - **Packaging.** Only the `k21` jar carries the legacy service file. `k22`/`k24` never run on a
- *    Kotlin 1.x compiler, and a legacy registrar class they do not ship must not be named in them.
+ *    Kotlin 1.9 compiler, and a legacy registrar class they do not ship must not be named in them.
  *  - **Exactly one registration per compiler line.** Every line `k21` serves loads both entry points;
  *    each must leave the IR extension to one of them or call sites are tagged twice. That is pinned by
  *    [ComposeVariantMatrixTest] (its fixture prints one `TAG:` per injected call and the whole output is

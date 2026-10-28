@@ -27,7 +27,7 @@ class BugseeComposeCompilerPluginRegistrar : CompilerPluginRegistrar() {
     override val supportsK2: Boolean = true
 
     override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
-        // Kotlin 1.x is served by BugseeComposeLegacyComponentRegistrar (k21 only), which can be
+        // Kotlin 1.9 is served by BugseeComposeLegacyComponentRegistrar (k21 only), which can be
         // ordered against a legacy-registered Compose compiler; registering here too would tag
         // every site twice. See BugseeComposeCompilerGeneration (issue #138).
         if (BugseeComposeCompilerGeneration.runningCompilerIsLegacy()) {

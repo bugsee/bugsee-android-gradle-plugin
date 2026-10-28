@@ -86,7 +86,7 @@ class BugseeComposeIrExtension(
      * When true, a call that OMITS `modifier` is only rewritten if the callee's declared default is
      * statically the bare `Modifier` companion. Injecting `Modifier.bugseeTag(..)` there makes the slot
      * a supplied argument, so the callee's own default (say `Modifier.fillMaxWidth()`) is never
-     * evaluated; that is only harmless when the default is the empty `Modifier`. Used by the Kotlin 1.x
+     * evaluated; that is only harmless when the default is the empty `Modifier`. Used by the Kotlin 1.9
      * legacy registration (issue #138), the path that now runs ahead of a legacy-registered Compose
      * compiler and so sees omitted slots as written.
      */

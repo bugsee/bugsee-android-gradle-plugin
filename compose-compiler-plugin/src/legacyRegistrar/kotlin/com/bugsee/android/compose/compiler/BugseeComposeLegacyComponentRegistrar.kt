@@ -9,7 +9,7 @@ import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.jetbrains.kotlin.config.CompilerConfiguration
 
 /**
- * Legacy-service registration of the Compose IR extension, for Kotlin **1.x** compilers only (the
+ * Legacy-service registration of the Compose IR extension, for Kotlin **1.9** compilers only (the
  * `k21` artifact; see [BugseeComposeCompilerGeneration] and issue #138).
  *
  * The androidx Compose compiler releases that register through `ComponentRegistrar` (verified: 1.5.15)

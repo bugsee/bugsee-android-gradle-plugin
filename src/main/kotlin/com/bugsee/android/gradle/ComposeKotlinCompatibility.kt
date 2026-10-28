@@ -23,7 +23,7 @@ package com.bugsee.android.gradle
  * The androidx Compose compiler 1.5.x releases that register through the legacy `ComponentRegistrar`
  * service (verified: 1.5.15; 1.5.0 does not) are run by the 1.9 compiler ahead of every
  * `CompilerPluginRegistrar`. The k21 artifact therefore registers
- * through `ComponentRegistrar` on a Kotlin 1.x compiler (and through `CompilerPluginRegistrar` only on
+ * through `ComponentRegistrar` on a Kotlin 1.9 compiler (and through `CompilerPluginRegistrar` only on
  * 2.0+, exactly one of the two per compiler), so its position follows the plugin classpath order.
  * Ahead of Compose it sees the call sites as written and tags a composable that omits `modifier`;
  * behind it, Compose's default-argument lowering has already turned every OMITTED `modifier` into a
