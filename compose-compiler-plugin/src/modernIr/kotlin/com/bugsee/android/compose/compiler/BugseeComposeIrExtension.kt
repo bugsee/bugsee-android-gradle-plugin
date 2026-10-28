@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrComposite
 import org.jetbrains.kotlin.ir.expressions.IrConst
 import org.jetbrains.kotlin.ir.expressions.IrExpression
+import org.jetbrains.kotlin.ir.expressions.IrGetObjectValue
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
@@ -54,6 +55,14 @@ import org.jetbrains.kotlin.name.Name
  *    CALLEE is itself `@Composable`: plain helpers that take a `Modifier` are
  *    left alone. Lets the runtime view-hierarchy walker map LayoutNodes back
  *    to source composable names.
+ *
+ *    When the call OMITS `modifier`, the slot is rewritten only if the callee's declared default is
+ *    statically visible and is the bare `Modifier` companion (issues #138, #146): the injected
+ *    `Modifier.bugseeTag(..)` would otherwise make the slot a supplied argument and silently drop the
+ *    callee's own default (`Modifier.fillMaxWidth()`) when this transform runs ahead of Compose's
+ *    default-argument lowering. Trade-off: omitted-`modifier` calls to a callee in another module
+ *    (default not visible) are untagged. Chaining onto the callee's default was rejected: a library
+ *    default is not available to the plugin and a same-module one may read other parameters.
  *
  * 2. **Secure-field injection** ([secureInjectionEnabled]) — detects calls
  *    to `TextField` / `OutlinedTextField` / `BasicTextField` from the
@@ -227,7 +236,7 @@ private class BugseeComposeTransformer(
         if (bugseeSecureFunction != null
                 && !shouldSkipForSecure(calleeFqName)
                 && isSensitiveTextFieldCall(calleeFqName, callee, result)) {
-            wrapModifierArg(result, modifierParamIndex, bugseeSecureFunction) { builder, _ ->
+            wrapModifierArg(result, modifierParamIndex, bugseeSecureFunction, defaultKnownBare = true) { builder, _ ->
                 // bugseeSecure() takes no value arguments — only the
                 // Modifier extension receiver.
             }
@@ -264,6 +273,11 @@ private class BugseeComposeTransformer(
      * was supplied (i.e. the user is relying on the default), inserts
      * `Modifier.<extensionFunction>(...)` as the new argument.
      *
+     * An omitted slot is rewritten only when the callee's default is the bare `Modifier`, which is
+     * either visible in IR or asserted by the caller through [defaultKnownBare] (the secure pass,
+     * whose allowlisted androidx text fields all declare `modifier: Modifier = Modifier`, so replacing the
+     * default loses nothing even though a library callee's declaration is not visible).
+     *
      * The optional [configureCall] block runs after the new IrCall is
      * built and is used to populate the extension function's value
      * arguments (e.g. the tag string for `bugseeTag`).
@@ -272,6 +286,7 @@ private class BugseeComposeTransformer(
         call: IrCall,
         modifierParamIndex: Int,
         extensionFunction: IrSimpleFunctionSymbol,
+        defaultKnownBare: Boolean = false,
         configureCall: (DeclarationIrBuilder, IrCall) -> Unit
     ) {
         val currentModifierArg = call.arguments.getOrNull(modifierParamIndex)
@@ -291,6 +306,20 @@ private class BugseeComposeTransformer(
         // that cannot tag anything. Sites where the argument is genuinely ABSENT (this
         // transform running first) are unaffected and still get the companion below.
         if (currentModifierArg != null && currentModifierArg.isDefaultedOrNullArgument()) {
+            return
+        }
+
+        // Omitted `modifier`: the injected chain would replace the callee's own default, so only
+        // proceed when that default is known to be the bare `Modifier` (issue #146; same guard as the
+        // Kotlin 1.9 path, #138). When this transform runs ahead of Compose's default-argument
+        // lowering, `Modifier.bugseeTag(..)` turns the omitted slot into a SUPPLIED argument and the
+        // callee's `Modifier.fillMaxWidth()` (or any non-bare default) is never evaluated. A default
+        // that is not statically visible (callee from another module: lazy IR has no default body)
+        // or is not the bare companion is skipped: an untagged site is recoverable, a silently
+        // dropped default modifier is not.
+        if (currentModifierArg == null && !defaultKnownBare &&
+            !call.symbol.owner.hasBareModifierDefault(modifierParamIndex)
+        ) {
             return
         }
 
@@ -317,6 +346,12 @@ private class BugseeComposeTransformer(
         }
 
         call.arguments[modifierParamIndex] = wrapped
+    }
+
+    /** Whether the parameter at [index] is declared with the bare `Modifier` companion as its default. */
+    private fun IrFunction.hasBareModifierDefault(index: Int): Boolean {
+        val default = parameters[index].defaultValue?.expression
+        return default is IrGetObjectValue && default.symbol == modifierCompanionSymbol
     }
 
     /**

@@ -62,8 +62,44 @@ class Kotlin19ComposePipelineTest {
         assertComposeFirst("1.9.22")
     }
 
-    private fun assertBugseeFirst(kotlin: String) {
-        val result = compileAndRun(kotlin, bugseeFirst = true)
+    // ---- Kotlin 2.x with the REAL Compose compiler (issue #146) ----
+    //
+    // Same fixture. Bugsee's rewrite of an OMITTED `modifier` makes the slot a supplied argument, so
+    // the callee's own default (`ChildCustom`'s marker) is lost. The guard from #138 now applies on
+    // the modern IR path too: only a statically visible bare-`Modifier` default is rewritten.
+
+    @Test
+    fun `Kotlin 2_1_0 with Bugsee first keeps custom callee defaults and still tags bare defaults`() {
+        assertBugseeFirst("2.1.0", "k21")
+    }
+
+    @Test
+    fun `Kotlin 2_2_0 with Bugsee first keeps custom callee defaults and still tags bare defaults`() {
+        assertBugseeFirst("2.2.0", "k22")
+    }
+
+    @Test
+    fun `Kotlin 2_4_0 with Bugsee first keeps custom callee defaults and still tags bare defaults`() {
+        assertBugseeFirst("2.4.0", "k24")
+    }
+
+    @Test
+    fun `Kotlin 2_1_0 with Compose first skips omitted modifier sites and runs clean`() {
+        assertComposeFirst("2.1.0", "k21")
+    }
+
+    @Test
+    fun `Kotlin 2_2_0 with Compose first skips omitted modifier sites and runs clean`() {
+        assertComposeFirst("2.2.0", "k22")
+    }
+
+    @Test
+    fun `Kotlin 2_4_0 with Compose first skips omitted modifier sites and runs clean`() {
+        assertComposeFirst("2.4.0", "k24")
+    }
+
+    private fun assertBugseeFirst(kotlin: String, variant: String = "k21") {
+        val result = compileAndRun(kotlin, bugseeFirst = true, variant = variant)
         assertEquals(
             "Kotlin $kotlin (bugsee-first): every site carries exactly one bugseeTag in the bytecode. " +
                 "A count of 4 for ProdDefault would mean the extension registered twice.",
@@ -86,8 +122,8 @@ class Kotlin19ComposePipelineTest {
         )
     }
 
-    private fun assertComposeFirst(kotlin: String) {
-        val result = compileAndRun(kotlin, bugseeFirst = false)
+    private fun assertComposeFirst(kotlin: String, variant: String = "k21") {
+        val result = compileAndRun(kotlin, bugseeFirst = false, variant = variant)
         assertEquals(
             "Kotlin $kotlin (compose-first): the omitted-modifier sites (ProdDefault) are DEFAULT_VALUE " +
                 "composites by the time Bugsee runs and are skipped; only the explicit site is tagged.",
@@ -115,18 +151,21 @@ class Kotlin19ComposePipelineTest {
         val received: Map<String, List<String>>,
     )
 
-    private fun compileAndRun(kotlin: String, bugseeFirst: Boolean): Result {
+    private fun compileAndRun(kotlin: String, bugseeFirst: Boolean, variant: String = "k21"): Result {
         val work = Files.createTempDirectory("bugsee-k19-compose-").toFile()
         try {
-            return compileAndRunIn(work, kotlin, bugseeFirst)
+            return compileAndRunIn(work, kotlin, bugseeFirst, variant)
         } finally {
             work.deleteRecursively()
         }
     }
 
-    private fun compileAndRunIn(work: File, kotlin: String, bugseeFirst: Boolean): Result {
-        val bugseeJar = requireProperty("bugsee.variantJar.k21")
-        val composeCompilerJar = requireProperty("bugsee.compose19.compilerPlugin")
+    private fun compileAndRunIn(work: File, kotlin: String, bugseeFirst: Boolean, variant: String): Result {
+        val bugseeJar = requireProperty("bugsee.variantJar.$variant")
+        val modern = !kotlin.startsWith("1.")
+        val composeCompilerJar = requireProperty(
+            if (modern) "bugsee.compose2.compilerPlugin.$kotlin" else "bugsee.compose19.compilerPlugin"
+        )
         val composeRuntimeJar = requireProperty("bugsee.compose19.runtime")
         val compilerClasspath = requireProperty("bugsee.kotlinClasspath.$kotlin")
         val java = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
@@ -170,10 +209,10 @@ class Kotlin19ComposePipelineTest {
 
         // A composable from ANOTHER module: compiled by the Compose compiler alone (no Bugsee), so the
         // app sees an already-lowered library whose default for `modifier` it cannot inspect.
-        val composeArgs = listOf(
-            "-Xplugin=$composeCompilerJar",
+        val versionCheckArgs = if (modern) emptyList() else listOf(
             "-P", "plugin:androidx.compose.compiler.plugins.kotlin:suppressKotlinVersionCompatibilityCheck=true",
         )
+        val composeArgs = listOf("-Xplugin=$composeCompilerJar") + versionCheckArgs
         val lib2Src = File(work, "lib2-src").apply { mkdirs() }
         File(lib2Src, "LibChild.kt").writeText(
             """
@@ -267,8 +306,7 @@ class Kotlin19ComposePipelineTest {
         val plugins = if (bugseeFirst) listOf(bugseeJar, composeCompilerJar) else listOf(composeCompilerJar, bugseeJar)
         compile(
             kotlin, java, compilerClasspath,
-            plugins.map { "-Xplugin=$it" } + listOf(
-                "-P", "plugin:androidx.compose.compiler.plugins.kotlin:suppressKotlinVersionCompatibilityCheck=true",
+            plugins.map { "-Xplugin=$it" } + versionCheckArgs + listOf(
                 "-P", "plugin:${BugseeComposeCommandLineProcessor.PLUGIN_ID}:${BugseeComposeCommandLineProcessor.OPTION_ENABLED}=true",
             ),
             appSrc, appOut,

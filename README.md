@@ -578,6 +578,21 @@ the upload tasks skip with a single info-level message instead of failing or war
   `Modifier` (`fun describe(m: Modifier)`) is left alone, including its default when the argument is
   omitted. (Invoking a `@Composable` function-type value, `content(Modifier)`, was never tagged.)
   The `bugseeSecure` pass targets a fixed list of androidx text-field callees and is unaffected.
+- **Omitted `modifier` keeps the callee's own default (all Kotlin lines).** When a call omits `modifier`
+  and Bugsee's transform runs before Compose's default-argument lowering, an injected
+  `Modifier.bugseeTag(..)` would turn the omitted slot into a supplied argument, so a callee declared
+  `modifier: Modifier = Modifier.fillMaxWidth()` would silently lose that default. An omitted `modifier`
+  is therefore tagged only when the callee's default is visible in the module being compiled and is the
+  bare `Modifier` (`modifier: Modifier = Modifier`). **Trade-off:** an omitted-`modifier` call to a
+  composable from ANOTHER module (a library or a UI kit, whose default is not visible to the compiler
+  plugin) or to one with any other default is left untagged on Kotlin 2.x too; calls that pass a
+  `modifier` explicitly are tagged as before. An untagged site only affects the view-hierarchy naming,
+  a dropped default would change the layout. The `bugseeSecure` pass is exempt for its fixed list of
+  androidx text fields, whose default is the bare `Modifier`, so an omitted `modifier` on a password
+  field is still marked. Chaining the tag onto the callee's own default instead was evaluated and
+  rejected: a library callee's default expression is not available to the compiler plugin, and a
+  same-module one can read the callee's other parameters. Pinned on Kotlin 2.1, 2.2 and 2.4 by
+  real-Compose-compiler tests that execute the compiled call paths, and in a real AGP consumer.
 - **Compose on Kotlin 1.9.** Composable calls that omit `modifier` are tagged as well as the explicit
   ones, when the callee is declared in the same module with the plain `Modifier` default
   (`modifier: Modifier = Modifier`). A Compose compiler release that registers through the legacy
@@ -594,11 +609,11 @@ the upload tasks skip with a single info-level message instead of failing or war
   `modifier` sites on 1.9, where it used to tag library ones too and silently drop their defaults);
   and any site where Bugsee's plugin ends up BEHIND a legacy-registered Compose compiler (for example a
   hand-written `-Xplugin=` for it in `freeCompilerArgs`, or the Compose Multiplatform Gradle plugin
-  applied before Bugsee, where the order follows plugin application order). The same skip applies
-  to `bugseeSecure` on a password field that omits `modifier`; the runtime
-  `SemanticsProperties.Password` fallback still protects it. None of these affect the build. With the Compose compiler bundled with
-  Kotlin 2.x (modern registration) the outcome is unchanged and depends on whether Bugsee's plugin runs
-  ahead of Compose's. Pinned by real-compiler, real-Compose tests that also execute the compiled call
+  applied before Bugsee, where the order follows plugin application order). The skip does not apply to
+  `bugseeSecure` on a password field that omits `modifier` (see the next item). None of these affect
+  the build. With the Compose compiler bundled with Kotlin 2.x (modern registration) whether Bugsee's
+  plugin runs ahead of Compose's decides whether omitted-`modifier` sites are seen at all, and the same
+  default-preserving rule applies (see the next item). Pinned by real-compiler, real-Compose tests that also execute the compiled call
   paths. The `k21` artifact now also requires the embeddable Kotlin compiler (the one Gradle uses) on
   Kotlin 1.9 to 2.1: a compiler with unshaded IntelliJ classes (the standalone `kotlinc`, some Bazel or
   Maven setups) fails with `AbstractMethodError`.
