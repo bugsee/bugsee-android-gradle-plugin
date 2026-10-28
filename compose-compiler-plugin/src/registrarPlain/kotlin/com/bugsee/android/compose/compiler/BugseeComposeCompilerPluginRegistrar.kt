@@ -27,6 +27,13 @@ class BugseeComposeCompilerPluginRegistrar : CompilerPluginRegistrar() {
     override val supportsK2: Boolean = true
 
     override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
+        // Kotlin 1.x is served by BugseeComposeLegacyComponentRegistrar (k21 only), which can be
+        // ordered against a legacy-registered Compose compiler; registering here too would tag
+        // every site twice. See BugseeComposeCompilerGeneration (issue #138).
+        if (BugseeComposeCompilerGeneration.runningCompilerIsLegacy()) {
+            return
+        }
+
         // Both subfeatures default to true when the option is not set —
         // matches the gradle plugin's "default to enabled when not
         // explicitly disabled" semantics.

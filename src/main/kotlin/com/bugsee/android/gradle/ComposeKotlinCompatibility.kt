@@ -18,18 +18,22 @@ package com.bugsee.android.gradle
  * | 2.4         | `bugsee-compose-compiler-plugin-k24`  | 2.4 moved registration to `ExtensionPointDescriptor` and removed `valueParameters` |
  * | 2.5+, 3.x   | none — instrumentation stands down    | unverified; Kotlin moves these APIs with no deprecation cycle |
  *
- * ### Kotlin 1.9: limited, not unsupported
+ * ### Kotlin 1.9: registration order decides omitted-`modifier` tagging
  *
- * The plugin loads and rewrites on 1.9 (verified through 1.9.25 with Compose compiler 1.5.15 by
- * `Kotlin19ComposePipelineTest`), but with a Compose compiler that registers through the legacy
- * `ComponentRegistrar` service (verified: 1.5.15; 1.5.0 does not, and with it omitted-`modifier` sites
- * were tagged when Bugsee ran first) only call sites that pass `modifier` explicitly are tagged. Such
- * registrations are run by the 1.9 compiler ahead of
- * any `CompilerPluginRegistrar` such as ours, so
- * Compose's default-argument lowering has already turned every OMITTED `modifier` into a
- * `DEFAULT_VALUE` composite when we see it; we skip those on purpose because the callee's
- * `$default` fixup would overwrite anything injected there (issue #119). One option for lifting this is to
- * change how the artifact registers; that is tracked separately (#138) rather than done here.
+ * The androidx Compose compiler 1.5.x releases that register through the legacy `ComponentRegistrar`
+ * service (verified: 1.5.15; 1.5.0 does not) are run by the 1.9 compiler ahead of every
+ * `CompilerPluginRegistrar`. The k21 artifact therefore registers
+ * through `ComponentRegistrar` on a Kotlin 1.x compiler (and through `CompilerPluginRegistrar` only on
+ * 2.0+, exactly one of the two per compiler), so its position follows the plugin classpath order.
+ * Ahead of Compose it sees the call sites as written and tags a composable that omits `modifier`;
+ * behind it, Compose's default-argument lowering has already turned every OMITTED `modifier` into a
+ * `DEFAULT_VALUE` composite, which we skip on purpose because the callee's `$default` fixup would
+ * overwrite anything injected there (issues #119, #138). On this path an omitted `modifier` is also only
+ * rewritten when the callee's own default is the bare `Modifier`, since the injected chain replaces it.
+ * The Kotlin Gradle plugin lists our artifact
+ * ahead of the Compose compiler AGP adds (`ComposePluginOrderTest`), so the first case is the normal one.
+ * Verified through 1.9.25 with Compose compiler 1.5.15 by `Kotlin19ComposePipelineTest`, which executes
+ * the compiled call paths under the JVM verifier in both orders.
  *
  * Strict on anything unrecognised. The guarded failure is an unrecoverable abort of the consumer's
  * build, so an unverified or undeterminable version must not be assumed safe — the opposite of the
@@ -57,7 +61,7 @@ internal object ComposeKotlinCompatibility {
         val (major, minor) = parsed
         val suffix = when {
             // 1.9 and older predate the IR changes entirely; verified on 1.9.22 and 1.9.25 (see the KDoc:
-            // tagging is limited to explicit-modifier call sites with the real Compose 1.5 compiler).
+            // registration order decides omitted-modifier tagging with the real Compose 1.5 compiler).
             major < SUPPORTED_MAJOR -> ""
             major > SUPPORTED_MAJOR -> return null
             minor <= 1 -> ""

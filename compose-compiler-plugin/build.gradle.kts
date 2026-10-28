@@ -32,7 +32,10 @@ repositories {
 // `composeVariants` below, from the same shared sources with a different IR source set.
 sourceSets {
     main {
-        java.srcDirs("src/legacyIr/kotlin", "src/registrarPlain/kotlin")
+        java.srcDirs("src/legacyIr/kotlin", "src/registrarPlain/kotlin", "src/legacyRegistrar/kotlin")
+        // The legacy ComponentRegistrar service file is k21-only: the k22/k24 variants never run on a
+        // Kotlin 1.x compiler and their jars take just `src/main/resources`.
+        resources.srcDirs("src/legacyRegistrar/resources")
     }
 }
 
@@ -432,6 +435,26 @@ publishing {
             }
         }
     }
+}
+
+// Local Maven repo the ROOT project's integrationTest fixtures resolve these artifacts from (the
+// Compose pipeline fixtures: the Kotlin Gradle plugin adds the artifact to the compilation's plugin
+// classpath exactly as for a real consumer). Wiped before every publish so a stale SNAPSHOT build can
+// never be picked up. The root build refers to this directory by path only.
+val integrationTestComposeRepoDir = layout.buildDirectory.dir("integrationTest/compose-plugin-repo")
+publishing {
+    repositories {
+        maven {
+            name = "IntegrationTest"
+            url = uri(integrationTestComposeRepoDir)
+        }
+    }
+}
+val cleanIntegrationTestComposeRepo by tasks.registering(Delete::class) {
+    delete(integrationTestComposeRepoDir)
+}
+tasks.withType<PublishToMavenRepository>().configureEach {
+    if (name.endsWith("ToIntegrationTestRepository")) dependsOn(cleanIntegrationTestComposeRepo)
 }
 
 // Same in-memory key path as the root build (see there). This project configures

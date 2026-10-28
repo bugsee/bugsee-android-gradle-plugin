@@ -15,6 +15,7 @@ import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrComposite
 import org.jetbrains.kotlin.ir.expressions.IrConst
 import org.jetbrains.kotlin.ir.expressions.IrExpression
+import org.jetbrains.kotlin.ir.expressions.IrGetObjectValue
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
@@ -80,7 +81,16 @@ import org.jetbrains.kotlin.name.Name
  */
 class BugseeComposeIrExtension(
     private val tagInjectionEnabled: Boolean,
-    private val secureInjectionEnabled: Boolean
+    private val secureInjectionEnabled: Boolean,
+    /**
+     * When true, a call that OMITS `modifier` is only rewritten if the callee's declared default is
+     * statically the bare `Modifier` companion. Injecting `Modifier.bugseeTag(..)` there makes the slot
+     * a supplied argument, so the callee's own default (say `Modifier.fillMaxWidth()`) is never
+     * evaluated; that is only harmless when the default is the empty `Modifier`. Used by the Kotlin 1.x
+     * legacy registration (issue #138), the path that now runs ahead of a legacy-registered Compose
+     * compiler and so sees omitted slots as written.
+     */
+    private val injectOnlyOverBareModifierDefault: Boolean = false
 ) : IrGenerationExtension {
 
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
@@ -138,7 +148,8 @@ class BugseeComposeIrExtension(
                 bugseeSecureFunction = bugseeSecureFunction,
                 modifierClass = modifierClass,
                 modifierCompanionSymbol = modifierCompanion.symbol,
-                composableAnnotation = COMPOSABLE_ANNOTATION
+                composableAnnotation = COMPOSABLE_ANNOTATION,
+                injectOnlyOverBareModifierDefault = injectOnlyOverBareModifierDefault
             ),
             null
         )
@@ -156,7 +167,8 @@ private class BugseeComposeTransformer(
     private val bugseeSecureFunction: IrSimpleFunctionSymbol?,
     private val modifierClass: IrClassSymbol,
     private val modifierCompanionSymbol: IrClassSymbol,
-    private val composableAnnotation: FqName
+    private val composableAnnotation: FqName,
+    private val injectOnlyOverBareModifierDefault: Boolean
 ) : IrElementTransformerVoidWithContext() {
 
     /** Stack of enclosing composable function names. */
@@ -265,6 +277,16 @@ private class BugseeComposeTransformer(
             return
         }
 
+        // Omitted `modifier`: the injected chain would replace the callee's own default, so only
+        // proceed when that default is known to be the bare `Modifier` (see the constructor KDoc).
+        // A default we cannot see (callee from another module) or that is anything else is skipped:
+        // an untagged site is recoverable, a silently dropped default modifier is not.
+        if (currentModifierArg == null && injectOnlyOverBareModifierDefault &&
+            !call.symbol.owner.hasBareModifierDefault(modifierParamIndex)
+        ) {
+            return
+        }
+
         val builder = DeclarationIrBuilder(
             pluginContext, call.symbol, call.startOffset, call.endOffset
         )
@@ -285,6 +307,12 @@ private class BugseeComposeTransformer(
         }
 
         call.putValueArgument(modifierParamIndex, wrapped)
+    }
+
+    /** Whether the parameter at [index] is declared with the bare `Modifier` companion as its default. */
+    private fun IrFunction.hasBareModifierDefault(index: Int): Boolean {
+        val default = valueParameters[index].defaultValue?.expression
+        return default is IrGetObjectValue && default.symbol == modifierCompanionSymbol
     }
 
     /**
