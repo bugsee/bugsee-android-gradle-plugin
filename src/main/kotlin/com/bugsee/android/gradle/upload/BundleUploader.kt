@@ -447,6 +447,8 @@ internal object BundleUploader {
         logger: Logger,
         debug: Boolean,
     ) {
+        // A cancelled build (e.g. after a failed artifact PUT) must not start the auxiliary uploads.
+        HttpRetry.throwIfInterrupted()
         if (shouldAttemptBundle(
                 buildInfoUploadEndpoint = buildInfoUploadEndpoint,
                 legacyBuildInfoGzip = legacyBuildInfoGzip,
