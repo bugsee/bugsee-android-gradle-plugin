@@ -20,9 +20,9 @@ import java.nio.file.Files
  *    Compose had lowered threw `NoSuchFieldError` and aborted the consumer's compilation.
  *    The check is now by origin name.
  *
- * 2. **Only explicit-`modifier` call sites are tagged.** Compose 1.5.x registers through the legacy
- *    `ComponentRegistrar` service, which this compiler runs AHEAD of any `CompilerPluginRegistrar`
- *    such as Bugsee's, whatever the `-Xplugin` order. Compose's default-argument lowering has
+ * 2. **Only explicit-`modifier` call sites are tagged.** Compose compiler 1.5.15 registers through the
+ *    legacy `ComponentRegistrar` service (1.5.0 does not), which this compiler runs AHEAD of any
+ *    `CompilerPluginRegistrar` such as Bugsee's, whatever the `-Xplugin` order. Compose's default-argument lowering has
  *    therefore already rewritten every omitted `modifier` into a `DEFAULT_VALUE` composite by the
  *    time Bugsee sees it, and the transform skips those on purpose (the callee's `$default` fixup
  *    overwrites the slot, so a tag injected there would be dead code). From Kotlin 2.0 the Compose
@@ -101,8 +101,10 @@ class Kotlin19ComposePipelineTest {
         )
 
         val javap = File(File(System.getProperty("java.home"), "bin"), "javap").absolutePath
-        val dump = ProcessBuilder(javap, "-c", "-p", File(appOut, "com/example/app/ProdKt.class").absolutePath)
-            .redirectErrorStream(true).start().inputStream.bufferedReader().readText()
+        val javapProcess = ProcessBuilder(javap, "-c", "-p", File(appOut, "com/example/app/ProdKt.class").absolutePath)
+            .redirectErrorStream(true).start()
+        val dump = javapProcess.inputStream.bufferedReader().readText()
+        assertEquals("javap failed:\n$dump", 0, javapProcess.waitFor())
         val counts = linkedMapOf("ProdDefault" to 0, "ProdExplicit" to 0)
         var current: String? = null
         for (line in dump.lines()) {
@@ -153,6 +155,6 @@ class Kotlin19ComposePipelineTest {
         const val KOTLIN = "1.9.25"
 
         /** A javap method header, e.g. `  public static final void ProdDefault(...);`. */
-        val METHOD_HEADER = Regex("""^\s{2}(?:\w+\s+)*?(\w+)\(.*\)\s*(?:throws .*)?;$""")
+        val METHOD_HEADER = Regex("""^\s{2}\S[^(]*?\b([\w$]+)\(.*;$""")
     }
 }

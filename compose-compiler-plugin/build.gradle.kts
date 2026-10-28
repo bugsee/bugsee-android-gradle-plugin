@@ -240,7 +240,7 @@ val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
 }
 
 // The REAL Compose pipeline for Kotlin 1.9 (issue #119): the 1.9 line pairs with the androidx Compose
-// compiler 1.5.x, which is a legacy `ComponentRegistrar` plugin, and the stub fixtures above never
+// compiler 1.5.x (1.5.15 is a legacy `ComponentRegistrar` plugin), and the stub fixtures above never
 // run a Compose lowering at all. 1.5.15 is the release for Kotlin 1.9.25; its runtime is needed only
 // so the compiler can resolve `Composer`. Non-transitive: the compiler classpath is the matrix one.
 val compose19Compiler by configurations.creating {
@@ -304,6 +304,8 @@ val composeVariantMatrix by tasks.registering(Test::class) {
             "-Dbugsee.compose19.runtime=${compose19Runtime.singleFile.absolutePath}",
         )
     })
+
+    inputs.property("compose19Coordinates", "compiler:1.5.15,runtime-desktop:1.6.11")
 
     // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
     // is no need to hash ~400 MB of compiler distributions on every up-to-date check.

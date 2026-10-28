@@ -18,17 +18,17 @@ package com.bugsee.android.gradle
  * | 2.4         | `bugsee-compose-compiler-plugin-k24`  | 2.4 moved registration to `ExtensionPointDescriptor` and removed `valueParameters` |
  * | 2.5+, 3.x   | none — instrumentation stands down    | unverified; Kotlin moves these APIs with no deprecation cycle |
  *
- * ### Kotlin 1.9 and older: limited, not unsupported
+ * ### Kotlin 1.9: limited, not unsupported
  *
  * The plugin loads and rewrites on 1.9 (verified through 1.9.25 with Compose compiler 1.5.15 by
  * `Kotlin19ComposePipelineTest`), but with a real Compose compiler only call sites that pass
- * `modifier` explicitly are tagged. Compose 1.5.x registers through the legacy `ComponentRegistrar`
- * service, which the 1.9 compiler runs ahead of any `CompilerPluginRegistrar` such as ours, so
+ * `modifier` explicitly are tagged. Compose compiler releases that register through the legacy
+ * `ComponentRegistrar` service (verified: 1.5.15; 1.5.0 does not) are run by the 1.9 compiler ahead of
+ * any `CompilerPluginRegistrar` such as ours, so
  * Compose's default-argument lowering has already turned every OMITTED `modifier` into a
  * `DEFAULT_VALUE` composite when we see it; we skip those on purpose because the callee's
- * `$default` fixup would overwrite anything injected there (issue #119). Lifting this would need the
- * plugin to also be registered through `ComponentRegistrar` (a change to the artifact, so it is
- * tracked separately rather than done here).
+ * `$default` fixup would overwrite anything injected there (issue #119). One option for lifting this is to
+ * change how the artifact registers; that is tracked separately (#138) rather than done here.
  *
  * Strict on anything unrecognised. The guarded failure is an unrecoverable abort of the consumer's
  * build, so an unverified or undeterminable version must not be assumed safe — the opposite of the
