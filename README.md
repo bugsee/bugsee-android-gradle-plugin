@@ -515,7 +515,13 @@ the upload tasks skip with a single info-level message instead of failing or war
   `runtimeOnly`, `debug*` and their flavor equivalents, or on `compileOnly` (the app
   supplies the SDK itself at runtime), suppresses the auto-add and sets the version used
   for auto-added extensions (`compileOnly` pins only suppress); so does one on a custom
-  configuration those extend. A `debugImplementation`-only pin counts for every variant.
+  configuration those extend. A `debugImplementation`-only pin counts for every variant (the auto-add runs before
+  variants exist), as does a pin only on a flavor or custom build type. Release builds then ship without the SDK
+  (unless an extension pulls it in), the intended choice for debug-only setups. The plugin logs a warning when the
+  core is declared only on `debug*`; it stays silent when an extension is added or declared outside `debug*` or the
+  app has any non-debug project dependency (its module may supply the core), and `sdkAutoLoad=false` silences it
+  too (but disables every other auto-add). A `debug*` edge to a dependency project does not suppress the auto-add.
+  Declare the core with `implementation` (or also `releaseImplementation`) to include it in release.
   Test / androidTest-only pins never do, so the release still gets the SDK; the unit-test
   classpath then also sees the auto-added dependency and Gradle's conflict resolution
   picks the version. Not detected: custom configurations wired only into a resolvable

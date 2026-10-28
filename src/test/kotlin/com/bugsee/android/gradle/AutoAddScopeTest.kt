@@ -522,6 +522,91 @@ class AutoAddScopeTest {
         }
     }
 
+    /** #129: a debug-only core pin keeps suppressing the auto-add (deliberate debug-only SDK) but is warned about. */
+    @Test
+    fun debugOnlyCorePinWarnsOnceAndStaysDeferred() {
+        for (conf in listOf("debugImplementation", "freeDebugApi", "debugCompileOnly")) {
+            val h = Harness(null, declareCore = false)
+            h.declareOnCreating(conf, core)
+            h.project.extensions.add("android", Any())
+            val lines = captureOutput {
+                assertEquals(emptySet<String>(), h.autoAdded(), conf)
+                (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+            }.filter { it.startsWith("Bugsee:") }
+            assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines, conf)
+        }
+    }
+
+    @Test
+    fun corePinOnANonDebugConfigurationAlongsideDebugDoesNotWarn() {
+        for (other in listOf("implementation", "releaseImplementation", "compileOnly")) {
+            val h = Harness(null, declareCore = false)
+            h.declareOnCreating("debugImplementation", core)
+            h.declareOnCreating(other, core)
+            h.project.extensions.add("android", Any())
+            val lines = captureOutput {
+                h.autoAdded()
+                (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+            }.filter { it.startsWith("Bugsee:") }
+            assertEquals(emptyList<String>(), lines, other)
+        }
+    }
+
+    @Test
+    fun debugOnlyCorePinDoesNotWarnWhenAnExtensionIsAutoAdded() {
+        val h = Harness(null, declareCore = false)
+        h.declareOnCreating("debugImplementation", core)
+        h.declareOnCreating("implementation", "com.squareup.okhttp3:okhttp:4.12.0")
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded())
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun debugOnlyCorePinDoesNotWarnWithUserExtensionOrSdkAutoLoadOff() {
+        val ext = Harness(null, declareCore = false)
+        ext.declareOnCreating("debugImplementation", core)
+        ext.declareOnCreating("implementation", "com.bugsee:bugsee-android-okhttp:$SDK_VERSION")
+        ext.project.extensions.add("android", Any())
+        val extLines = captureOutput {
+            ext.autoAdded()
+            (ext.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), extLines)
+
+        val off = Harness(null, declareCore = false) { sdkAutoLoad.set(false) }
+        off.declareOnCreating("debugImplementation", core)
+        off.project.extensions.add("android", Any())
+        val offLines = captureOutput {
+            off.autoAdded()
+            (off.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), offLines)
+    }
+
+    @Test
+    fun debugOnlyCorePinDoesNotWarnWithANonDebugProjectDependency() {
+        val h = Harness(null, declareCore = false)
+        h.declareOnCreating("debugImplementation", core)
+        org.gradle.testfixtures.ProjectBuilder.builder().withName("lib").withParent(h.project).build()
+        h.project.dependencies.add("implementation", h.project.dependencies.project(mapOf("path" to ":lib")))
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun isDebugConfigurationMatchesCamelCaseWordOnly() {
+        for (n in listOf("debugImplementation", "freeDebugApi")) assertTrue(DependencyDetector.isDebugConfiguration(n), n)
+        for (n in listOf("implementation", "debuggerImplementation", "releaseApi")) assertFalse(DependencyDetector.isDebugConfiguration(n), n)
+    }
+
     @Test
     fun testPinAlongsideProductionPinStillDefersToProduction() {
         val h = Harness(null, declareCore = false)

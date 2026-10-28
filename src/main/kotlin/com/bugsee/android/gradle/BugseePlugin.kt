@@ -508,10 +508,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // (an intended deferral: the app supplies the SDK) but does not set the version used for
         // auto-added extensions. Test / androidTest pins count for neither (#124). Opt-out via
         // `bugsee { sdkAutoLoad.set(false) }`.
+        var debugOnlyCore = false
         if (!isCoreSdkPresent(project, ignore, inDeps)) {
             if (isDebug) notes.add("Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion")
             out.add(project.dependencies.create("com.bugsee:bugsee-android:$sdkVersion"))
-        }
+        } else debugOnlyCore = !isCoreSdkPresent(project, ignore, inDeps, includeDebug = false)
 
         // Optional SDK modules driven by user opt-in via `bugsee { ndk { enabled.set(true) };
         // feedback(true) }`. The NDK runtime is added when NDK is enabled globally or in any
@@ -534,6 +535,20 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
         if (hasCronetDependency(project) && inputs.cronet) {
             autoAddModule(project, out, "bugsee-android-cronet", "cronet", isDebug, sdkVersion, ignore, notes)
+        }
+        // Core present only through `debug*` (#129): kept as a deliberate deferral (an app may ship
+        // the SDK in debug builds only) but surfaced. Conservatively skipped (no false claim that
+        // release lacks the SDK) when an extension is auto-added or declared outside `debug*`
+        // (extensions depend on the core; a `compileOnly` one also silences it, accepted), or when
+        // the app has any non-debug project dependency: its module may supply the core, and under
+        // Isolated Projects other modules cannot be inspected.
+        if (debugOnlyCore && out.isEmpty() &&
+            sdkDeclarationDependencies(project, includeDebug = false).none {
+                it is ProjectDependency ||
+                    (!isIgnored(ignore, it) && BugseeSdkDeclarations.isSdkModule(it.group, it.name))
+            }
+        ) {
+            notes.add(debugOnlyCoreWarning(project.path))
         }
         return AutoAddResult(inputs, out, notes)
     }
@@ -1715,8 +1730,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         project: Project,
         ignore: Set<Dependency> = emptySet(),
         inDeps: Lazy<List<BugseeSdkDeclarations.Declaration>> = lazy { BugseeSdkDeclarations.inDependencyProjects(project) },
+        includeDebug: Boolean = true,
     ): Boolean {
-        return sdkDeclarationDependencies(project).any { dep ->
+        return sdkDeclarationDependencies(project, includeDebug).any { dep ->
             !isIgnored(ignore, dep) && (isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep))
         } || inDeps.value.any { it.isCore && it.exposed }
         // ^ A core declared by a project this one depends on counts only when it is
@@ -1873,14 +1889,24 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
          * counts. Test configurations extend `implementation`, never the reverse, so test-only
          * pins stay out (#124).
          */
-        internal fun sdkDeclarationDependencies(project: Project): Sequence<Dependency> {
+        internal fun sdkDeclarationDependencies(project: Project, includeDebug: Boolean = true): Sequence<Dependency> {
             val declared = DependencyDetector.declaredVariantNames(project)
             return project.configurations.asSequence()
                 .filter { DependencyDetector.isSdkDeclarationConfiguration(it.name, declared) }
+                .filter { includeDebug || !DependencyDetector.isDebugConfiguration(it.name) }
                 .flatMap { it.hierarchy.asSequence() }
                 .distinct()
                 .flatMap { it.dependencies.asSequence() }
         }
+
+        /**
+         * Shown when the core SDK is declared only on `debug*` configurations (#129): that pin
+         * suppresses the auto-add for every variant, so release builds ship without the SDK.
+         */
+        internal fun debugOnlyCoreWarning(projectPath: String): String =
+            "Bugsee: $BUGSEE_GROUP:bugsee-android is declared only on debug configurations in $projectPath, " +
+                "so it is not auto-added and release builds will not include the SDK. If that is intended, " +
+                "ignore this (or set sdkAutoLoad=false); otherwise declare it with `implementation` (or `releaseImplementation`)."
 
         /** Identity match: excludes dependencies the plugin itself auto-added (see reconcileAutoAdd). */
         private fun isIgnored(ignore: Set<Dependency>, dep: Dependency): Boolean = ignore.any { it === dep }
