@@ -339,9 +339,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             // ExtensionsInit injection has, and that injection rewrites a method
             // (`initializeExtensions`) which only exists from a certain SDK release.
             // Same resolver as the auto-add, so gate and auto-added version cannot disagree.
-            // Known limits, shared with the auto-add and tracked in #114: the app's own
-            // configurations are read unscoped (a test-only newer pin can win), and a pin
-            // only on a dependency project's debug* edge is not seen (null => strip).
+            // Scope (#114): the app's own pins are read from production configurations only
+            // (debugImplementation counts; test / compileOnly do not). Accepted limit: a pin
+            // only on a debug* edge toward a dependency project, or on a dependency project's own
+            // debug* configuration, is not seen (null => strip), because counting it would instead
+            // break the release auto-add. Also, app debug* pins count for every variant, so a
+            // release-only older pin can be masked by a newer debugImplementation pin.
             val declaredSdkVersionRaw = BugseeSdkDeclarations.declaredCoreSdkVersion(project)
             val declaredSdkVersion = BugseeSdkVersion.parse(declaredSdkVersionRaw)
             if (ExtensionStripGate.shouldWarnBelowFloor(
@@ -490,7 +493,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         }
 
         // Version shared by EVERY auto-added Bugsee module — core AND extensions. Prefer the
-        // version the consumer already declared for the core SDK; otherwise the dynamic range
+        // version the consumer declared for the core SDK on a production configuration (test /
+        // compileOnly pins are not read, #114); otherwise the dynamic range
         // floored at MIN_SDK_VERSION. Extensions are published under the SDK's version line, so
         // they must track the SDK version (never the plugin version — see autoAddModule).
         val inDeps = lazy { BugseeSdkDeclarations.inDependencyProjects(project) }
@@ -498,8 +502,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             ?: CoreSdkAutoLoad.range(MIN_SDK_VERSION)
 
         // Auto-add the core Bugsee SDK if the consuming app has not declared one. If the user has
-        // declared their own version on any configuration (`api`, `compileOnly`, variant configs,
-        // …), defer to it rather than layering a dynamic dep on top. Opt-out via
+        // declared their own core dependency on any configuration (`api`, `compileOnly`, variant
+        // configs, …), defer to it rather than layering a dynamic dep on top. Presence is
+        // deliberately broader than the version above: a test/compileOnly-only pin suppresses the
+        // auto-add but does not set the version used for auto-added extensions (compileOnly is an
+        // intended deferral; a test-only pin suppressing it is tracked in #124). Opt-out via
         // `bugsee { sdkAutoLoad.set(false) }`.
         if (!isCoreSdkPresent(project, ignore, inDeps)) {
             if (isDebug) notes.add("Bugsee: Auto-adding bugsee-android runtime dependency $sdkVersion")

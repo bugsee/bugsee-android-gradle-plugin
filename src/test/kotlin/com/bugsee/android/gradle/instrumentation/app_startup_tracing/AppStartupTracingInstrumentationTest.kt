@@ -160,8 +160,8 @@ class AppStartupTracingInstrumentationTest {
     @Test fun `several app pins gate on the highest version not the first declared`() {
         // The old resolver returned the first hit in configuration order (6.5.0 here) and
         // refused; Gradle (and the auto-add) pick the highest.
-        project.dependencies.add(project.configurations.maybeCreate("a").name, "com.bugsee:bugsee-android:6.5.0")
-        project.dependencies.add(project.configurations.maybeCreate("b").name, "com.bugsee:bugsee-android:7.0.0")
+        project.dependencies.add(project.configurations.maybeCreate("implementation").name, "com.bugsee:bugsee-android:6.5.0")
+        project.dependencies.add(project.configurations.maybeCreate("api").name, "com.bugsee:bugsee-android:7.0.0")
         extension.startupTier.set(StartupTier.STANDARD)
         org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
     }
@@ -192,6 +192,15 @@ class AppStartupTracingInstrumentationTest {
         org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
     }
 
+    @Test fun `a newer test-only app pin does not lift the gate over a production pin (#114)`() {
+        addBugseeAndroidDependency(project, "6.5.0")
+        project.dependencies.add(
+            project.configurations.maybeCreate("testImplementation").name, "com.bugsee:bugsee-android:7.5.0",
+        )
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertFalse(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
     /**
      * Adds a real `com.bugsee:bugsee-android` external dependency to a
      * resolvable configuration on the project so [DependencyDetector]
@@ -200,7 +209,7 @@ class AppStartupTracingInstrumentationTest {
      * dependency metadata, not the resolved classpath.
      */
     private fun addBugseeAndroidDependency(project: Project, version: String) {
-        val config = project.configurations.maybeCreate("bugseeProbe")
+        val config = project.configurations.maybeCreate("implementation")
         project.dependencies.add(config.name, "com.bugsee:bugsee-android:$version")
     }
 

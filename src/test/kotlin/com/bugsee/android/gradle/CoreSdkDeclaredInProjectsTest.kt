@@ -96,6 +96,15 @@ class CoreSdkDeclaredInProjectsTest {
     }
 
     @Test
+    fun testScopedAppExtensionPinDoesNotSetTheAutoAddedVersion() {
+        // #114: no core declared anywhere; a newer extension pin the app declares only for tests
+        // must not become the auto-added core's version.
+        val b = Build()
+        b.app.dependencies.add("testImplementation", "com.bugsee:bugsee-android-okhttp:7.5.0")
+        assertEquals(setOf("bugsee-android:$range"), b.autoAdded(setOf("bugsee-android-okhttp:7.5.0")))
+    }
+
+    @Test
     fun nothingDeclaredAnywhereAddsTheRange() {
         val b = Build()
         b.dependOn(b.app, "implementation", b.lib)
