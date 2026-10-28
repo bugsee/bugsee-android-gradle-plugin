@@ -259,6 +259,72 @@ class NativeMergedLibsE2ETest {
     fun `falls back to AGP symbols when the CLI cannot take the directory (exit 11)`() =
         assertFallsBackToZip(11)
 
+    /** A CLI that answers `exitCode` to every invocation, for any input. */
+    private fun constantShim(exitCode: Int): File = temp.newFile("bugsee-cli-const-$exitCode").apply {
+        writeText("#!/bin/sh\necho 'shim: nothing to upload' >&2\nexit $exitCode\n")
+        setExecutable(true)
+    }
+
+    private fun assembleFailingOnUploadError(cliPath: String, vararg extra: String): Pair<Boolean, String> =
+        MockSymbolServer().use { server ->
+            fixture().runTasksAllowingFailure(
+                listOf(":app:assembleRelease"),
+                "-PbugseeE2eEndpoint=${server.url}",
+                "-PbugseeE2eCli=$cliPath",
+                "-PbugseeE2eFailOnUploadError=true",
+                *extra,
+            )
+        }
+
+    @Test
+    fun `failOnUploadError does not fail on directory exit 10 when there is no AGP source`() {
+        // debugSymbolLevel NONE: AGP produces no symbols, so exit 10 on the directory is the whole story.
+        val (ok, out) = assembleFailingOnUploadError(constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
+        assertTrue("exit 10 is 'nothing to upload', not a failure:\n$out", ok)
+        assertTrue("the directory upload ran:\n$out", out.contains("Uploading unstripped native libraries"))
+        assertTrue("the CLI answered 10:\n$out", out.contains("(bugsee-cli exit 10)"))
+        assertTrue("no AGP source exists:\n$out", out.contains("no native symbols found"))
+        assertFalse(out.contains("Native symbols file found"))
+        assertFalse(out.contains("Intermediate symbols folder found"))
+    }
+
+    @Test
+    fun `failOnUploadError fails on directory exit 11 when there is no AGP source`() {
+        val (ok, out) = assembleFailingOnUploadError(constantShim(11).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
+        assertTrue("a failed directory upload with nothing else uploaded must fail:\n$out", !ok)
+        assertTrue("the CLI answered 11:\n$out", out.contains("(bugsee-cli exit 11)"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native libraries for variant release was not uploaded"),
+        )
+    }
+
+    @Test
+    fun `failOnUploadError still fails on exit 10 from the AGP zip (missing input, not an empty archive)`() {
+        val (ok, out) = assembleFailingOnUploadError(
+            constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
+        )
+        assertTrue("zip exit 10 is a real failure:\n$out", !ok)
+        assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native symbols for variant release was not uploaded"),
+        )
+    }
+
+    @Test
+    fun `failOnUploadError fails on a substantive CLI failure for the AGP zip`() {
+        val (ok, out) = assembleFailingOnUploadError(
+            constantShim(21).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
+        )
+        assertTrue("a real CLI failure must fail the build:\n$out", !ok)
+        assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native symbols for variant release was not uploaded"),
+        )
+    }
+
     @Test
     fun `a substantive CLI failure on the directory does not retry through the zip`() {
         MockSymbolServer().use { server ->

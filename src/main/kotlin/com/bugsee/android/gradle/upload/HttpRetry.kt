@@ -55,8 +55,9 @@ internal object HttpRetry {
     /**
      * Statuses worth another attempt of a request that is NOT idempotent on the wire (a POST that registers
      * a build): throttling and 502/503 (usually the request never reached the application; not 504, where a stitch may still be running). A
-     * plain 500 is not repeated. Repeating a registration is still safe because the server replaces a build
-     * registered under the same `uuid` rather than creating a second one.
+     * plain 500 is not repeated. Repeating a registration is believed safe: the appserver replaces a build
+     * registered under the same `uuid` rather than creating a second one (confirmed by code reading during #118,
+     * not verified end to end).
      */
     private fun isGatewayTransient(status: Int): Boolean = status == 429 || status == 502 || status == 503
 

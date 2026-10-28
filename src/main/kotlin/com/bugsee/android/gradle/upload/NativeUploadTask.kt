@@ -324,7 +324,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     return
                 }
                 // Exit 10 is "nothing usable in the directory", not a failed upload.
-                dirUploadFailed = result.exitCode != 10
+                dirUploadFailed = result.exitCode != CLI_EXIT_INPUT_NOT_FOUND
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
@@ -465,6 +465,9 @@ abstract class NativeUploadTask : DefaultTask() {
                         return
                     }
                     !cliResult.shouldFallback -> { // already logged
+                        // Deliberately no exit-10 carve-out here (unlike the directory path): for a zip
+                        // the CLI warns and exits 0 on an empty/unmatched archive (an unreadable one exits
+                        // 11), so 10 means the zip does not exist, which is a real failure.
                         UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
                         return
                     }
@@ -563,11 +566,17 @@ internal fun containsFullDebugSymbols(zip: File): Boolean = try {
 }
 
 /**
- * bugsee-cli exit codes that only the directory input can cause: 10 = input not
- * found / no libraries in the directory, 11 = invalid input (a scan I/O error, or an
- * older CLI trying to open the directory as a zip).
+ * `bugsee-cli` exit code `InputNotFound`. For a directory input it means "no libraries in the
+ * directory", i.e. nothing to upload rather than a failure; for a zip it means the zip does not exist.
  */
-private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
+private const val CLI_EXIT_INPUT_NOT_FOUND = 10
+
+/**
+ * bugsee-cli exit codes that, for a directory input, mean the directory itself is unusable:
+ * 10 = no libraries in the directory, 11 = invalid input (a scan I/O error, or an older CLI
+ * trying to open the directory as a zip). They also occur for a zip, with a different meaning.
+ */
+private val DIRECTORY_INPUT_EXIT_CODES = setOf(CLI_EXIT_INPUT_NOT_FOUND, 11)
 
 /**
  * [dir] when it exists and holds at least one native library the CLI would
