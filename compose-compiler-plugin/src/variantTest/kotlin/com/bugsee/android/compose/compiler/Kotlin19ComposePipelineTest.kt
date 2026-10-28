@@ -114,14 +114,23 @@ class Kotlin19ComposePipelineTest {
         val dump = javapProcess.inputStream.bufferedReader().readText()
         assertEquals("javap failed:\n$dump", 0, javapProcess.waitFor())
         val counts = linkedMapOf("ProdDefault" to 0, "ProdExplicit" to 0)
+        val seen = mutableSetOf<String>()
         var current: String? = null
         for (line in dump.lines()) {
             val declared = METHOD_HEADER.find(line)
-            if (declared != null) current = declared.groupValues[1]
+            if (declared != null) {
+                current = declared.groupValues[1]
+                seen += current
+            }
             if (current in counts && line.contains("invokestatic") && line.contains(".bugseeTag:")) {
                 counts[current!!] = counts.getValue(current) + 1
             }
         }
+        assertTrue(
+            "javap output no longer exposes the fixture's method headers (saw $seen); the header " +
+                "regex or javap format changed:\n${dump.take(2000)}",
+            seen.containsAll(counts.keys),
+        )
         return counts
     }
 

@@ -254,6 +254,7 @@ val compose19Runtime by configurations.creating {
     isTransitive = false
 }
 val compose19CompilerCoordinates = "androidx.compose.compiler:compiler:1.5.15"
+// Compose Multiplatform runtime, not the androidx one: the compiler only needs `Composer` to resolve.
 val compose19RuntimeCoordinates = "org.jetbrains.compose.runtime:runtime-desktop:1.6.11"
 dependencies {
     compose19Compiler(compose19CompilerCoordinates)
@@ -300,10 +301,12 @@ val composeVariantMatrix by tasks.registering(Test::class) {
 
     // Real Compose 1.5 compiler plugin + runtime for the Kotlin 1.9 pipeline test (immutable
     // coordinates, so the paths are enough).
+    val compose19CompilerFiles = objects.fileCollection().from(compose19Compiler)
+    val compose19RuntimeFiles = objects.fileCollection().from(compose19Runtime)
     jvmArgumentProviders.add(CommandLineArgumentProvider {
         listOf(
-            "-Dbugsee.compose19.compilerPlugin=${compose19Compiler.singleFile.absolutePath}",
-            "-Dbugsee.compose19.runtime=${compose19Runtime.singleFile.absolutePath}",
+            "-Dbugsee.compose19.compilerPlugin=${compose19CompilerFiles.singleFile.absolutePath}",
+            "-Dbugsee.compose19.runtime=${compose19RuntimeFiles.singleFile.absolutePath}",
         )
     })
 
