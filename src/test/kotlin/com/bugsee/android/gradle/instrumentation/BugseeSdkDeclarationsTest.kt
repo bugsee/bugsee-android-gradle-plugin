@@ -115,10 +115,54 @@ class BugseeSdkDeclarationsTest {
         assertEquals("6.5.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
     }
 
-    @Test fun `test-only or compileOnly-only app pin resolves to null (#114)`() {
+    @Test fun `test-only app pin resolves to null, compileOnly-only core pin is read (#130)`() {
         app.declare("testImplementation", "com.bugsee:bugsee-android:7.5.0")
-        app.declare("compileOnly", "com.bugsee:bugsee-android:7.7.0")
         assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        app.declare("compileOnly", "com.bugsee:bugsee-android:7.7.0")
+        assertEquals("7.7.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `compileOnly core pin below the floor is used as-is and variants and Api count (#130)`() {
+        app.declare("debugCompileOnly", "com.bugsee:bugsee-android:6.5.0")
+        assertEquals("6.5.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        app.declare("compileOnlyApi", "com.bugsee:bugsee-android:6.9.0")
+        assertEquals("6.9.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `compileOnly core pin is the last tier, after extension and dependency project pins (#130)`() {
+        app.declare("compileOnly", "com.bugsee:bugsee-android:7.0.0")
+        assertEquals("7.0.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        // A production extension puts a real core on the runtime classpath: better evidence.
+        app.declare("implementation", "com.bugsee:bugsee-android-okhttp:7.9.0")
+        assertEquals("7.9.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        lib.declare("api", "com.bugsee:bugsee-android:7.2.0")
+        dependOnLib()
+        assertEquals("7.2.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `test-named compileOnly pins are ignored and a dependency project extension beats compileOnly (#130)`() {
+        app.declare("testCompileOnly", "com.bugsee:bugsee-android:7.5.0")
+        app.declare("androidTestCompileOnly", "com.bugsee:bugsee-android:7.6.0")
+        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        app.declare("compileOnly", "com.bugsee:bugsee-android:7.0.0")
+        lib.declare("api", "com.bugsee:bugsee-android-okhttp:7.9.0")
+        dependOnLib()
+        assertEquals("7.9.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `core pinned on a configuration compileOnly extends is read (#130)`() {
+        val custom = app.configurations.create("bugseeSdk")
+        app.configurations.maybeCreate("compileOnly").extendsFrom(custom)
+        app.declare("bugseeSdk", "com.bugsee:bugsee-android:7.3.0")
+        assertEquals("7.3.0", BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+    }
+
+    @Test fun `compileOnly extension pin and ignored compileOnly core do not count (#130)`() {
+        app.declare("compileOnly", "com.bugsee:bugsee-android-okhttp:7.7.0")
+        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app))
+        app.declare("compileOnly", "com.bugsee:bugsee-android:7.0.0")
+        val added = app.configurations.getByName("compileOnly").dependencies.toSet()
+        assertNull(BugseeSdkDeclarations.declaredCoreSdkVersion(app, ignore = added))
     }
 
     @Test fun `debugImplementation-only pin on the app still counts (#114)`() {
