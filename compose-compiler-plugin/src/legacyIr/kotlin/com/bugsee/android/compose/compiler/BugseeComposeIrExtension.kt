@@ -445,10 +445,9 @@ private fun IrExpression.isDefaultedOrNullArgument(): Boolean {
 
 /**
  * Whether this is Compose's `DEFAULT_VALUE` origin — matched by NAME, not by the
- * `IrStatementOrigin.DEFAULT_VALUE` constant, because this variant also serves Kotlin 1.9 and the
- * constant is not spelled the same there (2.0 and later match 2.1). It is compiled against 2.1, where the
- * constant is read through `IrStatementOrigin.Companion`; on a 1.9.25 compiler that field does not
- * exist, so the reference threw `NoSuchFieldError` the first time a Compose-lowered call site reached
+ * `IrStatementOrigin.DEFAULT_VALUE` constant, because this variant also serves Kotlin 1.9. It is
+ * compiled against 2.1, where the constant is read through the `IrStatementOrigin.Companion` field;
+ * a 1.9 compiler has no such field (the origins are nested objects there), so the reference threw `NoSuchFieldError` the first time a Compose-lowered call site reached
  * it and aborted the consumer's compilation (issue #119). Origins print their debug name, which is
  * stable across the lines.
  */
