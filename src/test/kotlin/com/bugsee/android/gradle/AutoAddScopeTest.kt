@@ -601,6 +601,37 @@ class AutoAddScopeTest {
         assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
     }
 
+    /** The app pins the core on debug only and depends on `:lib`, which declares [libCoordinate] on [libConfig]. */
+    private fun debugOnlyCoreLinesWithLib(libConfig: String, libCoordinate: String): List<String> {
+        val h = Harness(null, declareCore = false)
+        h.declareOnCreating("debugImplementation", core)
+        val lib = org.gradle.testfixtures.ProjectBuilder.builder().withName("lib").withParent(h.project).build()
+        lib.configurations.create("implementation")
+        lib.configurations.maybeCreate(libConfig)
+        lib.dependencies.add(libConfig, libCoordinate)
+        h.project.dependencies.add("implementation", h.project.dependencies.project(mapOf("path" to ":lib")))
+        h.project.extensions.add("android", Any())
+        return captureOutput {
+            h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+    }
+
+    @Test
+    fun debugOnlyCorePinIsSilentWhenADependencyProjectSuppliesTheSdk() {
+        assertEquals(emptyList<String>(), debugOnlyCoreLinesWithLib("implementation", core))
+        assertEquals(
+            emptyList<String>(),
+            debugOnlyCoreLinesWithLib("implementation", "com.bugsee:bugsee-android-okhttp:$SDK_VERSION"),
+        )
+    }
+
+    @Test
+    fun debugOnlyCorePinStillWarnsWhenTheDependencyProjectDeclaresTheCoreOnlyOnDebug() {
+        val h = debugOnlyCoreLinesWithLib("debugImplementation", core)
+        assertEquals(1, h.size, h.toString())
+    }
+
     @Test
     fun isDebugConfigurationMatchesCamelCaseWordOnly() {
         for (n in listOf("debugImplementation", "freeDebugApi")) assertTrue(DependencyDetector.isDebugConfiguration(n), n)
