@@ -36,6 +36,10 @@ android {
 dependencies {
     implementation("androidx.compose.runtime:runtime:1.6.8")
     implementation("androidx.compose.ui:ui:1.6.8")
+    // REAL library text fields (issues #149, #151): their callee name carries the file-facade class on Kotlin 1.9.
+    implementation("androidx.compose.material:material:1.6.8")
+    implementation("androidx.compose.material3:material3:1.2.1")
+    implementation("androidx.compose.foundation:foundation:1.6.8")
     compileOnly(project(":stub"))
 }
 

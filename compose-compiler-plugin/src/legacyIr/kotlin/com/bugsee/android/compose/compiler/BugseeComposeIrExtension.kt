@@ -11,6 +11,7 @@ import org.jetbrains.kotlin.ir.builders.irString
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
+import org.jetbrains.kotlin.ir.declarations.IrPackageFragment
 import org.jetbrains.kotlin.ir.expressions.IrCall
 import org.jetbrains.kotlin.ir.expressions.IrComposite
 import org.jetbrains.kotlin.ir.expressions.IrConst
@@ -349,6 +350,32 @@ private class BugseeComposeTransformer(
     }
 
     /**
+     * [calleeFqName] with the file-facade class removed. For a top-level function declared in another
+     * module, Kotlin 1.9's lazy IR reports `fqNameWhenAvailable` WITH the facade class
+     * (`androidx.compose.material.TextFieldKt.TextField`), whereas a source declaration, and Kotlin 2.x,
+     * report `androidx.compose.material.TextField` (issues #149, #151). The strip is structural, not
+     * textual: only a top-level `*Kt` class that directly owns a static (receiver-less) function
+     * qualifies, so a member of an ordinary class is never rewritten. The allowlist is still matched
+     * on the full package, so a same-named function in a non-androidx `...Kt` facade does not match.
+     * Limitation: a facade renamed with `@file:JvmName` that lacks the `Kt` suffix is not stripped.
+     */
+    private fun withoutFileFacade(callee: IrFunction, calleeFqName: String): String {
+        val owner = callee.parent as? IrClass ?: return calleeFqName
+        if (owner.parent !is IrPackageFragment ||
+            !owner.name.asString().endsWith("Kt") ||
+            callee.dispatchReceiverParameter != null
+        ) {
+            return calleeFqName
+        }
+        val suffix = "." + owner.name.asString() + "." + callee.name.asString()
+        return if (calleeFqName.endsWith(suffix)) {
+            calleeFqName.removeSuffix(suffix) + "." + callee.name.asString()
+        } else {
+            calleeFqName
+        }
+    }
+
+    /**
      * Returns `true` if the callee at [calleeFqName] is a known sensitive
      * text-field composable AND its arguments contain a statically
      * detectable [PasswordVisualTransformation]. The check is conservative:
@@ -361,7 +388,7 @@ private class BugseeComposeTransformer(
         callee: IrFunction,
         call: IrCall
     ): Boolean {
-        if (calleeFqName !in SENSITIVE_TEXT_FIELD_CALLEES) {
+        if (withoutFileFacade(callee, calleeFqName) !in SENSITIVE_TEXT_FIELD_CALLEES) {
             return false
         }
 

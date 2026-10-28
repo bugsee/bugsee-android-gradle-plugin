@@ -105,7 +105,7 @@ class Kotlin19ComposePipelineTest {
         assertEquals(
             "Kotlin $kotlin (bugsee-first): every site carries exactly one bugseeTag in the bytecode. " +
                 "A count of 4 for ProdDefault would mean the extension registered twice.",
-            mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0, "ProdCrossExplicit" to 1, "ProdHelper" to 0),
+            mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0, "ProdCrossExplicit" to 1, "ProdHelper" to 0) + SECURE_TAG_CALLS,
             result.tagCalls,
         )
         assertEquals(
@@ -119,8 +119,15 @@ class Kotlin19ComposePipelineTest {
                 "ProdCross" to listOf("plain"),
                 "ProdCrossExplicit" to listOf("tag:ProdCrossExplicit"),
                 "ProdHelper" to listOf("plain", "plain", "plain"),
-            ),
+            ) + SECURE_RECEIVED + ("ProdSecureOmitted" to listOf("secure")),
             result.received,
+        )
+        assertEquals(
+            "Kotlin $kotlin (bugsee-first): bugseeSecure is injected exactly once into every allowlisted " +
+                "LIBRARY text field with a PasswordVisualTransformation (issues #149, #151), including the one " +
+                "whose modifier is omitted, and never into the non-androidx look-alike.",
+            SECURE_CALLS + ("ProdSecureOmitted" to 1),
+            result.secureCalls,
         )
     }
 
@@ -129,7 +136,7 @@ class Kotlin19ComposePipelineTest {
         assertEquals(
             "Kotlin $kotlin (compose-first): the omitted-modifier sites (ProdDefault) are DEFAULT_VALUE " +
                 "composites by the time Bugsee runs and are skipped; only the explicit site is tagged.",
-            mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0, "ProdCrossExplicit" to 1, "ProdHelper" to 0),
+            mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0, "ProdCrossExplicit" to 1, "ProdHelper" to 0) + SECURE_TAG_CALLS,
             result.tagCalls,
         )
         assertEquals(
@@ -141,8 +148,14 @@ class Kotlin19ComposePipelineTest {
                 "ProdCross" to listOf("plain"),
                 "ProdCrossExplicit" to listOf("tag:ProdCrossExplicit"),
                 "ProdHelper" to listOf("plain", "plain", "plain"),
-            ),
+            ) + SECURE_RECEIVED + ("ProdSecureOmitted" to listOf("plain")),
             result.received,
+        )
+        assertEquals(
+            "Kotlin $kotlin (compose-first): explicit-modifier library text fields are still secured; the " +
+                "omitted-modifier one is a DEFAULT_VALUE composite by then and is skipped on purpose.",
+            SECURE_CALLS + ("ProdSecureOmitted" to 0),
+            result.secureCalls,
         )
     }
 
@@ -151,6 +164,8 @@ class Kotlin19ComposePipelineTest {
         val tagCalls: Map<String, Int>,
         /** What the callee observed for its `modifier`, per composable, from EXECUTING the classes. */
         val received: Map<String, List<String>>,
+        /** `bugseeSecure` call count per library text-field composable, from the emitted bytecode. */
+        val secureCalls: Map<String, Int>,
     )
 
     private fun compileAndRun(kotlin: String, bugseeFirst: Boolean, variant: String = "k21"): Result {
@@ -194,6 +209,15 @@ class Kotlin19ComposePipelineTest {
             import androidx.compose.ui.Modifier
             class TagModifier(val tag: String, val inner: Modifier) : Modifier
             fun Modifier.bugseeTag(tag: String): Modifier = TagModifier(tag, this)
+            class SecureModifier(val inner: Modifier) : Modifier
+            fun Modifier.bugseeSecure(): Modifier = SecureModifier(this)
+            """.trimIndent()
+        )
+        File(libSrc, "VisualTransformation.kt").writeText(
+            """
+            package androidx.compose.ui.text.input
+            interface VisualTransformation
+            class PasswordVisualTransformation : VisualTransformation
             """.trimIndent()
         )
         // What each callee received, shared by the app and the library composable below.
@@ -203,7 +227,8 @@ class Kotlin19ComposePipelineTest {
             import androidx.compose.ui.Modifier
             val received = mutableListOf<String>()
             fun describe(modifier: Modifier): String =
-                (modifier as? TagModifier)?.let { "tag:" + it.tag } ?: "plain"
+                (modifier as? TagModifier)?.let { "tag:" + it.tag }
+                    ?: (if (modifier is SecureModifier) "secure" else "plain")
             """.trimIndent()
         )
         val libOut = File(work, "lib-out").apply { mkdirs() }
@@ -230,6 +255,38 @@ class Kotlin19ComposePipelineTest {
             fun libHelper(modifier: Modifier = Modifier) { received += describe(modifier) }
             """.trimIndent()
         )
+        // Allowlisted text fields from ANOTHER module (issues #149, #151). Same fully-qualified names as
+        // the real androidx ones; compiled separately so the app sees them as lazy library
+        // declarations, whose callee fqName on Kotlin 1.9 carries the file-facade class (`TextFieldKt`).
+        val fields = listOf(
+            "androidx.compose.material" to "TextField",
+            "androidx.compose.material" to "OutlinedTextField",
+            "androidx.compose.material3" to "TextField",
+            "androidx.compose.material3" to "OutlinedTextField",
+            "androidx.compose.foundation.text" to "BasicTextField",
+            "androidx.compose.foundation.text2" to "BasicTextField",
+            // NOT androidx: a same-named function in an `...Kt` facade must never be matched.
+            "com.example.lib2" to "TextField",
+        )
+        for ((pkg, name) in fields) {
+            val dir = File(lib2Src, pkg.replace('.', '/')).apply { mkdirs() }
+            File(dir, "$name.kt").writeText(
+                """
+                package $pkg
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.text.input.VisualTransformation
+                import com.bugsee.library.compose.describe
+                import com.bugsee.library.compose.received
+
+                @Composable fun $name(
+                    value: String,
+                    modifier: Modifier = Modifier,
+                    visualTransformation: VisualTransformation? = null
+                ) { received += describe(modifier) }
+                """.trimIndent()
+            )
+        }
         val lib2Out = File(work, "lib2-out").apply { mkdirs() }
         compile(
             kotlin, java, compilerClasspath, composeArgs, lib2Src, lib2Out,
@@ -247,6 +304,7 @@ class Kotlin19ComposePipelineTest {
             import com.bugsee.library.compose.received
             import com.example.lib2.LibChild
             import com.example.lib2.libHelper
+            import androidx.compose.ui.text.input.PasswordVisualTransformation
 
             // A default that is NOT the bare Modifier: it must survive an omitted-modifier call.
             val Marker: Modifier = TagModifier("marker", Modifier)
@@ -268,6 +326,34 @@ class Kotlin19ComposePipelineTest {
             // cross-module (issue #147).
             fun plainHelper(modifier: Modifier) { received += describe(modifier) }
             @Composable fun ProdHelper() { plainHelper(Modifier); libHelper(Modifier); libHelper() }
+
+            // Library text fields with a statically visible PasswordVisualTransformation (issues #149, #151).
+            @Composable fun ProdSecureMaterial() {
+                androidx.compose.material.TextField("a", Modifier, PasswordVisualTransformation())
+            }
+            @Composable fun ProdSecureMaterialOutlined() {
+                androidx.compose.material.OutlinedTextField("a", Modifier, PasswordVisualTransformation())
+            }
+            @Composable fun ProdSecureMaterial3() {
+                androidx.compose.material3.TextField("a", Modifier, PasswordVisualTransformation())
+            }
+            @Composable fun ProdSecureMaterial3Outlined() {
+                androidx.compose.material3.OutlinedTextField("a", Modifier, PasswordVisualTransformation())
+            }
+            @Composable fun ProdSecureBasic() {
+                androidx.compose.foundation.text.BasicTextField("a", Modifier, PasswordVisualTransformation())
+            }
+            @Composable fun ProdSecureBasic2() {
+                androidx.compose.foundation.text2.BasicTextField("a", Modifier, PasswordVisualTransformation())
+            }
+            // `modifier` omitted: the allowlisted default is the bare Modifier (exemption from #153).
+            @Composable fun ProdSecureOmitted() {
+                androidx.compose.material.TextField("a", visualTransformation = PasswordVisualTransformation())
+            }
+            // Not an androidx field: a facade-stripped match on the name alone would wrongly secure it.
+            @Composable fun ProdSecureFake() {
+                com.example.lib2.TextField("a", Modifier, PasswordVisualTransformation())
+            }
             """.trimIndent()
         )
         // Runs the composables without a composition: a recording `Composer` stand-in whose
@@ -296,7 +382,7 @@ class Kotlin19ComposePipelineTest {
                 @Suppress("UNCHECKED_CAST")
                 val received = Class.forName("com.bugsee.library.compose.SinkKt")
                     .getMethod("getReceived").invoke(null) as MutableList<String>
-                for (name in listOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross", "ProdCrossExplicit", "ProdHelper")) {
+                for (name in listOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross", "ProdCrossExplicit", "ProdHelper", ${SECURE_NAMES.joinToString(", ") { "\"" + it + "\"" }})) {
                     received.clear()
                     prod.getMethod(name, Composer::class.java, Integer.TYPE).invoke(null, composer, 0)
                     println("RECEIVED " + name + "=" + received.joinToString(","))
@@ -316,24 +402,22 @@ class Kotlin19ComposePipelineTest {
         )
 
         return Result(
-            tagCalls = countTagCalls(File(appOut, "com/example/app/ProdKt.class")),
+            tagCalls = countCalls(File(appOut, "com/example/app/ProdKt.class"), ".bugseeTag:", TAG_NAMES + SECURE_NAMES),
+            secureCalls = countCalls(File(appOut, "com/example/app/ProdKt.class"), ".bugseeSecure:", SECURE_NAMES),
             received = execute(
                 kotlin, java, listOf(appOut.absolutePath, libOut.absolutePath, lib2Out.absolutePath, composeRuntimeJar, stdlib),
             ),
         )
     }
 
-    /** `bugseeTag` call count per top-level composable of the fixture, from the emitted bytecode. */
-    private fun countTagCalls(classFile: File): Map<String, Int> {
+    /** Count of `invokestatic ...[callSuffix]` per named top-level composable of the fixture, from the emitted bytecode. */
+    private fun countCalls(classFile: File, callSuffix: String, names: List<String>): Map<String, Int> {
         val javap = File(File(System.getProperty("java.home"), "bin"), "javap").absolutePath
         val javapProcess = ProcessBuilder(javap, "-c", "-p", classFile.absolutePath)
             .redirectErrorStream(true).start()
         val dump = javapProcess.inputStream.bufferedReader().readText()
         assertEquals("javap failed:\n$dump", 0, javapProcess.waitFor())
-        val counts = linkedMapOf(
-            "ProdDefault" to 0, "ProdExplicit" to 0, "ProdCustomDefault" to 0, "ProdCross" to 0,
-            "ProdCrossExplicit" to 0, "ProdHelper" to 0,
-        )
+        val counts = linkedMapOf<String, Int>().apply { names.forEach { put(it, 0) } }
         val seen = mutableSetOf<String>()
         var current: String? = null
         for (line in dump.lines()) {
@@ -342,7 +426,7 @@ class Kotlin19ComposePipelineTest {
                 current = declared.groupValues[1]
                 seen += current
             }
-            if (current in counts && line.contains("invokestatic") && line.contains(".bugseeTag:")) {
+            if (current in counts && line.contains("invokestatic") && line.contains(callSuffix)) {
                 counts[current!!] = counts.getValue(current) + 1
             }
         }
@@ -376,7 +460,7 @@ class Kotlin19ComposePipelineTest {
             received[match.groupValues[1]] =
                 match.groupValues[2].split(',').filter { it.isNotEmpty() }
         }
-        assertEquals("fixture main did not report every composable:\n$output", setOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross", "ProdCrossExplicit", "ProdHelper"), received.keys)
+        assertEquals("fixture main did not report every composable:\n$output", (TAG_NAMES + SECURE_NAMES).toSet(), received.keys)
         return received
     }
 
@@ -415,6 +499,20 @@ class Kotlin19ComposePipelineTest {
         )
 
     private companion object {
+        val TAG_NAMES = listOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross", "ProdCrossExplicit", "ProdHelper")
+
+        /** Library text-field call sites; `ProdSecureFake` calls a non-androidx look-alike that must not be secured. */
+        val SECURE_NAMES = listOf(
+            "ProdSecureMaterial", "ProdSecureMaterialOutlined", "ProdSecureMaterial3", "ProdSecureMaterial3Outlined",
+            "ProdSecureBasic", "ProdSecureBasic2", "ProdSecureOmitted", "ProdSecureFake",
+        )
+        val SECURE_CALLS: Map<String, Int> = SECURE_NAMES.associateWith { 1 } + ("ProdSecureFake" to 0) - "ProdSecureOmitted"
+
+        /** Tag injection skips androidx callees; only the look-alike (a user-style callee) is tagged. */
+        val SECURE_TAG_CALLS: Map<String, Int> = SECURE_NAMES.associateWith { 0 } + ("ProdSecureFake" to 1)
+        val SECURE_RECEIVED: Map<String, List<String>> = (SECURE_NAMES - "ProdSecureOmitted" - "ProdSecureFake")
+            .associateWith { listOf("secure") } + ("ProdSecureFake" to listOf("tag:ProdSecureFake"))
+
         /** A javap method header, e.g. `  public static final void ProdDefault(...);`. */
         val METHOD_HEADER = Regex("""^\s{2}\S[^(]*?\b([\w$]+)\(.*;$""")
 

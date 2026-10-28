@@ -278,9 +278,10 @@ class ComposeVariantMatrixTest {
                 """.trimIndent()
             )
             // Same fully-qualified name as the real Material TextField, which is how the secure pass
-            // selects it. Deliberately SAME-MODULE (app side): see issue #151 for the cross-module
-            // secure-pass gap observed on Kotlin 1.9.
-            File(appDir, "Material.kt").writeText(
+            // selects it. Compiled in the LIBRARY module, like every real androidx callee (issue #151):
+            // on Kotlin 1.9 a dependency's top-level function reports its callee name WITH the
+            // file-facade class (`TextFieldKt.TextField`), which a same-module declaration does not.
+            File(libDir, "Material.kt").writeText(
                 """
                 package androidx.compose.material
                 import androidx.compose.runtime.Composable
@@ -293,6 +294,38 @@ class ComposeVariantMatrixTest {
                     enabled: Boolean = true,
                     visualTransformation: VisualTransformation? = null
                 ) { println("TextField(value=" + value + ", enabled=" + enabled + ")") }
+                """.trimIndent()
+            )
+            // A second allowlisted package from the library, called with `modifier` omitted. The app-side
+            // `OutlinedTextField` below stays a same-module declaration, so both declaration shapes are covered.
+            File(libDir, "Material3.kt").writeText(
+                """
+                package androidx.compose.material3
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.text.input.VisualTransformation
+
+                @Composable fun OutlinedTextField(
+                    modifier: Modifier = Modifier,
+                    visualTransformation: VisualTransformation? = null
+                ) { println("material3.OutlinedTextField") }
+                """.trimIndent()
+            )
+            // NOT androidx, but a top-level `TextField` in a `...Kt` facade just like the real one: a
+            // match on the bare function name, or a facade strip that ignored the package, would
+            // wrongly secure it.
+            File(libDir, "TextField.kt").writeText(
+                """
+                package com.example.kit
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.text.input.VisualTransformation
+
+                @Composable fun TextField(
+                    value: String,
+                    modifier: Modifier = Modifier,
+                    visualTransformation: VisualTransformation? = null
+                ) { println("kit.TextField") }
                 """.trimIndent()
             )
             // Pins the secure pass's `defaultKnownBare` exemption: this stand-in for an allowlisted
@@ -338,6 +371,7 @@ class ComposeVariantMatrixTest {
                 import com.example.kit.LibButton
                 import com.example.kit.libHelper
                 import com.example.kit.BaseKit
+                import androidx.compose.material3.OutlinedTextField as Material3OutlinedTextField
 
                 // Plain (non-@Composable) helpers that merely accept a Modifier (issue #147): the tag
                 // pass must leave their calls alone, including the omitted-default one.
@@ -387,6 +421,8 @@ class ComposeVariantMatrixTest {
                     OutlinedTextField(visualTransformation = PasswordVisualTransformation())
                     Holder().Member(Modifier, false)
                     TextField("secret", Modifier, true, PasswordVisualTransformation())
+                    Material3OutlinedTextField(visualTransformation = PasswordVisualTransformation())
+                    com.example.kit.TextField("kit", Modifier, PasswordVisualTransformation())
                     NullableChild(null, true)
                     describe(Modifier)
                     describeDefault()
@@ -423,6 +459,11 @@ class ComposeVariantMatrixTest {
             "SECURE", "OutlinedTextField(default=false)",
             "TAG:Screen", "Member(enabled=false)",
             "SECURE", "TextField(value=secret, enabled=true)",
+            // Library text field from another allowlisted package, modifier omitted.
+            "SECURE", "material3.OutlinedTextField",
+            // A non-androidx `TextField` with a password transformation is NEVER secured (no "SECURE"); as
+            // an ordinary library composable it only gets the tag its explicit modifier earns.
+            "TAG:Screen", "kit.TextField",
             // No "TAG:Screen" here on purpose. The argument is a literal null, so the
             // transform must skip the site: chaining would emit `null.bugseeTag(...)`
             // and the non-null receiver's intrinsic check would throw
