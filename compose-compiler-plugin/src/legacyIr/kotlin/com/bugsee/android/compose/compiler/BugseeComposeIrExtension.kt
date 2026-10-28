@@ -36,9 +36,10 @@ import org.jetbrains.kotlin.name.Name
  *
  * 1. **Tag injection** ([tagInjectionEnabled]) — wraps the `Modifier`
  *    parameter of every composable call inside a user `@Composable`
- *    function with `.bugseeTag("<EnclosingComposableName>")`. Lets the
- *    runtime view-hierarchy walker map LayoutNodes back to source
- *    composable names.
+ *    function with `.bugseeTag("<EnclosingComposableName>")`, but only when the
+ *    CALLEE is itself `@Composable`: plain helpers that take a `Modifier` are
+ *    left alone. Lets the runtime view-hierarchy walker map LayoutNodes back
+ *    to source composable names.
  *
  * 2. **Secure-field injection** ([secureInjectionEnabled]) — detects calls
  *    to `TextField` / `OutlinedTextField` / `BasicTextField` from the
@@ -230,8 +231,17 @@ private class BugseeComposeTransformer(
         }
 
         // ----- Pass 2: tag injection -----
-        // Skip framework and Bugsee packages — only tag user composables.
-        if (bugseeTagFunction != null && !shouldSkipForTag(calleeFqName)) {
+        // Skip framework and Bugsee packages — only tag user composables. The CALLEE must itself be
+        // @Composable: tagging exists to name layout nodes a composable emits, and a plain helper
+        // that merely takes a `Modifier` (`fun describe(m: Modifier)`) would otherwise have its
+        // argument, or its own default when omitted, rewritten (issue #147). Calls THROUGH a
+        // `@Composable` function type were never tagged and still are not: `invoke` is declared on
+        // `FunctionN` (a `kotlin.*` callee with a generic, not `Modifier`-typed, parameter). Library
+        // callees are resolved through lazy IR whose annotations are read from the dependency's
+        // class files; that lookup is verified on every supported compiler line by the variant tests.
+        if (bugseeTagFunction != null && !shouldSkipForTag(calleeFqName) &&
+            callee.hasAnnotation(composableAnnotation)
+        ) {
             val tag = composableNameStack.last()
             wrapModifierArg(result, modifierParamIndex, bugseeTagFunction) { builder, call ->
                 call.putValueArgument(0, builder.irString(tag))

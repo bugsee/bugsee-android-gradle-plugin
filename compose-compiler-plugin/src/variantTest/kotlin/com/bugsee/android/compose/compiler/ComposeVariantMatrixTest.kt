@@ -136,21 +136,44 @@ class ComposeVariantMatrixTest {
         class Failed(val marker: String) : Outcome() { override fun toString() = "build failed ($marker)" }
     }
 
+    /** The plugin-free library half, compiled once per Kotlin line (it does not depend on the variant). */
+    private val libOutputs = mutableMapOf<String, File>()
+
     private fun compileFixture(variant: String, kotlinVersion: String): Outcome {
         val pluginJar = requireProperty("bugsee.variantJar.$variant")
         val compilerClasspath = requireProperty("bugsee.kotlinClasspath.$kotlinVersion")
         val outDir = Files.createTempDirectory("bugsee-variant-$variant-$kotlinVersion-").toFile()
 
         val java = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
+
+        // The library half is compiled first, WITHOUT the Bugsee plugin, as its own module, so the
+        // app below sees its declarations as a dependency's (lazy IR with annotations read from
+        // class files) rather than as same-module source. That is the shape every real Compose
+        // callee has, and the callee-annotation lookup differs between compiler lines.
+        val libOut = libOutputs.getOrPut(kotlinVersion) {
+            val out = Files.createTempDirectory("bugsee-variant-lib-$kotlinVersion-").toFile()
+            val lib = ProcessBuilder(
+                java, "-cp", compilerClasspath,
+                "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
+                "-no-stdlib",
+                "-classpath", compilerClasspath,
+                "-d", out.absolutePath,
+                libDir.absolutePath,
+            ).redirectErrorStream(true).start()
+            val libLog = lib.inputStream.bufferedReader().readText()
+            if (lib.waitFor() != 0) error("fixture library failed to compile on Kotlin $kotlinVersion:\n$libLog")
+            out.also { it.deleteOnExit() }
+        }
+
         val process = ProcessBuilder(
             java, "-cp", compilerClasspath,
             "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
             "-no-stdlib",
-            "-classpath", compilerClasspath,
+            "-classpath", compilerClasspath + File.pathSeparator + libOut.absolutePath,
             "-Xplugin=$pluginJar",
             "-P", "plugin:${BugseeComposeCommandLineProcessor.PLUGIN_ID}:${BugseeComposeCommandLineProcessor.OPTION_ENABLED}=true",
             "-d", outDir.absolutePath,
-            fixtureDir.absolutePath,
+            appDir.absolutePath,
         ).redirectErrorStream(true).start()
 
         val log = process.inputStream.bufferedReader().readText()
@@ -167,7 +190,8 @@ class ComposeVariantMatrixTest {
         assertTrue("fixture did not produce AppKt.class on Kotlin $kotlinVersion", appClass.isFile())
 
         val run = ProcessBuilder(
-            java, "-cp", outDir.absolutePath + File.pathSeparator + compilerClasspath,
+            java, "-cp",
+            outDir.absolutePath + File.pathSeparator + libOut.absolutePath + File.pathSeparator + compilerClasspath,
             "com.example.app.AppKt",
         ).redirectErrorStream(true).start()
         val printed = run.inputStream.bufferedReader().readLines().filter { it.isNotBlank() }
@@ -193,7 +217,11 @@ class ComposeVariantMatrixTest {
             "AbstractMethodError", "IrGenerationExtensionException",
         )
 
-        private lateinit var fixtureDir: File
+        /** Compiled first, without the plugin, as a dependency of [appDir]. */
+        private lateinit var libDir: File
+
+        /** The module the Bugsee plugin runs on. */
+        private lateinit var appDir: File
 
         /**
          * A minimal Compose consumer. Real Compose artifacts are not needed: the transformer selects
@@ -207,20 +235,42 @@ class ComposeVariantMatrixTest {
         @BeforeClass
         @JvmStatic
         fun writeFixture() {
-            fixtureDir = Files.createTempDirectory("bugsee-variant-fixture-").toFile()
-            File(fixtureDir, "Compose.kt").writeText(
+            val fixtureDir = Files.createTempDirectory("bugsee-variant-fixture-").toFile()
+            libDir = File(fixtureDir, "lib").apply { mkdirs() }
+            appDir = File(fixtureDir, "app").apply { mkdirs() }
+            File(libDir, "Compose.kt").writeText(
                 """
                 package androidx.compose.runtime
+                // TYPE is needed for `@Composable (Modifier) -> Unit`; mirrors the real annotation.
+                @Retention(AnnotationRetention.BINARY)
+                @Target(AnnotationTarget.FUNCTION, AnnotationTarget.TYPE, AnnotationTarget.TYPE_PARAMETER,
+                    AnnotationTarget.PROPERTY_GETTER)
                 annotation class Composable
                 """.trimIndent()
             )
-            File(fixtureDir, "Modifier.kt").writeText(
+            // A callee from ANOTHER module that is NOT androidx.* (the tag pass skips androidx.*),
+            // standing in for a third-party UI-kit composable, next to a plain helper from the same
+            // module that merely takes a Modifier.
+            File(libDir, "LibKit.kt").writeText(
+                """
+                package com.example.kit
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+
+                @Composable fun LibButton(modifier: Modifier = Modifier) { println("LibButton") }
+                fun libHelper(modifier: Modifier) { println("libHelper") }
+
+                // Called through a subclass: the callee is a fake override that must keep the annotation.
+                open class BaseKit { @Composable fun Panel(modifier: Modifier = Modifier) { println("Panel") } }
+                """.trimIndent()
+            )
+            File(libDir, "Modifier.kt").writeText(
                 """
                 package androidx.compose.ui
                 interface Modifier { companion object : Modifier }
                 """.trimIndent()
             )
-            File(fixtureDir, "VisualTransformation.kt").writeText(
+            File(libDir, "VisualTransformation.kt").writeText(
                 """
                 package androidx.compose.ui.text.input
                 interface VisualTransformation
@@ -228,8 +278,9 @@ class ComposeVariantMatrixTest {
                 """.trimIndent()
             )
             // Same fully-qualified name as the real Material TextField, which is how the secure pass
-            // selects it.
-            File(fixtureDir, "Material.kt").writeText(
+            // selects it. Deliberately SAME-MODULE (app side): see issue #151 for the cross-module
+            // secure-pass gap observed on Kotlin 1.9.
+            File(appDir, "Material.kt").writeText(
                 """
                 package androidx.compose.material
                 import androidx.compose.runtime.Composable
@@ -246,7 +297,7 @@ class ComposeVariantMatrixTest {
             )
             // The injected helpers PRINT, so running the output reports what was injected, where,
             // and with which argument — far stronger than finding the name in a constant pool.
-            File(fixtureDir, "BugseeRuntime.kt").writeText(
+            File(libDir, "BugseeRuntime.kt").writeText(
                 """
                 package com.bugsee.library.compose
                 import androidx.compose.ui.Modifier
@@ -258,13 +309,25 @@ class ComposeVariantMatrixTest {
             // pick the wrong slot: an explicit modifier, an omitted one (companion-injection path),
             // a named argument with the modifier defaulted, a MEMBER composable (whose parameter
             // list starts with a dispatch receiver), and a password TextField for the secure pass.
-            File(fixtureDir, "App.kt").writeText(
+            File(appDir, "App.kt").writeText(
                 """
                 package com.example.app
                 import androidx.compose.runtime.Composable
                 import androidx.compose.ui.Modifier
                 import androidx.compose.material.TextField
                 import androidx.compose.ui.text.input.PasswordVisualTransformation
+                import com.example.kit.LibButton
+                import com.example.kit.libHelper
+                import com.example.kit.BaseKit
+
+                // Plain (non-@Composable) helpers that merely accept a Modifier (issue #147): the tag
+                // pass must leave their calls alone, including the omitted-default one.
+                fun describe(m: Modifier) { println("describe") }
+                fun describeDefault(m: Modifier = Modifier) { println("describeDefault") }
+
+                // A call THROUGH a @Composable function type: `invoke` is declared on Function1, so
+                // there is no Modifier slot to wrap. Regression pin only: never tagged, before or after #147.
+                @Composable fun Slot(content: @Composable (Modifier) -> Unit) { content(Modifier) }
 
                 @Composable fun Child(modifier: Modifier = Modifier, enabled: Boolean = true) {
                     println("Child(enabled=" + enabled + ")")
@@ -295,6 +358,12 @@ class ComposeVariantMatrixTest {
                     Holder().Member(Modifier, false)
                     TextField("secret", Modifier, true, PasswordVisualTransformation())
                     NullableChild(null, true)
+                    describe(Modifier)
+                    describeDefault()
+                    libHelper(Modifier)
+                    LibButton(Modifier)
+                    object : BaseKit() {}.Panel(Modifier)
+                    Slot { println("Slot content") }
                 }
 
                 fun main() { Screen() }
@@ -319,6 +388,17 @@ class ComposeVariantMatrixTest {
             // "Parameter specified as non-null is null: ... parameter <this>" at runtime.
             // Before the fix this row did not print at all — the fixture crashed here.
             "NullableChild(enabled=true)",
+            // Plain helpers: no tag, in-module and cross-module (issue #147).
+            "describe",
+            "describeDefault",
+            "libHelper",
+            // A cross-module @Composable callee IS still tagged: its annotation is read from the
+            // dependency's class files, which must work on every compiler line.
+            "TAG:Screen", "LibButton",
+            // Fake-override member composable from a library, called through a subclass: still tagged.
+            "TAG:Screen", "Panel",
+            // The @Composable function-type invocation is untouched (regression pin; passed before #147 too).
+            "Slot content",
         )
     }
 }
