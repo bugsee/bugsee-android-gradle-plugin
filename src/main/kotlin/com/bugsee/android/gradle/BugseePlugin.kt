@@ -518,24 +518,24 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // Optional SDK modules driven by user opt-in via `bugsee { ndk { enabled.set(true) };
         // feedback(true) }`. The NDK runtime is added when NDK is enabled globally or in any
         // variant scope; the per-variant symbol upload task stays exact.
-        if (inputs.ndk) autoAddModule(project, out, "bugsee-android-ndk", "ndk", isDebug, sdkVersion, ignore, notes)
-        if (inputs.leak) autoAddModule(project, out, "bugsee-android-leak", "leak", isDebug, sdkVersion, ignore, notes)
-        if (inputs.feedback) autoAddModule(project, out, "bugsee-android-feedback", "feedback", isDebug, sdkVersion, ignore, notes)
+        if (inputs.ndk) autoAddModule(project, out, AutoAddedExtensions.NDK, "ndk", isDebug, sdkVersion, ignore, notes)
+        if (inputs.leak) autoAddModule(project, out, AutoAddedExtensions.LEAK, "leak", isDebug, sdkVersion, ignore, notes)
+        if (inputs.feedback) autoAddModule(project, out, AutoAddedExtensions.FEEDBACK, "feedback", isDebug, sdkVersion, ignore, notes)
 
         if (hasComposeDependency(project) && inputs.compose) {
-            autoAddModule(project, out, "bugsee-android-compose", "compose", isDebug, sdkVersion, ignore, notes)
+            autoAddModule(project, out, AutoAddedExtensions.COMPOSE, "compose", isDebug, sdkVersion, ignore, notes)
         }
         if (hasOkHttpDependency(project) && inputs.okhttp) {
-            autoAddModule(project, out, "bugsee-android-okhttp", "okhttp", isDebug, sdkVersion, ignore, notes)
+            autoAddModule(project, out, AutoAddedExtensions.OKHTTP, "okhttp", isDebug, sdkVersion, ignore, notes)
         }
         if (hasKtorDependency(project, 2) && inputs.ktor) {
-            autoAddModule(project, out, "bugsee-android-ktor-2", "ktor-2", isDebug, sdkVersion, ignore, notes)
+            autoAddModule(project, out, AutoAddedExtensions.KTOR_2, "ktor-2", isDebug, sdkVersion, ignore, notes)
         }
         if (hasKtorDependency(project, 3) && inputs.ktor) {
-            autoAddModule(project, out, "bugsee-android-ktor-3", "ktor-3", isDebug, sdkVersion, ignore, notes)
+            autoAddModule(project, out, AutoAddedExtensions.KTOR_3, "ktor-3", isDebug, sdkVersion, ignore, notes)
         }
         if (hasCronetDependency(project) && inputs.cronet) {
-            autoAddModule(project, out, "bugsee-android-cronet", "cronet", isDebug, sdkVersion, ignore, notes)
+            autoAddModule(project, out, AutoAddedExtensions.CRONET, "cronet", isDebug, sdkVersion, ignore, notes)
         }
         // Core present only through `debug*` (#129): kept as a deliberate deferral (an app may ship
         // the SDK in debug builds only) but surfaced. Conservatively skipped (no false claim that
@@ -1931,9 +1931,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         ): List<Pair<String, String>> {
             val ndk = resolver.anyScopeValue(NDK_ENABLED) ?: false
             return listOf(
-                Triple("ndk.enabled", "bugsee-android-ndk", "ndk") to ndk,
-                Triple("leak.enabled", "bugsee-android-leak", "leak") to resolver.globalValue(LEAK_ENABLED),
-                Triple("feedback", "bugsee-android-feedback", "feedback") to resolver.globalValue(FEEDBACK),
+                Triple("ndk.enabled", AutoAddedExtensions.NDK, "ndk") to ndk,
+                Triple("leak.enabled", AutoAddedExtensions.LEAK, "leak") to resolver.globalValue(LEAK_ENABLED),
+                Triple("feedback", AutoAddedExtensions.FEEDBACK, "feedback") to resolver.globalValue(FEEDBACK),
             )
                 .filter { (t, enabled) -> enabled && !isModuleDeclared(project, t.second, t.third, ignore) }
                 .map { (t, _) -> t.first to t.second }

@@ -127,6 +127,8 @@ class AutoAddScopeTest {
 
     // ── sdkAutoLoad gates every auto-add (issue #48) ────────────────
 
+    // Must trigger every extension computeAutoAdds can add (with enableOptInModules): the equality
+    // test below is what keeps AutoAddedExtensions.ALL in step with the code.
     private val allTriggers = listOf(
         "com.squareup.okhttp3:okhttp:4.12.0",
         "androidx.compose.ui:ui:1.6.0",
@@ -158,11 +160,9 @@ class AutoAddScopeTest {
         val h = Harness(null, declareCore = false) { enableOptInModules() }
         h.declareAllTriggers()
         assertEquals(
-            setOf(
-                "bugsee-android", "bugsee-android-ndk", "bugsee-android-leak", "bugsee-android-feedback",
-                "bugsee-android-compose", "bugsee-android-okhttp", "bugsee-android-ktor-2",
-                "bugsee-android-ktor-3", "bugsee-android-cronet",
-            ),
+            // AutoAddedExtensions.ALL is the list the ExtensionFirstRelease guard test checks, so it
+            // must be exactly what computeAutoAdds can add.
+            setOf("bugsee-android") + AutoAddedExtensions.ALL,
             h.autoAdded(),
         )
     }
@@ -459,6 +459,29 @@ class AutoAddScopeTest {
         }.filter { it.startsWith("Bugsee:") }
         assertEquals(
             listOf(ExtensionFirstRelease.skipWarning("bugsee-android-leak", "7.0.0-beta8", "7.0.0-beta13")),
+            lines,
+        )
+    }
+
+    /** #143: the early-read auto-add (core range, so ndk is added) is corrected once the DSL is final and a pin below the first release is declared. */
+    @Test
+    fun reconcileSkipsExtensionBelowFirstReleaseWithOneWarning() {
+        val h = Harness(null, declareCore = false) {
+            ndk.enabled.set(true)
+            feedback.set(true)
+        }
+        h.project.extensions.add("android", Any())
+        val early = h.autoAdded() // first read: DSL not final, core is auto-added at the range
+        assertTrue("bugsee-android-ndk" in early, "early pass adds ndk at the range: $early")
+        h.declare("com.bugsee:bugsee-android:7.0.0-beta1")
+        val lines = captureOutput {
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        val after = h.autoAdded()
+        assertFalse("bugsee-android-ndk" in after, "reconcile must remove ndk: $after")
+        assertTrue("bugsee-android-feedback" in after, "feedback exists from beta1: $after")
+        assertEquals(
+            listOf(ExtensionFirstRelease.skipWarning("bugsee-android-ndk", "7.0.0-beta1", "7.0.0-beta6")),
             lines,
         )
     }

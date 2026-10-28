@@ -2,6 +2,7 @@ package com.bugsee.android.gradle
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -16,6 +17,15 @@ class ExtensionFirstReleaseTest {
             assertEquals("7.0.0-beta1", ExtensionFirstRelease.of("bugsee-android-$a"), a)
         }
         assertNull(ExtensionFirstRelease.of("bugsee-android-unknown"))
+    }
+
+    /** #143: an auto-added extension without a row would silently never be skipped below its first release. */
+    @Test
+    fun everyAutoAddedExtensionHasAFirstReleaseRow() {
+        for (artifact in AutoAddedExtensions.ALL) {
+            assertNotNull(ExtensionFirstRelease.of(artifact), "$artifact has no row in ExtensionFirstRelease")
+        }
+        assertEquals(AutoAddedExtensions.ALL, ExtensionFirstRelease.artifacts(), "table rows and auto-added list differ")
     }
 
     @Test
