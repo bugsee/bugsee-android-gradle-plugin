@@ -473,6 +473,26 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun inheritedCorePinSetsTheExtensionVersion() {
+        val h = Harness(null, declareCore = false) { feedback.set(true) }
+        val custom = h.project.configurations.create("bugseeSdk")
+        h.project.configurations.getByName("implementation").extendsFrom(custom)
+        h.declareOn("bugseeSdk", "com.bugsee:bugsee-android:7.2.0")
+        val feedback = h.project.configurations.getByName("implementation").incoming.dependencies
+            .single { it.name == "bugsee-android-feedback" }
+        assertEquals("7.2.0", feedback.version)
+    }
+
+    @Test
+    fun coreProjectDependencyOnImplementationSuppressesAutoAdd() {
+        val h = Harness(null, declareCore = false)
+        val stub = org.gradle.testfixtures.ProjectBuilder.builder().withName("stub").withParent(h.project).build()
+        stub.extensions.extraProperties.set("GROUP", "com.bugsee")
+        h.project.dependencies.add("implementation", h.project.dependencies.project(mapOf("path" to ":stub")))
+        assertEquals(setOf("stub"), h.autoAdded())
+    }
+
+    @Test
     fun testOnlyCoreProjectDependencyDoesNotSuppressCoreAutoAdd() {
         val h = Harness(null, declareCore = false)
         val stub = org.gradle.testfixtures.ProjectBuilder.builder().withName("stub").withParent(h.project).build()
@@ -521,10 +541,10 @@ class AutoAddScopeTest {
 
     @Test
     fun isSdkDeclarationConfigurationClassifiesNames() {
-        for (n in listOf("implementation", "api", "debugImplementation", "compileOnly", "compileOnlyApi", "debugCompileOnly")) {
+        for (n in listOf("implementation", "api", "debugImplementation", "compileOnly", "compileOnlyApi", "debugCompileOnly", "runtimeOnly")) {
             assertTrue(DependencyDetector.isSdkDeclarationConfiguration(n), n)
         }
-        for (n in listOf("testImplementation", "androidTestImplementation", "testCompileOnly", "debugUnitTestCompileOnly", "lintChecks", "kapt")) {
+        for (n in listOf("testImplementation", "androidTestImplementation", "testCompileOnly", "debugUnitTestCompileOnly", "androidTestCompileOnly", "testFixturesCompileOnly", "lintChecks", "kapt")) {
             assertFalse(DependencyDetector.isSdkDeclarationConfiguration(n), n)
         }
         // A declared flavor named like a test word is production / compileOnly of that flavor.

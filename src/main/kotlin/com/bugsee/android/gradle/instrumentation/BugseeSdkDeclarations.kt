@@ -132,6 +132,10 @@ internal object BugseeSdkDeclarations {
         val appNames = DependencyDetector.declaredVariantNames(project)
         val own = project.configurations
             .filter { DependencyDetector.isProductionConfiguration(it.name, appNames) }
+            // Plus configurations those extend (a custom `bugseeSdk` that `implementation` extends),
+            // so a pin that stops the auto-add also sets the version; test configs never extend in.
+            .flatMap { it.hierarchy }
+            .distinct()
             .flatMap { it.dependencies }
             .filter { dep ->
                 ignore.none { it === dep } && isSdkModule(dep.group, dep.name) && !dep.version.isNullOrBlank()

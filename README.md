@@ -512,11 +512,14 @@ the upload tasks skip with a single info-level message instead of failing or war
   upload task and bytecode transform stay exact.
 - **Core / extension presence is judged from production configurations and `compileOnly`.**
   A `com.bugsee:bugsee-android` (or extension) pin on `implementation`, `api`,
-  `debug*` and their flavor equivalents, or on `compileOnly` (the app supplies the
-  SDK itself at runtime), suppresses the auto-add; so does one on a custom
-  configuration those extend. Test / androidTest-only pins never do, so the
-  release still gets the SDK (the auto-added range is then also inherited by the
-  unit-test classpath and takes precedence over the test pin's version).
+  `runtimeOnly`, `debug*` and their flavor equivalents, or on `compileOnly` (the app
+  supplies the SDK itself at runtime), suppresses the auto-add and sets the version used
+  for auto-added extensions (`compileOnly` pins only suppress); so does one on a custom
+  configuration those extend. A `debugImplementation`-only pin counts for every variant.
+  Test / androidTest-only pins never do, so the release still gets the SDK; the unit-test
+  classpath then also sees the auto-added dependency and Gradle's conflict resolution
+  picks the version. Not detected: custom configurations wired only into a resolvable
+  classpath (`releaseRuntimeClasspath.extendsFrom(...)`) and test-named KMP source sets.
 - **Library detection reads production configurations of the app module only.**
   The OkHttp / Compose / Ktor / Cronet detectors (including the Compose
   compiler-plugin and Compose input-capture gates) look at `implementation`,
