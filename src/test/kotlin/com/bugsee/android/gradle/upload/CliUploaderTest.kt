@@ -861,6 +861,19 @@ class CliUploaderTest {
         assertFalse(sgr.contains("COLONSECRET"), sgr)
     }
 
+    @Test fun `escape-heavy secret value does not overflow a small stack`() {
+        val nasty = "{\"upload_token\":\"" + "\\\"".repeat(1900) + "\"}\nerror: done"
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-2", 64 * 1024)
+        t.start(); t.join()
+        assertTrue(out.contains("<redacted>"), out)
+    }
+
+    @Test fun `non-SGR escape sequences glued to a key do not defeat the scrubber`() {
+        val out = CliUploader.scrubCliOutput("\u001B[2Ktoken=KSECRET")
+        assertFalse(out.contains("KSECRET"), out)
+    }
+
     @Test fun `long output keeps head and tail so the final error line survives`() {
         val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
         val out = CliUploader.scrubCliOutput(text)

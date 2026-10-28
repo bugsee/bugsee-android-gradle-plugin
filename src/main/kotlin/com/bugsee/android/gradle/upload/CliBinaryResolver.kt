@@ -446,7 +446,7 @@ internal object CliBinaryResolver {
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }
-            CliUploader.forwardCliOutput(logger, stdout, stderr, result.exitValue, appToken = null)
+            CliUploader.forwardCliOutput(logger, stdout, stderr, result.exitValue, appToken = null, quietStdout = true)
         } catch (e: Throwable) {
             if (isInterrupt(e)) throw cancelled(e)
             // Self-update is strictly best-effort — never let it break

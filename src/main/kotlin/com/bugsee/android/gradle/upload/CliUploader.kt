@@ -330,7 +330,7 @@ internal object CliUploader {
         RegexOption.IGNORE_CASE,
     )
     // tracing-subscriber may colour its output even on a pipe; escapes split `key=value` pairs.
-    private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;:]*m")
+    private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;:?]*[A-Za-z]")
     private val CLI_SECRET_QUERY_PAIR =
         Regex("\\b(X-Amz-[A-Za-z-]+|[A-Za-z_-]{0,32}(?:Signature|Token)|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
 
@@ -370,9 +370,10 @@ internal object CliUploader {
         stderr: ByteArrayOutputStream,
         exitCode: Int,
         appToken: String?,
+        quietStdout: Boolean = false,
     ) {
         // Scrubbing must never fail the task (even a StackOverflowError): on any failure, log nothing of the output.
-        runCatching { forwardScrubbed(logger, stdout, stderr, exitCode, appToken) }
+        runCatching { forwardScrubbed(logger, stdout, stderr, exitCode, appToken, quietStdout) }
             .onFailure { logger.warn("Bugsee: bugsee-cli output suppressed (exit $exitCode): could not be scrubbed safely.") }
     }
 
@@ -382,6 +383,7 @@ internal object CliUploader {
         stderr: ByteArrayOutputStream,
         exitCode: Int,
         appToken: String?,
+        quietStdout: Boolean,
     ) {
         val err = scrubCliOutput(stderr.toString(Charsets.UTF_8), appToken)
         if (err.isNotEmpty()) {
@@ -389,7 +391,8 @@ internal object CliUploader {
         }
         val out = scrubCliOutput(stdout.toString(Charsets.UTF_8), appToken)
         if (out.isNotEmpty()) {
-            logger.lifecycle("Bugsee: bugsee-cli stdout (exit $exitCode):\n$out")
+            val msg = "Bugsee: bugsee-cli stdout (exit $exitCode):\n$out"
+            if (quietStdout) logger.debug(msg) else logger.lifecycle(msg)
         }
     }
 
