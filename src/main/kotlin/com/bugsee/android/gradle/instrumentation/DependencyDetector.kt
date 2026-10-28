@@ -46,6 +46,9 @@ internal object DependencyDetector {
     // A camelCase word `debug`/`Debug` (debugImplementation, freeDebugApi, debugCompilationImplementation).
     private val DEBUG_WORD = Regex("(^debug|Debug)(?=[A-Z]|$)")
 
+    /** Whether a configuration named [name] is a `debug*` one (`debugImplementation`, `freeDebugApi`). */
+    fun isDebugConfiguration(name: String): Boolean = DEBUG_WORD.containsMatchIn(name)
+
     /** How [isProductionConfiguration] treats `debug*` configurations. */
     enum class DebugConfigurations {
         /**
