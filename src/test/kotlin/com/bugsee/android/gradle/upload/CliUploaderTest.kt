@@ -642,6 +642,43 @@ class CliUploaderTest {
         }
     }
 
+    @Test fun `non-zero exit warns about fallback only when not interrupted`() {
+        val cli = executableCliStub()
+        // 143 = killed by signal (fallback); 3 = substantive failure (no fallback).
+        for ((code, marker) in listOf(143 to "falling back", 3 to "substantive failure")) {
+            for (interrupted in listOf(false, true)) {
+                val warns = mutableListOf<String>()
+                withInterruptFlag(interrupted) {
+                    val r = runUploadMapping(FakeExec(cliExitValue = code), cli, recordingLogger(warns))
+                    assertEquals(code, r.exitCode) // classification unchanged
+                    assertEquals(code == 143, r.shouldFallback)
+                    assertEquals(interrupted, Thread.currentThread().isInterrupted, "flag must stay set for the caller")
+                }
+                assertEquals(
+                    !interrupted, warns.any { marker in it }, "code=$code interrupted=$interrupted warns=$warns",
+                )
+            }
+        }
+    }
+
+    @Test fun `pack non-zero exit warns only when not interrupted`() {
+        val cli = executableCliStub()
+        for (interrupted in listOf(false, true)) {
+            val warns = mutableListOf<String>()
+            withInterruptFlag(interrupted) {
+                val ok = CliUploader.packUploadZip(
+                    FakeExec(cliExitValue = 143), cli, File("/tmp/app.apk"), null,
+                    File("/tmp/out-134.zip"), recordingLogger(warns), debug = false,
+                )
+                assertFalse(ok)
+                assertEquals(interrupted, Thread.currentThread().isInterrupted, "flag must stay set for the caller")
+            }
+            assertEquals(
+                !interrupted, warns.any { "using the native packer" in it }, "interrupted=$interrupted warns=$warns",
+            )
+        }
+    }
+
     // ── the app token goes in the environment, never on the command line ──
 
     private val envToken = "tok_SECRET_0123456789abcdef"

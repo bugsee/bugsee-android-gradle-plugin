@@ -314,10 +314,13 @@ internal object CliUploader {
         if (exitCode == 0 && outZip.isFile && outZip.length() > 0L) {
             return true
         }
-        logger.warn(
-            "Bugsee: bugsee-cli pack exited $exitCode (or produced no/empty output); " +
-                "using the native packer.",
-        )
+        // A cancel that killed the CLI can surface as an exit code; the caller rethrows it, so no fallback is announced.
+        if (!Thread.currentThread().isInterrupted) {
+            logger.warn(
+                "Bugsee: bugsee-cli pack exited $exitCode (or produced no/empty output); " +
+                    "using the native packer.",
+            )
+        }
         return false
     }
 
@@ -528,10 +531,13 @@ internal object CliUploader {
                 fallbackReason = null,
             )
             shouldFallback(exitCode) -> {
-                logger.warn(
-                    "Bugsee: bugsee-cli ${describeFallback(exitCode)}; " +
-                        "falling back to the Kotlin uploader.",
-                )
+                // A cancel that killed the CLI can surface as an exit code; the task rethrows it, so no fallback is announced.
+                if (!Thread.currentThread().isInterrupted) {
+                    logger.warn(
+                        "Bugsee: bugsee-cli ${describeFallback(exitCode)}; " +
+                            "falling back to the Kotlin uploader.",
+                    )
+                }
                 CliUploadResult(
                     success = false,
                     exitCode = exitCode,
@@ -546,10 +552,12 @@ internal object CliUploader {
                 // user set HTTPS_PROXY/NO_PROXY in the environment themselves, the two
                 // paths can differ, but exit codes cannot isolate proxy failures, so no
                 // fallback is attempted (fallback policy is tracked in #45).
-                logger.warn(
-                    "Bugsee: bugsee-cli exited with $exitCode (substantive failure); " +
-                        "the Kotlin uploader would hit the same error so no fallback is attempted.",
-                )
+                if (!Thread.currentThread().isInterrupted) {
+                    logger.warn(
+                        "Bugsee: bugsee-cli exited with $exitCode (substantive failure); " +
+                            "the Kotlin uploader would hit the same error so no fallback is attempted.",
+                    )
+                }
                 CliUploadResult(
                     success = false,
                     exitCode = exitCode,
