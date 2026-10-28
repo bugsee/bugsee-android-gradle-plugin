@@ -905,9 +905,18 @@ class CliUploaderTest {
     }
 
     @Test fun `a long run of credential-looking word characters scrubs in bounded time`() {
-        val start = System.nanoTime()
-        CliUploader.scrubCliOutput("token".repeat(790) + " " + "key_".repeat(900))
-        assertTrue((System.nanoTime() - start) / 1_000_000 < 2000, "scrub took too long")
+        // Each input is < 4000 chars with no newline, so head+tail trimming keeps it and the key regex runs.
+        for (nasty in listOf("token".repeat(790), "-key".repeat(990), "-token".repeat(660), "key_".repeat(990) + "=x")) {
+            val start = System.nanoTime()
+            val out = CliUploader.scrubCliOutput(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 2000, "scrub took too long for ${nasty.take(12)}")
+            assertFalse(out.contains("output truncated"), "input must survive trimming")
+        }
+        val eqWrapped = CliUploader.scrubCliOutput("upload_token=Some(\"EQSECRET\") x=1")
+        assertFalse(eqWrapped.contains("EQSECRET"), eqWrapped)
+        // A secret nested inside a non-credential quoted value is still found.
+        val nested = CliUploader.scrubCliOutput("msg=\"retry token=NESTEDSECRET later\"")
+        assertFalse(nested.contains("NESTEDSECRET"), nested)
     }
 
     @Test fun `long output keeps head and tail so the final error line survives`() {

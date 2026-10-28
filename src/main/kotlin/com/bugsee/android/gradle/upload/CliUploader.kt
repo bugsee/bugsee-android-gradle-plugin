@@ -336,14 +336,42 @@ internal object CliUploader {
     // alternatives are unrolled (no repeated alternation group) so long escape runs cannot overflow the stack.
     private const val DQ_VALUE = "\\\\?\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?"
     private const val SQ_VALUE = "\\\\?'[^'\\\\\\r\\n]*+(?:\\\\.[^'\\\\\\r\\n]*+)*+'?"
-    private val CLI_SECRET_QUERY_PAIR =
+    // The key is matched as one possessive word run (no backtracking, so no super-linear blow-up on long
+    // runs) and judged sensitive in code by [isSensitiveKey]; see [scrubKeyValuePairs].
+    private val CLI_KEY_VALUE_PAIR =
         Regex(
-            "\\b(X-Amz-[A-Za-z-]+|[A-Za-z0-9_-]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[A-Za-z0-9_-]*|Expires)" +
-                "(?:=(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|" +
-                // Debug output of Option<String> / newtype fields: `name: Some("v")`, `name: Secret("v")`.
+            "\\b([A-Za-z0-9_-]++)" +
+                // Debug output of Option<String> / newtype fields: `name: Some("v")`, `name=Secret("v")`.
+                "(?:=(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|" +
                 "[ \\t]*:[ \\t]*(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE))",
-            RegexOption.IGNORE_CASE,
         )
+    private val SENSITIVE_KEY = Regex(BundleUploader.SENSITIVE_KEY_PATTERN, RegexOption.IGNORE_CASE)
+
+    private fun isSensitiveKey(key: String): Boolean =
+        key.equals("expires", ignoreCase = true) || SENSITIVE_KEY.containsMatchIn(key)
+
+    /**
+     * Replaces the value of every credential-named `key=value` / `key: "value"` pair with `<redacted>`.
+     * A non-credential pair is skipped key-only, so a secret nested in its (quoted) value is still found.
+     */
+    private fun scrubKeyValuePairs(text: String): String {
+        val out = StringBuilder(text.length)
+        var pos = 0
+        while (pos < text.length) {
+            val m = CLI_KEY_VALUE_PAIR.find(text, pos) ?: break
+            val key = m.groupValues[1]
+            val keyEnd = m.groups[1]!!.range.last + 1
+            out.append(text, pos, keyEnd)
+            if (isSensitiveKey(key)) {
+                out.append("=<redacted>")
+                pos = m.range.last + 1
+            } else {
+                pos = keyEnd
+            }
+        }
+        out.append(text, pos, text.length)
+        return out.toString()
+    }
 
     private const val CLI_OUTPUT_KEEP = 2000
 
@@ -368,7 +396,7 @@ internal object CliUploader {
         BundleUploader.scrubForLog(headAndTail(ANSI_ESCAPE.replace(text, "")), appToken)
             .replace(CLI_SECRET_FIELD) { "${it.groupValues[1]}: <redacted>" }
             .replace(CLI_SECRET_JSON_PAIR, "\"$1\":\"<redacted>\"")
-            .replace(CLI_SECRET_QUERY_PAIR) { "${it.groupValues[1]}=<redacted>" }
+            .let(::scrubKeyValuePairs)
             .trim()
 
     /**
