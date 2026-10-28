@@ -259,6 +259,8 @@ object VcsMetadataResolver {
             if (process.exitValue() != 0) return null
             captured.toString().trim().ifEmpty { null }
         } catch (e: InterruptedException) {
+            // Covers every path (e.g. the bounded join on the timeout path, which clears the flag when it throws).
+            Thread.currentThread().interrupt()
             throw e
         } catch (_: Exception) {
             null
