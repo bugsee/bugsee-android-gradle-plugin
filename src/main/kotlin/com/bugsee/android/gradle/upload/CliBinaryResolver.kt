@@ -435,12 +435,18 @@ internal object CliBinaryResolver {
             if (debug) {
                 logger.warn("Bugsee: bugsee-cli self-update check (${binary.absolutePath} update --max-age 12h)")
             }
-            execOps.exec { spec ->
+            // Captured (not inherited) so the CLI's diagnostics are scrubbed like every other CLI run (#109).
+            val stdout = java.io.ByteArrayOutputStream()
+            val stderr = java.io.ByteArrayOutputStream()
+            val result = execOps.exec { spec ->
                 spec.executable = binary.absolutePath
                 spec.args = listOf("update", "--max-age", "12h")
                 spec.environment(proxyEnvForCli())
+                spec.standardOutput = stdout
+                spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }
+            CliUploader.forwardCliOutput(logger, stdout, stderr, result.exitValue, appToken = null)
         } catch (e: Throwable) {
             if (isInterrupt(e)) throw cancelled(e)
             // Self-update is strictly best-effort — never let it break

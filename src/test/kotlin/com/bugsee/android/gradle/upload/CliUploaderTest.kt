@@ -854,6 +854,13 @@ class CliUploaderTest {
         assertFalse(out.contains("ANSISECRET") || out.contains("UNDERSECRET"), out)
     }
 
+    @Test fun `escaped-quote JSON bodies and colon-delimited SGR codes are scrubbed`() {
+        val escaped = CliUploader.scrubCliOutput("body=\"{\\\"upload_token\\\":\\\"ESCSECRET\\\"}\" status=403")
+        assertFalse(escaped.contains("ESCSECRET"), escaped)
+        val sgr = CliUploader.scrubCliOutput("token\u001B[38:5:1m=COLONSECRET")
+        assertFalse(sgr.contains("COLONSECRET"), sgr)
+    }
+
     @Test fun `long output keeps head and tail so the final error line survives`() {
         val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
         val out = CliUploader.scrubCliOutput(text)

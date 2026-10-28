@@ -325,11 +325,12 @@ internal object CliUploader {
         RegexOption.IGNORE_CASE,
     )
     private val CLI_SECRET_JSON_PAIR = Regex(
-        "\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\"\\s*:\\s*\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?",
+        // `\\?"` also matches the escaped-quote form of a body logged through a Debug/quoted string.
+        "\\\\?\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\\\\?\"\\s*:\\s*\\\\?\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?",
         RegexOption.IGNORE_CASE,
     )
     // tracing-subscriber may colour its output even on a pipe; escapes split `key=value` pairs.
-    private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;]*m")
+    private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;:]*m")
     private val CLI_SECRET_QUERY_PAIR =
         Regex("\\b(X-Amz-[A-Za-z-]+|[A-Za-z_-]{0,32}(?:Signature|Token)|Expires)=[^\\s&\"'<>]+", RegexOption.IGNORE_CASE)
 
@@ -363,7 +364,7 @@ internal object CliUploader {
      * Forwards the CLI's captured stderr (warn) and stdout (lifecycle) to [logger], scrubbed by [scrubCliOutput].
      * Called on success and failure alike; it has no effect on the exit-code / fallback decision.
      */
-    private fun forwardCliOutput(
+    internal fun forwardCliOutput(
         logger: Logger,
         stdout: ByteArrayOutputStream,
         stderr: ByteArrayOutputStream,
