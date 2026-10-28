@@ -29,7 +29,9 @@ package com.bugsee.android.gradle
  * behind it, Compose's default-argument lowering has already turned every OMITTED `modifier` into a
  * `DEFAULT_VALUE` composite, which we skip on purpose because the callee's `$default` fixup would
  * overwrite anything injected there (issues #119, #138). On this path an omitted `modifier` is also only
- * rewritten when the callee's own default is the bare `Modifier`, since the injected chain replaces it.
+ * rewritten when the callee's own default is the bare `Modifier`, since the injected chain replaces it
+ * (with a modern-registering Compose compiler such as 1.5.0 that means same-module callees only; library
+ * callees, whose default is not visible, used to be tagged there and are now skipped).
  * The Kotlin Gradle plugin lists our artifact
  * ahead of the Compose compiler AGP adds (`ComposePluginOrderTest`), so the first case is the normal one.
  * Verified through 1.9.25 with Compose compiler 1.5.15 by `Kotlin19ComposePipelineTest`, which executes

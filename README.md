@@ -584,7 +584,9 @@ the upload tasks skip with a single info-level message instead of failing or war
   omitted `modifier` whose callee declares a different default (`= Modifier.fillMaxWidth()`) or comes
   from another module or another file of an incremental compile (the default is not visible there,
   so a later incremental build can leave a site untagged that a clean build tagged), or a call that
-  resolves to an overriding member composable, because the tag would replace that default;
+  resolves to an overriding member composable, because the tag would replace that default (a Compose
+  compiler that registers the modern way, such as 1.5.0, therefore now tags only same-module omitted
+  `modifier` sites on 1.9, where it used to tag library ones too and silently drop their defaults);
   and any site where Bugsee's plugin ends up BEHIND a legacy-registered Compose compiler (for example a
   hand-written `-Xplugin=` for it in `freeCompilerArgs`, or the Compose Multiplatform Gradle plugin
   applied before Bugsee, where the order follows plugin application order). The same skip applies
