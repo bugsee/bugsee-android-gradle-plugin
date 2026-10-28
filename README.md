@@ -516,12 +516,14 @@ the upload tasks skip with a single info-level message instead of failing or war
   supplies the SDK itself at runtime), suppresses the auto-add and sets the version used
   for auto-added extensions (`compileOnly` pins only suppress); so does one on a custom
   configuration those extend. A `debugImplementation`-only pin counts for every variant (the auto-add runs before
-  variants exist), as does a pin only on a flavor or custom build type. Release builds then ship without the SDK
-  (unless an extension pulls it in), the intended choice for debug-only setups. The plugin logs a warning when the
-  core is declared only on `debug*`; it stays silent when an extension is added or declared outside `debug*` or the
-  app has any non-debug project dependency (its module may supply the core), and `sdkAutoLoad=false` silences it
-  too (but disables every other auto-add). A `debug*` edge to a dependency project does not suppress the auto-add.
-  Declare the core with `implementation` (or also `releaseImplementation`) to include it in release.
+  variants exist), as does a pin only on a flavor or custom build type, so variants outside the pinned
+  configuration may ship without the SDK (unless an extension pulls it in); for a debug-only pin that is the
+  intended choice for debug-only setups. The plugin logs a warning when the core is declared only on `debug*`; it
+  stays silent when an extension is added or declared outside `debug*`, when a dependency project declares an SDK
+  module through a non-debug edge (with Isolated Projects on: on any non-debug project dependency), and with
+  `sdkAutoLoad=false` (which also disables every other auto-add). A `debug*` edge to an intermediate dependency
+  project does not suppress the auto-add, but a direct `debug*` dependency on the SDK's own `:library` / `:stub`
+  project does. Declare the core with `implementation` (or also `releaseImplementation`) to include it in release.
   Test / androidTest-only pins never do, so the release still gets the SDK; the unit-test
   classpath then also sees the auto-added dependency and Gradle's conflict resolution
   picks the version. Not detected: custom configurations wired only into a resolvable

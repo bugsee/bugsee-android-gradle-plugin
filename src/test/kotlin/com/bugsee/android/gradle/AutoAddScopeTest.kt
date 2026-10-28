@@ -588,7 +588,7 @@ class AutoAddScopeTest {
     }
 
     @Test
-    fun debugOnlyCorePinDoesNotWarnWithANonDebugProjectDependency() {
+    fun debugOnlyCorePinStillWarnsWithAnUnrelatedNonDebugProjectDependency() {
         val h = Harness(null, declareCore = false)
         h.declareOnCreating("debugImplementation", core)
         org.gradle.testfixtures.ProjectBuilder.builder().withName("lib").withParent(h.project).build()
@@ -598,7 +598,7 @@ class AutoAddScopeTest {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
         }.filter { it.startsWith("Bugsee:") }
-        assertEquals(emptyList<String>(), lines)
+        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
     }
 
     @Test

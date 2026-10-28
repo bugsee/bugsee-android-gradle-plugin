@@ -540,12 +540,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // the SDK in debug builds only) but surfaced. Conservatively skipped (no false claim that
         // release lacks the SDK) when an extension is auto-added or declared outside `debug*`
         // (extensions depend on the core; a `compileOnly` one also silences it, accepted), or when
-        // the app has any non-debug project dependency: its module may supply the core, and under
-        // Isolated Projects other modules cannot be inspected.
-        if (debugOnlyCore && out.isEmpty() &&
+        // a dependency project declares an SDK module through a non-debug edge (`inDeps`); under
+        // Isolated Projects other modules cannot be inspected, so any non-debug project edge silences it.
+        val isolated = ProjectAccess.isIsolatedProjects(project)
+        if (debugOnlyCore && out.isEmpty() && inDeps.value.isEmpty() &&
             sdkDeclarationDependencies(project, includeDebug = false).none {
-                it is ProjectDependency ||
-                    (!isIgnored(ignore, it) && BugseeSdkDeclarations.isSdkModule(it.group, it.name))
+                (isolated && it is ProjectDependency) ||
+                    (it !is ProjectDependency && !isIgnored(ignore, it) &&
+                        BugseeSdkDeclarations.isSdkModule(it.group, it.name))
             }
         ) {
             notes.add(debugOnlyCoreWarning(project.path))
@@ -1905,8 +1907,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
          */
         internal fun debugOnlyCoreWarning(projectPath: String): String =
             "Bugsee: $BUGSEE_GROUP:bugsee-android is declared only on debug configurations in $projectPath, " +
-                "so it is not auto-added and release builds will not include the SDK. If that is intended, " +
-                "ignore this (or set sdkAutoLoad=false); otherwise declare it with `implementation` (or `releaseImplementation`)."
+                "so it is not auto-added and release builds may not include the SDK (check the release runtime " +
+                "classpath). If that is intended, ignore this (or set sdkAutoLoad=false); otherwise declare it with `implementation` (or `releaseImplementation`)."
 
         /** Identity match: excludes dependencies the plugin itself auto-added (see reconcileAutoAdd). */
         private fun isIgnored(ignore: Set<Dependency>, dep: Dependency): Boolean = ignore.any { it === dep }
