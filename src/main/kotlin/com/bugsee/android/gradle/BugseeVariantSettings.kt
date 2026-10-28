@@ -30,7 +30,7 @@ annotation class BugseeDsl
  *
  * Settings that are intentionally ABSENT because they are global-only
  * (they affect project-wide dependency wiring or the uploader, not one
- * variant): `feedback`, `leak`, `sdkAutoLoad`, `cliPath`, `cliVersion`,
+ * variant): `feedback`, `leak`, `sdkAutoLoad`, `warnDebugOnlySdk`, `cliPath`, `cliVersion`,
  * `cliAutoUpdate`, `uploader`, and the `variant(...)` / `preferSettingsFile`
  * entry points themselves (blocks cannot be nested).
  *

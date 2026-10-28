@@ -544,7 +544,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // a dependency project declares an SDK module through a non-debug edge (`inDeps`); under
         // Isolated Projects other modules cannot be inspected, so any non-debug project edge silences it.
         val isolated = ProjectAccess.isIsolatedProjects(project)
-        if (debugOnlyCore && out.isEmpty() && inDeps.value.isEmpty() &&
+        if (debugOnlyCore && resolver.globalValue(WARN_DEBUG_ONLY_SDK) && out.isEmpty() && inDeps.value.isEmpty() &&
             sdkDeclarationDependencies(project, includeDebug = false).none {
                 (isolated && it is ProjectDependency) ||
                     (it !is ProjectDependency && !isIgnored(ignore, it) &&
@@ -1909,7 +1909,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         internal fun debugOnlyCoreWarning(projectPath: String): String =
             "Bugsee: $BUGSEE_GROUP:bugsee-android is declared only on debug configurations in $projectPath, " +
                 "so it is not auto-added and release builds may not include the SDK (check the release runtime " +
-                "classpath). If that is intended, ignore this (or set sdkAutoLoad=false); otherwise declare it with `implementation` (or `releaseImplementation`)."
+                "classpath). If that is intended, silence this with bugsee { warnDebugOnlySdk.set(false) } or plugin.warnDebugOnlySdk=false; otherwise declare it with `implementation` (or `releaseImplementation`)."
 
         /** Identity match: excludes dependencies the plugin itself auto-added (see reconcileAutoAdd). */
         private fun isIgnored(ignore: Set<Dependency>, dep: Dependency): Boolean = ignore.any { it === dep }
@@ -2096,6 +2096,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         private val DEBUG = SettingDefinitions.booleanByKey("debug")
         private val SDK_AUTO_LOAD = SettingDefinitions.booleanByKey("sdkAutoLoad")
         private val FEEDBACK = SettingDefinitions.booleanByKey("feedback")
+        private val WARN_DEBUG_ONLY_SDK = SettingDefinitions.booleanByKey("warnDebugOnlySdk")
         private val LEAK_ENABLED = SettingDefinitions.booleanByKey("leak.enabled")
         private val NDK_ENABLED = SettingDefinitions.booleanByKey("ndk.enabled")
         private val INST_COMPOSE = SettingDefinitions.booleanByKey("instrumentation.compose")

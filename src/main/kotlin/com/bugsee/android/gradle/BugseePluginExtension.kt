@@ -273,6 +273,23 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
     val sdkAutoLoad: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
 
     /**
+     * Warn when the core Bugsee SDK is declared only on `debug*` configurations (for example just
+     * `debugImplementation`), so release builds may ship without it.
+     *
+     * Set to `false` if the debug-only SDK is deliberate: the warning is then suppressed entirely, at
+     * every log level. This only controls the warning: the auto-add decision is unchanged (a
+     * debug-only core declaration still suppresses the core auto-add), and `sdkAutoLoad` is not
+     * affected.
+     *
+     * The decision is made for the whole project before variants exist, so this is a global-only
+     * setting: a compile error inside `variant { }` in Kotlin, silently ignored there in Groovy. Also settable as `plugin.warnDebugOnlySdk`
+     * in bugsee.properties (the DSL wins unless `preferSettingsFile` is set).
+     *
+     * Default: `true`
+     */
+    val warnDebugOnlySdk: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
      * Extra tasks the build-id asset task must run after, by task name.
      *
      * The task that injects `bugsee_build_id.properties` transforms AGP's merged assets

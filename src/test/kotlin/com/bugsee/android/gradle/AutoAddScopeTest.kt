@@ -537,6 +537,95 @@ class AutoAddScopeTest {
         }
     }
 
+    /** The Bugsee lines for a debug-only core pin, plus what was auto-added (must stay empty: the setting only gates the warning). */
+    private fun debugOnlyCoreRun(h: Harness): Pair<Set<String>, List<String>> {
+        h.declareOnCreating("debugImplementation", core)
+        h.project.extensions.add("android", Any())
+        var added = emptySet<String>()
+        val lines = captureOutput {
+            added = h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        return added to lines
+    }
+
+    @Test
+    fun warnDebugOnlySdkFalseInTheDslSilencesTheWarningWithoutChangingAutoAdd() {
+        val (added, lines) = debugOnlyCoreRun(Harness(null, declareCore = false) { warnDebugOnlySdk.set(false) })
+        assertEquals(emptySet<String>(), added)
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkFalseInBugseePropertiesSilencesTheWarning() {
+        val (added, lines) = debugOnlyCoreRun(Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false))
+        assertEquals(emptySet<String>(), added)
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkTrueStillWarns() {
+        val h = Harness("plugin.warnDebugOnlySdk=true\n", declareCore = false) { warnDebugOnlySdk.set(true) }
+        val (added, lines) = debugOnlyCoreRun(h)
+        assertEquals(emptySet<String>(), added)
+        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkDslWinsOverTheFile() {
+        val h = Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) { warnDebugOnlySdk.set(true) }
+        val (added, lines) = debugOnlyCoreRun(h)
+        assertEquals(emptySet<String>(), added)
+        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+    }
+
+    /** Set after `implementation` was already read: the warning is decided in the final recompute. */
+    @Test
+    fun warnDebugOnlySdkSetAfterAnEarlyReadStillSilences() {
+        val h = Harness(null, declareCore = false)
+        h.declareOnCreating("debugImplementation", core)
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            h.autoAdded()
+            h.extension.warnDebugOnlySdk.set(false)
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkFollowsPreferSettingsFile() {
+        val (_, lines) = debugOnlyCoreRun(
+            Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) {
+                warnDebugOnlySdk.set(true)
+                preferSettingsFile.set(true)
+            },
+        )
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    /** The setting gates only the debug-only warning: the sdkAutoLoad=false opt-in warning still logs. */
+    @Test
+    fun warnDebugOnlySdkFalseLeavesOtherAutoAddWarningsAlone() {
+        val h = Harness(null, declareCore = false) {
+            warnDebugOnlySdk.set(false)
+            sdkAutoLoad.set(false)
+            feedback.set(true)
+        }
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertTrue(lines.contains(BugseePlugin.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback")), lines.toString())
+    }
+
+    @Test
+    fun warnDebugOnlySdkFalseDoesNotSuppressTheCoreAutoAddWhenNothingIsDeclared() {
+        val h = Harness(null, declareCore = false) { warnDebugOnlySdk.set(false) }
+        assertEquals(setOf("bugsee-android"), h.autoAdded())
+    }
+
     @Test
     fun corePinOnANonDebugConfigurationAlongsideDebugDoesNotWarn() {
         for (other in listOf("implementation", "releaseImplementation", "compileOnly")) {
