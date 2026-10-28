@@ -573,10 +573,37 @@ class AutoAddScopeTest {
 
     @Test
     fun warnDebugOnlySdkDslWinsOverTheFile() {
+        val h = Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) { warnDebugOnlySdk.set(true) }
+        val (added, lines) = debugOnlyCoreRun(h)
+        assertEquals(emptySet<String>(), added)
+        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+    }
+
+    @Test
+    fun warnDebugOnlySdkFollowsPreferSettingsFile() {
         val (_, lines) = debugOnlyCoreRun(
-            Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) { warnDebugOnlySdk.set(true) },
+            Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) {
+                warnDebugOnlySdk.set(true)
+                preferSettingsFile.set(true)
+            },
         )
-        assertEquals(1, lines.size, lines.toString())
+        assertEquals(emptyList<String>(), lines)
+    }
+
+    /** The setting gates only the debug-only warning: the sdkAutoLoad=false opt-in warning still logs. */
+    @Test
+    fun warnDebugOnlySdkFalseLeavesOtherAutoAddWarningsAlone() {
+        val h = Harness(null, declareCore = false) {
+            warnDebugOnlySdk.set(false)
+            sdkAutoLoad.set(false)
+            feedback.set(true)
+        }
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            h.autoAdded()
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertTrue(lines.contains(BugseePlugin.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback")), lines.toString())
     }
 
     @Test

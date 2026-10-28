@@ -1909,7 +1909,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         internal fun debugOnlyCoreWarning(projectPath: String): String =
             "Bugsee: $BUGSEE_GROUP:bugsee-android is declared only on debug configurations in $projectPath, " +
                 "so it is not auto-added and release builds may not include the SDK (check the release runtime " +
-                "classpath). If that is intended, silence this with warnDebugOnlySdk=false; otherwise declare it with `implementation` (or `releaseImplementation`)."
+                "classpath). If that is intended, silence this with bugsee { warnDebugOnlySdk.set(false) } or plugin.warnDebugOnlySdk=false; otherwise declare it with `implementation` (or `releaseImplementation`)."
 
         /** Identity match: excludes dependencies the plugin itself auto-added (see reconcileAutoAdd). */
         private fun isIgnored(ignore: Set<Dependency>, dep: Dependency): Boolean = ignore.any { it === dep }

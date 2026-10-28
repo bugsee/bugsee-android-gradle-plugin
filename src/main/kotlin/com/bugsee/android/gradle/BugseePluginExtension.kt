@@ -277,7 +277,7 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * `debugImplementation`), so release builds may ship without it.
      *
      * Set to `false` if the debug-only SDK is deliberate: the warning is then suppressed entirely, at
-     * every log level, including for builds that fail on warnings. This only controls the warning: the
+     * every log level. This only controls the warning: the
      * auto-add decision is unchanged (a debug-only core declaration still suppresses the core
      * auto-add), and `sdkAutoLoad` is not affected.
      *

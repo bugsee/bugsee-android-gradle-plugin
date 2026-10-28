@@ -199,7 +199,7 @@ bugsee {
 ```
 
 Precedence: `DSL (variant, then global) > bugsee.properties (variant.* then root) > default`,
-flipped by `preferSettingsFile`. Global-only settings (`feedback`, `leak`, `sdkAutoLoad`,
+flipped by `preferSettingsFile`. Global-only settings (`feedback`, `leak`, `sdkAutoLoad`, `warnDebugOnlySdk`,
 `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader`) are a compile error inside `variant { }`
 in Kotlin (`@BugseeDsl`). In Groovy the closure runs against the block (DELEGATE_FIRST), which is a
 full `BugseePluginExtension`, so they write the block's own copy and are SILENTLY IGNORED (they do
