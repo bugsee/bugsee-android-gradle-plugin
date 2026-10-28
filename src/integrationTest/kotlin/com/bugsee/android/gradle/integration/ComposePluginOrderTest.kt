@@ -51,6 +51,7 @@ class ComposePluginOrderTest {
             mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0),
             tagCounts(fixture),
         )
+        assertEquals("Kotlin 1.9.25: every real library text field is secured (issues #149, #151)", SECURE_ALL, secureCounts(fixture))
     }
 
     // Kotlin 2.x: the Compose compiler is the bundled, modern-registered one. The order is whatever
@@ -86,6 +87,7 @@ class ComposePluginOrderTest {
         )
         fixture.build(null, *composeRepoArgs(), *flags)
         assertEquals("Kotlin $kotlin (composeFirst=$composeFirst)", expected, tagCounts(fixture))
+        assertEquals("Kotlin $kotlin (composeFirst=$composeFirst): every real library text field is secured", SECURE_ALL, secureCounts(fixture))
     }
 
     private fun materialize(kotlin: String, kotlin2: Boolean): FixtureProject {
@@ -126,18 +128,25 @@ class ComposePluginOrderTest {
         assertTrue("Bugsee must be ahead of the Compose compiler: $order", bugsee < compose)
     }
 
-    private fun tagCounts(fixture: FixtureProject): Map<String, Int> {
+    private fun tagCounts(fixture: FixtureProject): Map<String, Int> =
+        countCalls(fixture, ".bugseeTag:", listOf("ProdDefault", "ProdExplicit", "ProdCustomDefault"))
+
+    /** `bugseeSecure` call count per real-library text-field composable of the fixture. */
+    private fun secureCounts(fixture: FixtureProject): Map<String, Int> =
+        countCalls(fixture, ".bugseeSecure:", SECURE_ALL.keys.toList())
+
+    private fun countCalls(fixture: FixtureProject, callSuffix: String, names: List<String>): Map<String, Int> {
         val classFile = fixture.projectDir.resolve("app/build/tmp/kotlin-classes/debug/com/example/app/ProdKt.class")
         assertTrue("compiled fixture class missing: $classFile", classFile.isFile)
         val javap = File(File(System.getProperty("java.home"), "bin"), "javap").absolutePath
         val process = ProcessBuilder(javap, "-c", "-p", classFile.absolutePath).redirectErrorStream(true).start()
         val dump = process.inputStream.bufferedReader().readText()
         assertEquals("javap failed:\n$dump", 0, process.waitFor())
-        val counts = linkedMapOf("ProdDefault" to 0, "ProdExplicit" to 0, "ProdCustomDefault" to 0)
+        val counts = linkedMapOf<String, Int>().apply { names.forEach { put(it, 0) } }
         var current: String? = null
         for (line in dump.lines()) {
             METHOD_HEADER.find(line)?.let { current = it.groupValues[1] }
-            if (current in counts && line.contains("invokestatic") && line.contains(".bugseeTag:")) {
+            if (current in counts && line.contains("invokestatic") && line.contains(callSuffix)) {
                 counts[current!!] = counts.getValue(current!!) + 1
             }
         }
@@ -145,6 +154,10 @@ class ComposePluginOrderTest {
     }
 
     private companion object {
+        val SECURE_ALL = linkedMapOf(
+            "ProdSecureMaterial" to 1, "ProdSecureMaterialOutlined" to 1, "ProdSecureMaterial3" to 1,
+            "ProdSecureMaterial3Outlined" to 1, "ProdSecureBasic" to 1,
+        )
         val METHOD_HEADER = Regex("""^\s{2}\S[^(]*?\b([\w$]+)\(.*;$""")
     }
 }
