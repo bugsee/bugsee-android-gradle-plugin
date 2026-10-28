@@ -26,6 +26,14 @@ class ProxyEnvTest {
         assertEquals("http://h:80", out["HTTP_PROXY"])
     }
 
+    @Test fun `entries containing a comma or space are dropped instead of being split by NO_PROXY`() {
+        val out = proxyEnvFromSystemProperties(
+            mapOf("http.nonProxyHosts" to "foo, *, bar|*.corp,foo|a b|[*]|[.b]| * | *.corp |010.*|*.10.0.0.0/8|*10.0.0.0/8|[host]|[a/b:c]|\t|ok.example"),
+            emptyMap(),
+        )
+        assertEquals("ok.example,localhost,127.0.0.0/8,::1,0.0.0.0,::", out["NO_PROXY"])
+    }
+
     @Test fun `nonProxyHosts converts to NO_PROXY`() {
         val out = proxyEnvFromSystemProperties(
             mapOf("http.nonProxyHosts" to "localhost|*.corp.example|10.*|192.168.1.*|*suffix.example|foo*|*corp*|[fd00::5]|*|internal"),

@@ -703,8 +703,14 @@ Proxy credentials (`proxyUser`/`proxyPassword`) are percent-encoded into the URL
 `10.*` becomes `10.0.0.0/8`, and patterns that cannot be expressed are dropped.
 The JDK's built-in loopback bypass is always appended (`localhost,127.0.0.0/8,::1,0.0.0.0,::`),
 except when `http.nonProxyHosts` is explicitly empty. Variables you already set in the environment are never overridden.
-Known divergence: some `NO_PROXY` implementations (e.g. reqwest) also bypass the proxy for the apex
-host of `.b`, whereas the JDK's `*.b` matches subdomains only. The environment is also not reconciled
+Known divergence (verified against the pinned `bugsee-cli`): its `NO_PROXY` entries `b` and `.b`
+match `b` and all its subdomains, so the JDK's `*.b` (subdomains only) also bypasses the apex `b`, and
+a plain host pattern `b` (exact only in the JDK) also bypasses its subdomains. Entries are matched
+case-insensitively; globs other than a lone `*` and `host:port` entries are not supported, and
+a bracketed IPv6 entry (`[::1]`) never matches, so the translation strips the brackets;
+a `*x` pattern becomes `x`, which is narrower than the JDK's. Patterns containing a
+comma or space (including a leading or trailing one) match no host in the JDK and are dropped.
+Conversely a literal `.b` or `10.0.0.0/8` entry matches nothing in the JDK but is honoured by the CLI. The environment is also not reconciled
 with the JVM properties: if you set `HTTPS_PROXY` yourself, the CLI uses it while the Kotlin uploader uses the JVM properties.
 
 ## Example
