@@ -473,6 +473,15 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun customConfigurationExtendedOnlyByTestsDoesNotSuppressAutoAdd() {
+        val h = Harness(null, declareCore = false)
+        val custom = h.project.configurations.create("bugseeSdk")
+        h.project.configurations.maybeCreate("testImplementation").extendsFrom(custom)
+        h.declareOn("bugseeSdk", core)
+        assertEquals(setOf("bugsee-android"), h.autoAdded())
+    }
+
+    @Test
     fun inheritedCorePinSetsTheExtensionVersion() {
         val h = Harness(null, declareCore = false) { feedback.set(true) }
         val custom = h.project.configurations.create("bugseeSdk")

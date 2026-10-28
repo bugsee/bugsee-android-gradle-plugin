@@ -19,7 +19,7 @@ import org.gradle.api.artifacts.ProjectDependency
  * Only configurations that feed a consumer's RUNTIME classpath are read from a
  * dependency project (see [isProductionConfiguration]); the app's own
  * configurations are read by [declaredCoreSdkVersion] (tier 1) through the same predicate but
- * with `debug*` INCLUDED, so a `debugImplementation`-only pin on the app counts while a
+ * with `debug*` INCLUDED (and the configurations those extend), so a `debugImplementation`-only pin on the app counts while a
  * test / androidTest / `compileOnly` pin does not (#114).
  */
 internal object BugseeSdkDeclarations {
@@ -113,7 +113,7 @@ internal object BugseeSdkDeclarations {
      *
      * Precedence (first non-empty tier wins; within a tier the HIGHEST parseable
      * version, which is what Gradle's conflict resolution picks):
-     * 1. `bugsee-android` declared on [project] (production configurations, `debug*` included,
+     * 1. `bugsee-android` declared on [project] (production configurations and those they extend, `debug*` included,
      *    see [DependencyDetector.isProductionConfiguration]);
      * 2. `bugsee-android` declared by a project [project] depends on (production
      *    configurations only, see [inDependencyProjects]);
