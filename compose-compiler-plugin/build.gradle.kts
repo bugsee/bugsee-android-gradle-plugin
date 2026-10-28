@@ -216,7 +216,7 @@ val extraMatrixKotlinVersions: List<String> =
         .split(",").map { it.trim() }.filter { it.isNotEmpty() }
 val matrixKotlinVersions = (
     listOf(
-        "1.9.22", "2.0.21",
+        "1.9.22", "1.9.25", "2.0.21",
         "2.1.0", "2.1.10", "2.1.20", "2.1.21",
         "2.2.0", "2.2.10", "2.2.20", "2.2.21",
         "2.3.0", "2.3.10", "2.3.20", "2.3.21",
@@ -237,6 +237,25 @@ val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
         cfg.name("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0")
     }
     cfg
+}
+
+// The REAL Compose pipeline for Kotlin 1.9 (issue #119): the 1.9 line pairs with the androidx Compose
+// compiler 1.5.x, which is a legacy `ComponentRegistrar` plugin, and the stub fixtures above never
+// run a Compose lowering at all. 1.5.15 is the release for Kotlin 1.9.25; its runtime is needed only
+// so the compiler can resolve `Composer`. Non-transitive: the compiler classpath is the matrix one.
+val compose19Compiler by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+val compose19Runtime by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+dependencies {
+    compose19Compiler("androidx.compose.compiler:compiler:1.5.15")
+    compose19Runtime("org.jetbrains.compose.runtime:runtime-desktop:1.6.11")
 }
 
 val variantTest: SourceSet by sourceSets.creating {
@@ -276,6 +295,15 @@ val composeVariantMatrix by tasks.registering(Test::class) {
     simulatorJarFiles.forEach { (id, jar) ->
         inputs.file(jar).withPropertyName("simulatorJar.$id").withPathSensitivity(PathSensitivity.NONE)
     }
+
+    // Real Compose 1.5 compiler plugin + runtime for the Kotlin 1.9 pipeline test (immutable
+    // coordinates, so the paths are enough).
+    jvmArgumentProviders.add(CommandLineArgumentProvider {
+        listOf(
+            "-Dbugsee.compose19.compilerPlugin=${compose19Compiler.singleFile.absolutePath}",
+            "-Dbugsee.compose19.runtime=${compose19Runtime.singleFile.absolutePath}",
+        )
+    })
 
     // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
     // is no need to hash ~400 MB of compiler distributions on every up-to-date check.
