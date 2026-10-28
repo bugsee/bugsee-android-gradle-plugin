@@ -1140,6 +1140,8 @@ abstract class BundleUploadTask : DefaultTask() {
                 // A cancelled pack must not fall through to the native packer.
                 HttpRetry.throwIfInterrupted()
                 writeNormalizedUploadZip(bundle, mapping, zipTemp)
+                // The native write does not stop on an interrupt: don't hand a cancelled build to the uploader.
+                HttpRetry.throwIfInterrupted()
                 return zipTemp
             } catch (e: Throwable) {
                 zipTemp.delete()
