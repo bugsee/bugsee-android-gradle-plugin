@@ -579,6 +579,20 @@ class AutoAddScopeTest {
         assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
     }
 
+    /** Set after `implementation` was already read: the warning is decided in the final recompute. */
+    @Test
+    fun warnDebugOnlySdkSetAfterAnEarlyReadStillSilences() {
+        val h = Harness(null, declareCore = false)
+        h.declareOnCreating("debugImplementation", core)
+        h.project.extensions.add("android", Any())
+        val lines = captureOutput {
+            h.autoAdded()
+            h.extension.warnDebugOnlySdk.set(false)
+            (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+        }.filter { it.startsWith("Bugsee:") }
+        assertEquals(emptyList<String>(), lines)
+    }
+
     @Test
     fun warnDebugOnlySdkFollowsPreferSettingsFile() {
         val (_, lines) = debugOnlyCoreRun(

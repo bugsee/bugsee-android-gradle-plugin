@@ -277,12 +277,12 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
      * `debugImplementation`), so release builds may ship without it.
      *
      * Set to `false` if the debug-only SDK is deliberate: the warning is then suppressed entirely, at
-     * every log level. This only controls the warning: the
-     * auto-add decision is unchanged (a debug-only core declaration still suppresses the core
-     * auto-add), and `sdkAutoLoad` is not affected.
+     * every log level. This only controls the warning: the auto-add decision is unchanged (a
+     * debug-only core declaration still suppresses the core auto-add), and `sdkAutoLoad` is not
+     * affected.
      *
      * The decision is made for the whole project before variants exist, so this is a global-only
-     * setting: it cannot be set in a `variant { }` block. Also settable as `plugin.warnDebugOnlySdk`
+     * setting: a compile error inside `variant { }` in Kotlin, silently ignored there in Groovy. Also settable as `plugin.warnDebugOnlySdk`
      * in bugsee.properties (the DSL wins unless `preferSettingsFile` is set).
      *
      * Default: `true`
