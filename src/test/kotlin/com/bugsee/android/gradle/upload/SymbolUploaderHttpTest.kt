@@ -287,7 +287,11 @@ class SymbolUploaderHttpTest {
         Thread.currentThread().interrupt()
         try {
             val thrown = runCatching { upload("http://127.0.0.1:$dead") }.exceptionOrNull()
-            assertTrue(thrown is java.io.IOException, "must propagate the I/O failure; got: $thrown")
+            // HttpRetry now stops before the first attempt, so the cancel surfaces as InterruptedException.
+            assertTrue(
+                thrown is InterruptedException || thrown is java.io.IOException,
+                "must propagate the cancellation; got: $thrown",
+            )
             assertTrue(Thread.currentThread().isInterrupted, "interrupt status must be preserved")
             assertEquals(0, logger.warnMessages.count { it.contains("retrying") }, "must not retry when cancelled")
         } finally {

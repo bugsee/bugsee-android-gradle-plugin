@@ -42,7 +42,8 @@ import javax.inject.Inject
  *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload --type elf`
  *     via [CliUploader.uploadElf]. On a structural CLI failure (exit 1 or 2,
  *     exit < 0 / 126 / 127 / >= 128, binary missing, exec failed), fall back to the Kotlin uploader.
- *     Substantive CLI failures (bad token, server, network) propagate.
+ *     Substantive CLI failures (bad token, server, network) propagate. A cancelled build
+ *     (interrupt) is rethrown, never a fallback.
  *
  * Both paths share the [SymbolHashCache] — once a hash is uploaded
  * successfully by either path, subsequent builds skip the upload regardless
@@ -255,7 +256,7 @@ abstract class NativeUploadTask : DefaultTask() {
         // resolving in one place keeps the strategy state easy to follow.
         // `null` means: no CLI available (or uploader=KOTLIN); fall back.
         val cliBinary: File? = if (uploaderChoice == UploaderStrategy.CLI) {
-            CliBinaryResolver.resolve(
+            val resolved = CliBinaryResolver.resolve(
                 cliVersion = cliVersion.orNull,
                 cliPath = cliPath.orNull,
                 execOps = execOps,
@@ -264,6 +265,9 @@ abstract class NativeUploadTask : DefaultTask() {
                 debug = isDebug,
                 autoUpdate = cliAutoUpdate.orNull ?: true,
             )
+            // A pending interrupt can make the resolver report "no CLI" (e.g. bad cliPath): still a cancel.
+            if (resolved == null) HttpRetry.throwIfInterrupted()
+            resolved
         } else {
             null
         }
@@ -307,6 +311,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     force = skipCache,
                 )
                 if (result.success) SymbolHashCache.put(cacheFile, dirKey, dirDigest)
+                if (!result.success) HttpRetry.throwIfInterrupted()
                 // Success, or a substantive failure already logged (token / network /
                 // server: the zip path would hit the same error). Failures specific
                 // to the directory input continue to the AGP-produced sources:
@@ -453,6 +458,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     // force whenever the zip carries DWARF (or the user asked).
                     force = skipCache || containsFullDebugSymbols(zip),
                 )
+                if (!cliResult.success) HttpRetry.throwIfInterrupted()
                 when {
                     cliResult.success -> {
                         SymbolHashCache.put(cacheFile, cacheKey, hash)
@@ -488,6 +494,7 @@ abstract class NativeUploadTask : DefaultTask() {
         if (success) {
             SymbolHashCache.put(cacheFile, cacheKey, hash)
         } else {
+            HttpRetry.throwIfInterrupted()
             logger.warn("Bugsee: the native symbols for variant ${variantName.get()} were not uploaded (see the warning above).")
             UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
         }

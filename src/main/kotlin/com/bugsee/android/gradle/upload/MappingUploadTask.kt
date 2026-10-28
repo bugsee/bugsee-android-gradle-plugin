@@ -309,6 +309,8 @@ abstract class MappingUploadTask : DefaultTask() {
                     autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
                 if (cliBinary == null) {
+                    // A pending interrupt can make the resolver report "no CLI": still a cancel.
+                    HttpRetry.throwIfInterrupted()
                     "kotlin-fallback-cli-not-resolved"
                 } else {
                     val cliResult = CliUploader.uploadMapping(
@@ -324,6 +326,7 @@ abstract class MappingUploadTask : DefaultTask() {
                         logger = logger,
                         debug = isDebug,
                     )
+                    if (!cliResult.success) HttpRetry.throwIfInterrupted()
                     when {
                         cliResult.success -> return
                         !cliResult.shouldFallback -> { // already logged
@@ -361,6 +364,7 @@ abstract class MappingUploadTask : DefaultTask() {
                 uploaderTag = kotlinFallbackTag,
             )
             if (!uploaded) {
+                HttpRetry.throwIfInterrupted()
                 logger.warn("Bugsee: the mapping for variant ${variantName.get()} was not uploaded (see the warning above).")
                 UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the mapping for variant ${variantName.get()}")
             }

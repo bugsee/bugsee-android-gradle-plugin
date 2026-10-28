@@ -441,7 +441,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val gradleUserHome = gradleUserHomeDir.orNull?.asFile
         val resolveCli: () -> File? = {
             if (gradleUserHome != null) {
-                CliBinaryResolver.resolve(
+                val resolved = CliBinaryResolver.resolve(
                     cliVersion = cliVersion.orNull,
                     cliPath = cliPath.orNull,
                     execOps = execOps,
@@ -450,6 +450,9 @@ abstract class BundleUploadTask : DefaultTask() {
                     debug = isDebug,
                     autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
+                // A pending interrupt can make the resolver report "no CLI" (e.g. bad cliPath): still a cancel.
+                if (resolved == null) HttpRetry.throwIfInterrupted()
+                resolved
             } else {
                 null
             }
@@ -481,6 +484,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val vcs = try {
             VcsMetadataResolver.resolve(projectDirectory.get().asFile)
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             if (isDebug) logger.warn("Bugsee: VCS metadata resolution failed: ${e.message}")
             com.bugsee.android.gradle.upload.VcsMetadata()
         }
@@ -508,6 +512,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val buildMetadata = try {
             resolveBuildMetadataJson(timingsSnapshot)
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             if (isDebug) logger.warn("Bugsee: build_metadata resolution failed: ${e.message}")
             null
         }
@@ -554,6 +559,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 try {
                     resolveDependenciesPayload()
                 } catch (e: Exception) {
+                    HttpRetry.throwIfInterrupted()
                     if (isDebug) logger.warn(
                         "Bugsee: dependency collection failed: ${e.message} — skipping deps upload"
                     )
@@ -576,6 +582,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 try {
                     resolveTimingsPayload(timingsSnapshot)
                 } catch (e: Exception) {
+                    HttpRetry.throwIfInterrupted()
                     if (isDebug) logger.warn(
                         "Bugsee: timings serialisation failed: ${e.message} — skipping timings upload"
                     )
@@ -673,7 +680,8 @@ abstract class BundleUploadTask : DefaultTask() {
             // structural CLI failure / unavailable binary falls through to the
             // native Bundle/ChunkedBundleUploader path below; a substantive
             // failure (bad token / server) is NOT retried natively — the native
-            // path would hit the same error.
+            // path would hit the same error. A cancelled build (interrupt) never falls
+            // back: it is rethrown, flag intact.
             var uploadHandled = false
             // Set when the build registration did not complete; failOnUploadError then fails the task
             // after the size check below (a failed upload must not hide a size-check verdict).
@@ -685,6 +693,8 @@ abstract class BundleUploadTask : DefaultTask() {
                     payloadFile.deleteOnExit()
                     try {
                         payloadFile.writeText(json)
+                        // Don't start a registration subprocess for a build that is already cancelled.
+                        HttpRetry.throwIfInterrupted()
                         val result = CliUploader.uploadBuild(
                             execOps = execOps,
                             cliBinary = cli,
@@ -699,6 +709,7 @@ abstract class BundleUploadTask : DefaultTask() {
                             logger = logger,
                             debug = isDebug,
                         )
+                        if (!result.success) HttpRetry.throwIfInterrupted()
                         uploadHandled = result.success || !result.shouldFallbackForBuildRegistration
                         if (!result.success && uploadHandled) uploadFailed = true
                         if (!result.success && result.shouldFallback && uploadHandled) {
@@ -708,7 +719,11 @@ abstract class BundleUploadTask : DefaultTask() {
                                     "uploader is NOT attempted to avoid a duplicate registration.",
                             )
                         }
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.warn(
                             "Bugsee: bugsee-cli upload build threw — falling back to " +
                                 "the native uploader. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}",
@@ -754,6 +769,7 @@ abstract class BundleUploadTask : DefaultTask() {
                         }
                         logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
                 }
@@ -789,6 +805,7 @@ abstract class BundleUploadTask : DefaultTask() {
                         logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                         uploadFailed = true
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                         uploadFailed = true
                     }
@@ -1107,25 +1124,36 @@ abstract class BundleUploadTask : DefaultTask() {
         // ANY CLI failure falls through to the
         // native packer, which always produces a valid (if larger) ZIP —
         // writeNormalizedUploadZip truncates zipTemp, discarding a partial CLI
-        // write — so a CLI hiccup never breaks the build.
-        if (mapping != null && !legacyGzip && cliSupportsPack()) {
-            val cli = resolveCli()
-            if (cli != null && CliUploader.packUploadZip(
-                    execOps = execOps,
-                    cliBinary = cli,
-                    artifactFile = bundle,
-                    mappingFile = mapping,
-                    outZip = zipTemp,
-                    logger = logger,
-                    debug = isDebug,
-                )
-            ) {
-                return zipTemp
+        // write — so a CLI hiccup never breaks the build. A cancelled build (interrupt)
+        // is the exception: it is rethrown, never a fallback.
+        // A failed or cancelled pack abandons the partial zip: the lazy never completes, so the
+        // task's `finally` cannot delete it.
+        try {
+            if (mapping != null && !legacyGzip && cliSupportsPack()) {
+                val cli = resolveCli()
+                if (cli != null && CliUploader.packUploadZip(
+                        execOps = execOps,
+                        cliBinary = cli,
+                        artifactFile = bundle,
+                        mappingFile = mapping,
+                        outZip = zipTemp,
+                        logger = logger,
+                        debug = isDebug,
+                    )
+                ) {
+                    return zipTemp
+                }
+                // A cancelled pack must not fall through to the native packer.
+                HttpRetry.throwIfInterrupted()
             }
+            writeNormalizedUploadZip(bundle, mapping, zipTemp)
+            // The native write does not stop on an interrupt: don't hand a cancelled build to the uploader.
+            HttpRetry.throwIfInterrupted()
+            return zipTemp
+        } catch (e: Throwable) {
+            zipTemp.delete()
+            throw e
         }
-
-        writeNormalizedUploadZip(bundle, mapping, zipTemp)
-        return zipTemp
     }
 
     /**

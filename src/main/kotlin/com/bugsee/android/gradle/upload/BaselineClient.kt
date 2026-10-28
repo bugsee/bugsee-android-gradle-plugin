@@ -150,6 +150,7 @@ internal object BaselineClient {
             logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
             null
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
             null
         }

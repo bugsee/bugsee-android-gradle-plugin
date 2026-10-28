@@ -447,6 +447,8 @@ internal object BundleUploader {
         logger: Logger,
         debug: Boolean,
     ) {
+        // A cancelled build (e.g. after a failed artifact PUT) must not start the auxiliary uploads.
+        HttpRetry.throwIfInterrupted()
         if (shouldAttemptBundle(
                 buildInfoUploadEndpoint = buildInfoUploadEndpoint,
                 legacyBuildInfoGzip = legacyBuildInfoGzip,
@@ -471,6 +473,8 @@ internal object BundleUploader {
                     if (debug) logger.warn("Bugsee: build-info bundle uploaded via bugsee-cli.")
                     return
                 }
+                // A cancelled build must not fall back to the legacy PUTs.
+                HttpRetry.throwIfInterrupted()
                 // Any failure → fall back to the independent legacy PUTs.
                 logger.warn(
                     "Bugsee: build-info bundle upload failed " +
@@ -478,6 +482,7 @@ internal object BundleUploader {
                         "falling back to legacy per-blob upload.",
                 )
             } else {
+                HttpRetry.throwIfInterrupted()
                 logger.warn(
                     "Bugsee: build-info bundle offered but bugsee-cli could not be " +
                         "resolved; falling back to legacy per-blob upload.",
@@ -540,6 +545,8 @@ internal object BundleUploader {
         debug: Boolean,
     ) {
         if (gzFile == null) return
+        // Raw client.execute ignores the interrupt flag: stop before each legacy blob PUT.
+        HttpRetry.throwIfInterrupted()
         if (presignedUrl.isEmpty()) {
             logger.warn(
                 "Bugsee: $label blob ready but server did not return a presigned URL — skipping."

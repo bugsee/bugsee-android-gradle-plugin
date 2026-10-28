@@ -37,6 +37,18 @@ internal object HttpRetry {
         Thread.currentThread().isInterrupted ||
             (e is InterruptedIOException && e !is SocketTimeoutException && e !is ConnectTimeoutException)
 
+    /**
+     * Rethrows a pending interrupt as [InterruptedException]; the flag stays set. The CLI uploader reports a killed
+     * or cancelled `bugsee-cli` run as a plain fallback result, so a task calls this on its failure paths to keep
+     * a cancelled build cancelled instead of turning it into a warning or a native-uploader fallback.
+     */
+    @Throws(InterruptedException::class)
+    internal fun throwIfInterrupted() {
+        if (Thread.currentThread().isInterrupted) {
+            throw InterruptedException("Bugsee: build cancelled")
+        }
+    }
+
     /** Statuses worth another attempt of any request: throttling and every 5xx. */
     private fun isTransient(status: Int): Boolean = status == 429 || status in 500..599
 
@@ -76,6 +88,8 @@ internal object HttpRetry {
         fun elapsedMs() = (System.nanoTime() - started) / 1_000_000
         val retryable: (Int) -> Boolean = if (idempotent) ::isTransient else ::isGatewayTransient
         for (attempt in 1..MAX_ATTEMPTS) {
+            // The blocking HttpClient never looks at the interrupt flag itself: stop before each attempt.
+            throwIfInterrupted()
             val last = attempt == MAX_ATTEMPTS
             var waitMs = policy.backoffMs * attempt
             try {
