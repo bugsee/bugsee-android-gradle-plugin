@@ -919,6 +919,27 @@ class CliUploaderTest {
         assertFalse(nested.contains("NESTEDSECRET"), nested)
     }
 
+    @Test fun `scrubCliOutput is bounded-time on adversarial 1 MB inputs`() {
+        val mb = 1_000_000
+        val inputs = listOf(
+            "token".repeat(mb / 5), "-key".repeat(mb / 4), "?a=".repeat(mb / 3), "\\\"".repeat(mb / 2),
+            "\"token\":\"".repeat(mb / 9), "<StringToSign>".repeat(mb / 14), "Bearer ".repeat(mb / 7),
+            "\u001B[".repeat(mb / 2), "token=\"".repeat(mb / 7), "line with token=x\n".repeat(mb / 18),
+            "a".repeat(mb),
+        )
+        for (nasty in inputs) {
+            val start = System.nanoTime()
+            CliUploader.scrubCliOutput(nasty)
+            val ms = (System.nanoTime() - start) / 1_000_000
+            assertTrue(ms < 10_000, "scrub took ${ms}ms for ${nasty.take(12)}")
+        }
+    }
+
+    @Test fun `S3 CanonicalRequestBytes element is redacted`() {
+        val out = CliUploader.scrubCliOutput("<Error><CanonicalRequestBytes>41 4b 49 41 53 45 43</CanonicalRequestBytes></Error>")
+        assertFalse(out.contains("41 4b 49"), out)
+    }
+
     @Test fun `long output keeps head and tail so the final error line survives`() {
         val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
         val out = CliUploader.scrubCliOutput(text)
