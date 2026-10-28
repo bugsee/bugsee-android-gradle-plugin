@@ -484,6 +484,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val vcs = try {
             VcsMetadataResolver.resolve(projectDirectory.get().asFile)
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             if (isDebug) logger.warn("Bugsee: VCS metadata resolution failed: ${e.message}")
             com.bugsee.android.gradle.upload.VcsMetadata()
         }
@@ -511,6 +512,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val buildMetadata = try {
             resolveBuildMetadataJson(timingsSnapshot)
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             if (isDebug) logger.warn("Bugsee: build_metadata resolution failed: ${e.message}")
             null
         }
@@ -557,6 +559,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 try {
                     resolveDependenciesPayload()
                 } catch (e: Exception) {
+                    HttpRetry.throwIfInterrupted()
                     if (isDebug) logger.warn(
                         "Bugsee: dependency collection failed: ${e.message} — skipping deps upload"
                     )
@@ -579,6 +582,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 try {
                     resolveTimingsPayload(timingsSnapshot)
                 } catch (e: Exception) {
+                    HttpRetry.throwIfInterrupted()
                     if (isDebug) logger.warn(
                         "Bugsee: timings serialisation failed: ${e.message} — skipping timings upload"
                     )
@@ -689,6 +693,8 @@ abstract class BundleUploadTask : DefaultTask() {
                     payloadFile.deleteOnExit()
                     try {
                         payloadFile.writeText(json)
+                        // Don't start a registration subprocess for a build that is already cancelled.
+                        HttpRetry.throwIfInterrupted()
                         val result = CliUploader.uploadBuild(
                             execOps = execOps,
                             cliBinary = cli,
@@ -1120,10 +1126,10 @@ abstract class BundleUploadTask : DefaultTask() {
         // writeNormalizedUploadZip truncates zipTemp, discarding a partial CLI
         // write — so a CLI hiccup never breaks the build. A cancelled build (interrupt)
         // is the exception: it is rethrown, never a fallback.
-        if (mapping != null && !legacyGzip && cliSupportsPack()) {
-            // A failed or cancelled pack abandons the partial zip: the lazy never completes, so the
-            // task's `finally` cannot delete it.
-            try {
+        // A failed or cancelled pack abandons the partial zip: the lazy never completes, so the
+        // task's `finally` cannot delete it.
+        try {
+            if (mapping != null && !legacyGzip && cliSupportsPack()) {
                 val cli = resolveCli()
                 if (cli != null && CliUploader.packUploadZip(
                         execOps = execOps,
@@ -1139,18 +1145,15 @@ abstract class BundleUploadTask : DefaultTask() {
                 }
                 // A cancelled pack must not fall through to the native packer.
                 HttpRetry.throwIfInterrupted()
-                writeNormalizedUploadZip(bundle, mapping, zipTemp)
-                // The native write does not stop on an interrupt: don't hand a cancelled build to the uploader.
-                HttpRetry.throwIfInterrupted()
-                return zipTemp
-            } catch (e: Throwable) {
-                zipTemp.delete()
-                throw e
             }
+            writeNormalizedUploadZip(bundle, mapping, zipTemp)
+            // The native write does not stop on an interrupt: don't hand a cancelled build to the uploader.
+            HttpRetry.throwIfInterrupted()
+            return zipTemp
+        } catch (e: Throwable) {
+            zipTemp.delete()
+            throw e
         }
-
-        writeNormalizedUploadZip(bundle, mapping, zipTemp)
-        return zipTemp
     }
 
     /**

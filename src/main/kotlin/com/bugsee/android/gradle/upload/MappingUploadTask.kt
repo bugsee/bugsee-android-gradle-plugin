@@ -364,6 +364,7 @@ abstract class MappingUploadTask : DefaultTask() {
                 uploaderTag = kotlinFallbackTag,
             )
             if (!uploaded) {
+                HttpRetry.throwIfInterrupted()
                 logger.warn("Bugsee: the mapping for variant ${variantName.get()} was not uploaded (see the warning above).")
                 UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the mapping for variant ${variantName.get()}")
             }

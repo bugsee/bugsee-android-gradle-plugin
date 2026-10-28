@@ -231,7 +231,14 @@ object VcsMetadataResolver {
                 }
             }.apply { isDaemon = true; start() }
 
-            val finished = process.waitFor(GIT_TIMEOUT_SEC, TimeUnit.SECONDS)
+            // A cancelled build must stay cancelled: kill git, restore the flag and rethrow (not "no VCS data").
+            val finished = try {
+                process.waitFor(GIT_TIMEOUT_SEC, TimeUnit.SECONDS)
+            } catch (e: InterruptedException) {
+                process.destroyForcibly()
+                Thread.currentThread().interrupt()
+                throw e
+            }
             if (!finished) {
                 // Timeout path: destroy and bound the join so we don't
                 // wait for a stream that might never close.
@@ -242,9 +249,17 @@ object VcsMetadataResolver {
             // Happy path: the process exited cleanly, so stdout has
             // hit EOF (or will, very shortly). Unbounded join is safe
             // and guarantees we see the complete output.
-            drain.join()
+            try {
+                drain.join()
+            } catch (e: InterruptedException) {
+                process.destroyForcibly()
+                Thread.currentThread().interrupt()
+                throw e
+            }
             if (process.exitValue() != 0) return null
             captured.toString().trim().ifEmpty { null }
+        } catch (e: InterruptedException) {
+            throw e
         } catch (_: Exception) {
             null
         }

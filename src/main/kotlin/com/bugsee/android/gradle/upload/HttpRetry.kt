@@ -88,6 +88,8 @@ internal object HttpRetry {
         fun elapsedMs() = (System.nanoTime() - started) / 1_000_000
         val retryable: (Int) -> Boolean = if (idempotent) ::isTransient else ::isGatewayTransient
         for (attempt in 1..MAX_ATTEMPTS) {
+            // The blocking HttpClient never looks at the interrupt flag itself: stop before each attempt.
+            throwIfInterrupted()
             val last = attempt == MAX_ATTEMPTS
             var waitMs = policy.backoffMs * attempt
             try {

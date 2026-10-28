@@ -105,6 +105,7 @@ internal object ChunkedBundleUploader {
     ): String {
         val http = newHttpClient()
         try {
+            HttpRetry.throwIfInterrupted()
             val options = fetchChunkOptions(http, endpoint, appToken)
             val chunkSize = options.getInt("chunk_size")
             val maxChunks = options.getInt("max_chunks")
@@ -122,6 +123,7 @@ internal object ChunkedBundleUploader {
             if (debug) logger.warn("Bugsee: chunked upload — chunk_size=$chunkSize max_chunks=$maxChunks")
 
             val chunkHashes = computeChunkHashes(uploadZip, chunkSize)
+            HttpRetry.throwIfInterrupted()
             if (chunkHashes.size > maxChunks) {
                 throw RuntimeException(
                     "Archive too large for chunked upload: ${chunkHashes.size} chunks > server max $maxChunks"
@@ -162,6 +164,8 @@ internal object ChunkedBundleUploader {
                     val sha1 = chunkHashes[index]
                     if (sha1 !in missingSet) continue
                     if (!uploaded.add(sha1)) continue
+                    // Raw chunk PUTs ignore the interrupt flag: stop before every further chunk.
+                    HttpRetry.throwIfInterrupted()
                     val url = uploadUrls.getString(sha1)
                     uploadChunk(http, uploadZip, index, chunkSize, url, reusable)
                 }

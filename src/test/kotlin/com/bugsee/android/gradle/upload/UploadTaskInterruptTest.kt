@@ -181,4 +181,74 @@ class UploadTaskInterruptTest {
         assertFailsWith<InterruptedException> { task.execute() }
         assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be restored")
     }
+
+    @Test
+    fun bundleTask_interruptDuringCliPack_propagatesAndDeletesPartialZip() {
+        val project = ProjectBuilder.builder().withProjectDir(tmp.newFolder("p")).build()
+        val artifact = tmp.newFile("app.aab").apply { writeText("aab") }
+        val mapping = tmp.newFile("mapping.txt").apply { writeText("a -> b:\n") }
+        val uuid = "uuid-pack-${System.nanoTime()}"
+        val buildId = tmp.newFile("buildid.txt").apply { writeText(uuid) }
+        val task = project.tasks.register("b", BundleUploadTask::class.java) {
+            it.debug.set(false)
+            it.variantName.set("release")
+            it.buildConfiguration.set("release")
+            it.endpoint.set("http://127.0.0.1:1")
+            it.format.set("aab")
+            it.bundleFile.set(artifact)
+            it.mappingFile.set(mapping)
+            it.manifestFile.set(manifest())
+            it.resolvedBuildIdFile.set(buildId)
+            it.preResolvedAppToken.set("tok")
+            // No artifact upload: skips `upload build`, so the pack step is the first CLI call.
+            it.requestArtifactUpload.set(false)
+            it.chunkedUpload.set(false)
+            it.projectDirectory.set(project.projectDir)
+            it.cliPath.set(hangingCli().absolutePath)
+            it.gradleUserHomeDir.set(tmp.newFolder("guh"))
+        }.get()
+
+        interruptSoon(Thread.currentThread())
+        assertFailsWith<InterruptedException> { task.execute() }
+        assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be restored")
+        val leftovers = File(System.getProperty("java.io.tmpdir")).listFiles { f -> f.name.startsWith("bugsee-build-$uuid") }
+        assertTrue(leftovers.isNullOrEmpty(), "partial pack zip must be deleted: ${leftovers?.toList()}")
+    }
+
+    @Test
+    fun httpRetry_interruptedBeforeAttempt_sendsNothing() {
+        var requests = 0
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { ex -> requests++; ex.sendResponseHeaders(200, -1); ex.close() }
+        server.start()
+        try {
+            org.apache.http.impl.client.HttpClients.createDefault().use { client ->
+                Thread.currentThread().interrupt()
+                assertFailsWith<InterruptedException> {
+                    HttpRetry.execute(
+                        client,
+                        org.apache.http.client.methods.HttpGet("http://127.0.0.1:${server.address.port}/x"),
+                        "test",
+                        org.gradle.api.logging.Logging.getLogger(UploadTaskInterruptTest::class.java),
+                    )
+                }
+                assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must stay set")
+            }
+        } finally {
+            Thread.interrupted()
+            server.stop(0)
+        }
+        kotlin.test.assertEquals(0, requests)
+    }
+
+    @Test
+    fun vcsResolver_interrupted_propagatesInsteadOfReturningNoData() {
+        Assume.assumeTrue(
+            "needs git",
+            runCatching { ProcessBuilder("git", "--version").start().waitFor() == 0 }.getOrDefault(false),
+        )
+        Thread.currentThread().interrupt()
+        assertFailsWith<InterruptedException> { VcsMetadataResolver.resolve(tmp.root, emptyMap()) }
+        assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be restored")
+    }
 }

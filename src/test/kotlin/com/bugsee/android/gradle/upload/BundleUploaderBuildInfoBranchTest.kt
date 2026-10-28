@@ -10,6 +10,7 @@ import org.gradle.process.JavaExecSpec
 import org.junit.Test
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -113,6 +114,47 @@ class BundleUploaderBuildInfoBranchTest {
             )
         }
         return calls
+    }
+
+    /**
+     * A build cancelled before the auxiliary uploads start must propagate and start none of them: no CLI
+     * resolve, and no request reaches the signed deps/timings URLs.
+     */
+    @Test fun `pending interrupt before the build-info uploads propagates and starts none`() {
+        var requests = 0
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { ex -> requests++; ex.sendResponseHeaders(200, -1); ex.close() }
+        server.start()
+        val gz = File.createTempFile("deps", ".gz").apply { writeBytes(byteArrayOf(1, 2, 3)); deleteOnExit() }
+        var resolves = 0
+        try {
+            HttpClients.createDefault().use { client ->
+                Thread.currentThread().interrupt()
+                assertFailsWith<InterruptedException> {
+                    BundleUploader.uploadBuildInfoComponents(
+                        client = client,
+                        buildInfoUploadEndpoint = "http://127.0.0.1:${server.address.port}/bundle",
+                        dependenciesUploadEndpoint = "http://127.0.0.1:${server.address.port}/deps",
+                        timingsUploadEndpoint = "http://127.0.0.1:${server.address.port}/timings",
+                        execOps = NoopExecOps,
+                        resolveCli = { resolves++; null },
+                        depsJsonFile = File("/tmp/dependencies.json"),
+                        timingsJsonFile = null,
+                        dependenciesGzFile = gz,
+                        timingsGzFile = gz,
+                        legacyBuildInfoGzip = false,
+                        logger = Logging.getLogger(BundleUploaderBuildInfoBranchTest::class.java),
+                        debug = false,
+                    )
+                }
+                assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must stay set")
+            }
+        } finally {
+            Thread.interrupted()
+            server.stop(0)
+        }
+        assertEquals(0, resolves)
+        assertEquals(0, requests)
     }
 
     /** No-op [ExecOperations]: the lazy-resolution test resolves the CLI to
