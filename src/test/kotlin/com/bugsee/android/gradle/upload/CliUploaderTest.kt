@@ -882,6 +882,23 @@ class CliUploaderTest {
         assertTrue(out.contains("retries=3"), out)
     }
 
+    @Test fun `Debug-struct, single-quoted, escaped-quote and digit-bearing credential fields are scrubbed`() {
+        val out = CliUploader.scrubCliOutput(
+            "Resp { upload_url: \"https://x\", upload_token: \"DBGSECRET\" } password='hunter2' " +
+                "client_secret=\"abc\\\"RESTSECRET\" oauth2_access_token=OSECRET error: token expired",
+        )
+        for (s in listOf("DBGSECRET", "hunter2", "RESTSECRET", "OSECRET")) assertFalse(out.contains(s), out)
+        assertTrue(out.contains("error: token expired"), out)
+    }
+
+    @Test fun `quoted credential value with long escape run does not overflow a small stack`() {
+        val nasty = "client_secret=\"" + "\\\"".repeat(950) + "\nx password: '" + "\\'".repeat(950)
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-3", 64 * 1024)
+        t.start(); t.join()
+        assertTrue(out.contains("<redacted>"), out)
+    }
+
     @Test fun `long output keeps head and tail so the final error line survives`() {
         val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
         val out = CliUploader.scrubCliOutput(text)

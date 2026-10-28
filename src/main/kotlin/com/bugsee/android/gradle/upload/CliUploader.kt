@@ -331,10 +331,15 @@ internal object CliUploader {
     )
     // tracing-subscriber may colour its output even on a pipe; escapes split `key=value` pairs.
     private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;:?]*[A-Za-z]")
+    // `key=value` (bare, double- or single-quoted, escaped quotes included) and Debug-style `key: "value"`
+    // (colon form only before a quote, so prose such as `error: token expired` is left alone). The quoted
+    // alternatives are unrolled (no repeated alternation group) so long escape runs cannot overflow the stack.
+    private const val DQ_VALUE = "\\\\?\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?"
+    private const val SQ_VALUE = "\\\\?'[^'\\\\\\r\\n]*+(?:\\\\.[^'\\\\\\r\\n]*+)*+'?"
     private val CLI_SECRET_QUERY_PAIR =
         Regex(
-            "\\b(X-Amz-[A-Za-z-]+|[A-Za-z_-]{0,32}(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[A-Za-z_-]{0,32}|Expires)" +
-                "=(?:\\\\?\"[^\"\\r\\n]*+\"?|[^\\s&\"'<>]+)",
+            "\\b(X-Amz-[A-Za-z-]+|[A-Za-z0-9_-]{0,32}(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[A-Za-z0-9_-]{0,32}|Expires)" +
+                "(?:=(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|[ \\t]*:[ \\t]*(?:$DQ_VALUE|$SQ_VALUE))",
             RegexOption.IGNORE_CASE,
         )
 
