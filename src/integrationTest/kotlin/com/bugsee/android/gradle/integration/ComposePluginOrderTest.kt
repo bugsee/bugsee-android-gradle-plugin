@@ -48,30 +48,30 @@ class ComposePluginOrderTest {
         fixture.build(null, *composeRepoArgs())
         assertEquals(
             "Kotlin 1.9.25: omitted-modifier sites (ProdDefault) are tagged along with the explicit one",
-            mapOf("ProdDefault" to 2, "ProdExplicit" to 1),
+            mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0),
             tagCounts(fixture),
         )
     }
 
-    // Kotlin 2.x: the Compose compiler is the bundled, modern-registered one, and this change does not
-    // touch the plugin classpath or the registration path there. The order is whatever plugin
-    // application order produced, and it alone decides whether omitted-modifier sites are tagged:
-    // unchanged by #138 (identical results on the commit before it).
+    // Kotlin 2.x: the Compose compiler is the bundled, modern-registered one. The order is whatever
+    // plugin application order produced, and it alone decides whether omitted-modifier sites are
+    // tagged. ProdCustomDefault (callee default is not the bare Modifier) is never tagged (issue
+    // #146: the tag would have replaced the callee's own default when Bugsee runs first).
     @Test
     fun kotlin_2_1_bugsee_applied_first_tags_omitted_modifier_sites() =
-        assertKotlin2("2.1.0", composeFirst = false, expected = mapOf("ProdDefault" to 2, "ProdExplicit" to 1))
+        assertKotlin2("2.1.0", composeFirst = false, expected = mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0))
 
     @Test
     fun kotlin_2_1_compose_applied_first_skips_omitted_modifier_sites() =
-        assertKotlin2("2.1.0", composeFirst = true, expected = mapOf("ProdDefault" to 0, "ProdExplicit" to 1))
+        assertKotlin2("2.1.0", composeFirst = true, expected = mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0))
 
     @Test
     fun kotlin_2_2_bugsee_applied_first_tags_omitted_modifier_sites() =
-        assertKotlin2("2.2.0", composeFirst = false, expected = mapOf("ProdDefault" to 2, "ProdExplicit" to 1))
+        assertKotlin2("2.2.0", composeFirst = false, expected = mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0))
 
     @Test
     fun kotlin_2_2_compose_applied_first_skips_omitted_modifier_sites() =
-        assertKotlin2("2.2.0", composeFirst = true, expected = mapOf("ProdDefault" to 0, "ProdExplicit" to 1))
+        assertKotlin2("2.2.0", composeFirst = true, expected = mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0))
 
     private fun assertKotlin2(kotlin: String, composeFirst: Boolean, expected: Map<String, Int>) {
         val fixture = materialize(kotlin, kotlin2 = true)
@@ -133,7 +133,7 @@ class ComposePluginOrderTest {
         val process = ProcessBuilder(javap, "-c", "-p", classFile.absolutePath).redirectErrorStream(true).start()
         val dump = process.inputStream.bufferedReader().readText()
         assertEquals("javap failed:\n$dump", 0, process.waitFor())
-        val counts = linkedMapOf("ProdDefault" to 0, "ProdExplicit" to 0)
+        val counts = linkedMapOf("ProdDefault" to 0, "ProdExplicit" to 0, "ProdCustomDefault" to 0)
         var current: String? = null
         for (line in dump.lines()) {
             METHOD_HEADER.find(line)?.let { current = it.groupValues[1] }

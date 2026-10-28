@@ -295,6 +295,24 @@ class ComposeVariantMatrixTest {
                 ) { println("TextField(value=" + value + ", enabled=" + enabled + ")") }
                 """.trimIndent()
             )
+            // Pins the secure pass's `defaultKnownBare` exemption: this stand-in for an allowlisted
+            // field declares a NON-bare default, so only the exemption (not the visible-default check)
+            // lets the omitted `modifier` be rewritten. The real androidx fields all default to the
+            // bare Modifier, which a library callee's lazy IR cannot show.
+            File(appDir, "MaterialOutlined.kt").writeText(
+                """
+                package androidx.compose.material
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.text.input.VisualTransformation
+
+                val OutlinedDefault: Modifier = object : Modifier {}
+                @Composable fun OutlinedTextField(
+                    modifier: Modifier = OutlinedDefault,
+                    visualTransformation: VisualTransformation? = null
+                ) { println("OutlinedTextField(default=" + (modifier === OutlinedDefault) + ")") }
+                """.trimIndent()
+            )
             // The injected helpers PRINT, so running the output reports what was injected, where,
             // and with which argument — far stronger than finding the name in a constant pool.
             File(libDir, "BugseeRuntime.kt").writeText(
@@ -315,6 +333,7 @@ class ComposeVariantMatrixTest {
                 import androidx.compose.runtime.Composable
                 import androidx.compose.ui.Modifier
                 import androidx.compose.material.TextField
+                import androidx.compose.material.OutlinedTextField
                 import androidx.compose.ui.text.input.PasswordVisualTransformation
                 import com.example.kit.LibButton
                 import com.example.kit.libHelper
@@ -345,6 +364,14 @@ class ComposeVariantMatrixTest {
                     println("NullableChild(enabled=" + enabled + ")")
                 }
 
+                // A default that is NOT the bare Modifier (issue #146): an omitted `modifier` must still
+                // reach the callee as this marker, i.e. the transform must not turn the slot into a
+                // supplied argument.
+                val Marker: Modifier = object : Modifier {}
+                @Composable fun ChildCustom(modifier: Modifier = Marker) {
+                    println("ChildCustom(default=" + (modifier === Marker) + ")")
+                }
+
                 class Holder {
                     @Composable fun Member(modifier: Modifier = Modifier, enabled: Boolean = true) {
                         println("Member(enabled=" + enabled + ")")
@@ -355,6 +382,9 @@ class ComposeVariantMatrixTest {
                     Child(Modifier)
                     Child()
                     Child(enabled = false)
+                    ChildCustom()
+                    TextField("pw", visualTransformation = PasswordVisualTransformation())
+                    OutlinedTextField(visualTransformation = PasswordVisualTransformation())
                     Holder().Member(Modifier, false)
                     TextField("secret", Modifier, true, PasswordVisualTransformation())
                     NullableChild(null, true)
@@ -362,7 +392,9 @@ class ComposeVariantMatrixTest {
                     describeDefault()
                     libHelper(Modifier)
                     libHelper()
+                    LibButton()
                     LibButton(Modifier)
+                    object : BaseKit() {}.Panel()
                     object : BaseKit() {}.Panel(Modifier)
                     Slot { println("Slot content") }
                 }
@@ -381,6 +413,14 @@ class ComposeVariantMatrixTest {
             "TAG:Screen", "Child(enabled=true)",
             "TAG:Screen", "Child(enabled=true)",
             "TAG:Screen", "Child(enabled=false)",
+            // Custom (non-bare) callee default, modifier omitted: NOT rewritten, the callee keeps its
+            // own default (issue #146). Before the fix this row printed "TAG:Screen" and default=false.
+            "ChildCustom(default=true)",
+            // Secure pass on an OMITTED modifier: the allowlisted text fields' default is the bare
+            // Modifier, so it is still rewritten.
+            "SECURE", "TextField(value=pw, enabled=true)",
+            // Allowlisted field with a non-bare default: the exemption still rewrites it (default replaced).
+            "SECURE", "OutlinedTextField(default=false)",
             "TAG:Screen", "Member(enabled=false)",
             "SECURE", "TextField(value=secret, enabled=true)",
             // No "TAG:Screen" here on purpose. The argument is a literal null, so the
@@ -394,9 +434,14 @@ class ComposeVariantMatrixTest {
             "describeDefault",
             "libHelper",
             "libHelper",
-            // A cross-module @Composable callee IS still tagged: its annotation is read from the
+            // Cross-module @Composable callee with the modifier OMITTED: untagged. Its default is not
+            // visible, so the tag would replace it (issue #146 trade-off, documented in the README).
+            "LibButton",
+            // A cross-module @Composable callee with an EXPLICIT modifier IS still tagged: its annotation is read from the
             // dependency's class files, which must work on every compiler line.
             "TAG:Screen", "LibButton",
+            // Fake override with the modifier OMITTED: untagged (no visible default; documented trade-off).
+            "Panel",
             // Fake-override member composable from a library, called through a subclass: still tagged.
             "TAG:Screen", "Panel",
             // The @Composable function-type invocation is untouched (regression pin; passed before #147 too).

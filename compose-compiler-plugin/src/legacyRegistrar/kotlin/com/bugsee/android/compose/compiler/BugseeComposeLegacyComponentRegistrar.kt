@@ -44,7 +44,6 @@ class BugseeComposeLegacyComponentRegistrar : ComponentRegistrar {
             BugseeComposeIrExtension(
                 tagInjectionEnabled = tagEnabled,
                 secureInjectionEnabled = secureEnabled,
-                injectOnlyOverBareModifierDefault = true,
             ),
         )
     }

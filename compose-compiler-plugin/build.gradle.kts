@@ -264,6 +264,20 @@ dependencies {
     compose19Runtime(compose19RuntimeCoordinates)
 }
 
+// The REAL Compose pipeline for Kotlin 2.x (issue #146): the Compose compiler ships with Kotlin from 2.0
+// as kotlin-compose-compiler-plugin-embeddable, one artifact per Kotlin version. Non-transitive: the
+// compiler classpath is the matrix one, and the 1.9-era runtime above is enough for `Composer`.
+val compose2Versions = listOf("2.1.0", "2.2.0", "2.4.0")
+val compose2Compilers = compose2Versions.associateWith { kotlinVersion ->
+    configurations.create("compose2Compiler${kotlinVersion.replace(".", "_")}") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+        isTransitive = false
+    }.also {
+        dependencies { it.name("org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:$kotlinVersion") }
+    }
+}
+
 val variantTest: SourceSet by sourceSets.creating {
     compileClasspath += sourceSets.main.get().output
     runtimeClasspath += output + compileClasspath
@@ -312,6 +326,14 @@ val composeVariantMatrix by tasks.registering(Test::class) {
             "-Dbugsee.compose19.runtime=${compose19RuntimeFiles.singleFile.absolutePath}",
         )
     })
+
+    val compose2CompilerFiles = compose2Compilers.mapValues { (_, cfg) -> objects.fileCollection().from(cfg) }
+    jvmArgumentProviders.add(CommandLineArgumentProvider {
+        compose2CompilerFiles.map { (v, files) ->
+            "-Dbugsee.compose2.compilerPlugin.$v=${files.singleFile.absolutePath}"
+        }
+    })
+    inputs.property("compose2Versions", compose2Versions)
 
     inputs.property("compose19Coordinates", "$compose19CompilerCoordinates,$compose19RuntimeCoordinates")
 
