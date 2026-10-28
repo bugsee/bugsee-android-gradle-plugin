@@ -12,7 +12,7 @@ import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
  *
  * Values are the earliest version listed in each artifact's `maven-metadata.xml` on Maven Central
  * (checked against 7.4.2): ndk `7.0.0-beta6`, leak `7.0.0-beta13`, every other extension
- * `7.0.0-beta1`. Add a row here when a new extension artifact is added to the auto-add list; an
+ * `7.0.0-beta1`. Add a row here when a new extension artifact is added to `AutoAddedExtensions` (a test fails otherwise); an
  * artifact with no row is never skipped.
  */
 internal object ExtensionFirstRelease {
@@ -30,6 +30,9 @@ internal object ExtensionFirstRelease {
 
     /** The artifact's first release, or null when [artifactName] is not in the table. */
     fun of(artifactName: String): String? = FIRST_RELEASE[artifactName]
+
+    /** Every artifact with a row (used by the table/auto-add guard test). */
+    fun artifacts(): Set<String> = FIRST_RELEASE.keys
 
     /**
      * The first release of [artifactName] when [declaredVersion] is a parsable version strictly
