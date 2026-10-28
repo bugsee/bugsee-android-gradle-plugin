@@ -256,7 +256,7 @@ abstract class NativeUploadTask : DefaultTask() {
         // resolving in one place keeps the strategy state easy to follow.
         // `null` means: no CLI available (or uploader=KOTLIN); fall back.
         val cliBinary: File? = if (uploaderChoice == UploaderStrategy.CLI) {
-            CliBinaryResolver.resolve(
+            val resolved = CliBinaryResolver.resolve(
                 cliVersion = cliVersion.orNull,
                 cliPath = cliPath.orNull,
                 execOps = execOps,
@@ -265,6 +265,9 @@ abstract class NativeUploadTask : DefaultTask() {
                 debug = isDebug,
                 autoUpdate = cliAutoUpdate.orNull ?: true,
             )
+            // A pending interrupt can make the resolver report "no CLI" (e.g. bad cliPath): still a cancel.
+            if (resolved == null) HttpRetry.throwIfInterrupted()
+            resolved
         } else {
             null
         }

@@ -309,6 +309,8 @@ abstract class MappingUploadTask : DefaultTask() {
                     autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
                 if (cliBinary == null) {
+                    // A pending interrupt can make the resolver report "no CLI": still a cancel.
+                    HttpRetry.throwIfInterrupted()
                     "kotlin-fallback-cli-not-resolved"
                 } else {
                     val cliResult = CliUploader.uploadMapping(

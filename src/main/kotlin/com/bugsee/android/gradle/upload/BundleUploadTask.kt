@@ -441,7 +441,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val gradleUserHome = gradleUserHomeDir.orNull?.asFile
         val resolveCli: () -> File? = {
             if (gradleUserHome != null) {
-                CliBinaryResolver.resolve(
+                val resolved = CliBinaryResolver.resolve(
                     cliVersion = cliVersion.orNull,
                     cliPath = cliPath.orNull,
                     execOps = execOps,
@@ -450,6 +450,9 @@ abstract class BundleUploadTask : DefaultTask() {
                     debug = isDebug,
                     autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
+                // A pending interrupt can make the resolver report "no CLI" (e.g. bad cliPath): still a cancel.
+                if (resolved == null) HttpRetry.throwIfInterrupted()
+                resolved
             } else {
                 null
             }
@@ -1136,6 +1139,8 @@ abstract class BundleUploadTask : DefaultTask() {
                 }
                 // A cancelled pack must not fall through to the native packer.
                 HttpRetry.throwIfInterrupted()
+                writeNormalizedUploadZip(bundle, mapping, zipTemp)
+                return zipTemp
             } catch (e: Throwable) {
                 zipTemp.delete()
                 throw e

@@ -96,6 +96,29 @@ class UploadTaskInterruptTest {
         assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be restored")
     }
 
+    @Test
+    fun mappingTask_interruptedBeforeResolve_withBadCliPath_propagates() {
+        val project = ProjectBuilder.builder().withProjectDir(tmp.newFolder("p")).build()
+        val buildId = tmp.newFile("buildid.txt").apply { writeText("uuid-1") }
+        val task = project.tasks.register("m", MappingUploadTask::class.java) {
+            it.debug.set(false)
+            it.variantName.set("release")
+            it.endpoint.set("http://127.0.0.1:1")
+            it.cliPath.set(File(tmp.root, "missing-cli").absolutePath)
+            it.uploader.set(UploaderStrategy.CLI)
+            it.manifestFile.set(manifest())
+            it.mappingFile.set(tmp.newFile("mapping.txt").apply { writeText("a -> b:\n") })
+            it.resolvedBuildIdFile.set(buildId)
+            it.preResolvedAppToken.set("tok")
+            it.gradleUserHomeDir.set(tmp.newFolder("guh"))
+            it.rootProjectDirectory.set(project.projectDir)
+        }.get()
+
+        Thread.currentThread().interrupt()
+        assertFailsWith<InterruptedException> { task.execute() }
+        assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be restored")
+    }
+
     private fun manifest(): File = tmp.newFile("AndroidManifest.xml").apply {
         writeText(
             """<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="x" android:versionCode="1" android:versionName="1.0"><application/></manifest>""",
