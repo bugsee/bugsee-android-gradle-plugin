@@ -573,6 +573,11 @@ the upload tasks skip with a single info-level message instead of failing or war
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
   including variants that disabled it.
+- **Compose tags only `@Composable` callees.** `bugseeTag` is added only to calls whose callee is itself
+  `@Composable` (declared in your module or a dependency). A plain helper that merely takes a
+  `Modifier` (`fun describe(m: Modifier)`) is left alone, including its default when the argument is
+  omitted. (Invoking a `@Composable` function-type value, `content(Modifier)`, was never tagged.)
+  The `bugseeSecure` pass targets a fixed list of androidx text-field callees and is unaffected.
 - **Compose on Kotlin 1.9.** Composable calls that omit `modifier` are tagged as well as the explicit
   ones, when the callee is declared in the same module with the plain `Modifier` default
   (`modifier: Modifier = Modifier`). A Compose compiler release that registers through the legacy

@@ -67,7 +67,7 @@ class Kotlin19ComposePipelineTest {
         assertEquals(
             "Kotlin $kotlin (bugsee-first): every site carries exactly one bugseeTag in the bytecode. " +
                 "A count of 4 for ProdDefault would mean the extension registered twice.",
-            mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0),
+            mapOf("ProdDefault" to 2, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0, "ProdCrossExplicit" to 1, "ProdHelper" to 0),
             result.tagCalls,
         )
         assertEquals(
@@ -79,6 +79,8 @@ class Kotlin19ComposePipelineTest {
                 "ProdExplicit" to listOf("tag:ProdExplicit"),
                 "ProdCustomDefault" to listOf("tag:marker"),
                 "ProdCross" to listOf("plain"),
+                "ProdCrossExplicit" to listOf("tag:ProdCrossExplicit"),
+                "ProdHelper" to listOf("plain", "plain", "plain"),
             ),
             result.received,
         )
@@ -89,7 +91,7 @@ class Kotlin19ComposePipelineTest {
         assertEquals(
             "Kotlin $kotlin (compose-first): the omitted-modifier sites (ProdDefault) are DEFAULT_VALUE " +
                 "composites by the time Bugsee runs and are skipped; only the explicit site is tagged.",
-            mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0),
+            mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0, "ProdCross" to 0, "ProdCrossExplicit" to 1, "ProdHelper" to 0),
             result.tagCalls,
         )
         assertEquals(
@@ -99,6 +101,8 @@ class Kotlin19ComposePipelineTest {
                 "ProdExplicit" to listOf("tag:ProdExplicit"),
                 "ProdCustomDefault" to listOf("tag:marker"),
                 "ProdCross" to listOf("plain"),
+                "ProdCrossExplicit" to listOf("tag:ProdCrossExplicit"),
+                "ProdHelper" to listOf("plain", "plain", "plain"),
             ),
             result.received,
         )
@@ -180,6 +184,9 @@ class Kotlin19ComposePipelineTest {
             import com.bugsee.library.compose.received
 
             @Composable fun LibChild(modifier: Modifier = Modifier) { received += describe(modifier) }
+
+            // A plain, non-composable helper from another module that merely takes a Modifier.
+            fun libHelper(modifier: Modifier = Modifier) { received += describe(modifier) }
             """.trimIndent()
         )
         val lib2Out = File(work, "lib2-out").apply { mkdirs() }
@@ -198,6 +205,7 @@ class Kotlin19ComposePipelineTest {
             import com.bugsee.library.compose.describe
             import com.bugsee.library.compose.received
             import com.example.lib2.LibChild
+            import com.example.lib2.libHelper
 
             // A default that is NOT the bare Modifier: it must survive an omitted-modifier call.
             val Marker: Modifier = TagModifier("marker", Modifier)
@@ -211,6 +219,14 @@ class Kotlin19ComposePipelineTest {
             @Composable fun ProdExplicit() { Child(Modifier) }
             @Composable fun ProdCustomDefault() { ChildCustom() }
             @Composable fun ProdCross() { LibChild() }
+            // A cross-module composable with an EXPLICIT modifier is tagged: the callee's @Composable
+            // annotation is read from the already-lowered library (issue #147).
+            @Composable fun ProdCrossExplicit() { LibChild(Modifier) }
+
+            // Plain helpers that merely accept a Modifier must be left alone, in-module and
+            // cross-module (issue #147).
+            fun plainHelper(modifier: Modifier) { received += describe(modifier) }
+            @Composable fun ProdHelper() { plainHelper(Modifier); libHelper(Modifier); libHelper() }
             """.trimIndent()
         )
         // Runs the composables without a composition: a recording `Composer` stand-in whose
@@ -239,7 +255,7 @@ class Kotlin19ComposePipelineTest {
                 @Suppress("UNCHECKED_CAST")
                 val received = Class.forName("com.bugsee.library.compose.SinkKt")
                     .getMethod("getReceived").invoke(null) as MutableList<String>
-                for (name in listOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross")) {
+                for (name in listOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross", "ProdCrossExplicit", "ProdHelper")) {
                     received.clear()
                     prod.getMethod(name, Composer::class.java, Integer.TYPE).invoke(null, composer, 0)
                     println("RECEIVED " + name + "=" + received.joinToString(","))
@@ -274,7 +290,10 @@ class Kotlin19ComposePipelineTest {
             .redirectErrorStream(true).start()
         val dump = javapProcess.inputStream.bufferedReader().readText()
         assertEquals("javap failed:\n$dump", 0, javapProcess.waitFor())
-        val counts = linkedMapOf("ProdDefault" to 0, "ProdExplicit" to 0, "ProdCustomDefault" to 0, "ProdCross" to 0)
+        val counts = linkedMapOf(
+            "ProdDefault" to 0, "ProdExplicit" to 0, "ProdCustomDefault" to 0, "ProdCross" to 0,
+            "ProdCrossExplicit" to 0, "ProdHelper" to 0,
+        )
         val seen = mutableSetOf<String>()
         var current: String? = null
         for (line in dump.lines()) {
@@ -317,7 +336,7 @@ class Kotlin19ComposePipelineTest {
             received[match.groupValues[1]] =
                 match.groupValues[2].split(',').filter { it.isNotEmpty() }
         }
-        assertEquals("fixture main did not report every composable:\n$output", setOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross"), received.keys)
+        assertEquals("fixture main did not report every composable:\n$output", setOf("ProdDefault", "ProdExplicit", "ProdCustomDefault", "ProdCross", "ProdCrossExplicit", "ProdHelper"), received.keys)
         return received
     }
 
