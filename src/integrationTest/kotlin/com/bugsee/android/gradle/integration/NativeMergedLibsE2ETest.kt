@@ -277,26 +277,41 @@ class NativeMergedLibsE2ETest {
         }
 
     @Test
-    fun `failOnUploadError does not fail on directory exit 10 when AGP produces no symbols`() {
-        // No debugSymbolLevel: no AGP source, so exit 10 on the directory is the whole story.
-        val (ok, out) = assembleFailingOnUploadError(constantShim(10).absolutePath)
+    fun `failOnUploadError does not fail on directory exit 10 when there is no AGP source`() {
+        // debugSymbolLevel NONE: AGP produces no symbols, so exit 10 on the directory is the whole story.
+        val (ok, out) = assembleFailingOnUploadError(constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
         assertTrue("exit 10 is 'nothing to upload', not a failure:\n$out", ok)
+        assertTrue("the directory upload ran:\n$out", out.contains("Uploading unstripped native libraries"))
+        assertTrue("no AGP source exists:\n$out", out.contains("no native symbols found"))
+        assertFalse(out.contains("Native symbols file found"))
+        assertFalse(out.contains("Intermediate symbols folder found"))
     }
 
     @Test
-    fun `failOnUploadError does not fail on exit 10 from the AGP zip either`() {
+    fun `failOnUploadError fails on directory exit 11 when there is no AGP source`() {
+        val (ok, out) = assembleFailingOnUploadError(constantShim(11).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
+        assertTrue("a failed directory upload with nothing else uploaded must fail:\n$out", !ok)
+        assertTrue("the failure must name the setting:\n$out", out.contains("failOnUploadError"))
+    }
+
+    @Test
+    fun `failOnUploadError still fails on exit 10 from the AGP zip (an I-O error, not an empty archive)`() {
         val (ok, out) = assembleFailingOnUploadError(
-            constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=FULL",
+            constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
         )
-        assertTrue("exit 10 on the zip is 'nothing to upload', not a failure:\n$out", ok)
+        assertTrue("zip exit 10 is a real failure:\n$out", !ok)
+        assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
+        assertTrue(out.contains("failOnUploadError"))
     }
 
     @Test
-    fun `failOnUploadError still fails on a substantive CLI failure for the AGP zip`() {
+    fun `failOnUploadError fails on a substantive CLI failure for the AGP zip`() {
         val (ok, out) = assembleFailingOnUploadError(
             constantShim(21).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
         )
         assertTrue("a real CLI failure must fail the build:\n$out", !ok)
+        assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
+        assertTrue(out.contains("failOnUploadError"))
     }
 
     @Test

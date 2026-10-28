@@ -465,10 +465,10 @@ abstract class NativeUploadTask : DefaultTask() {
                         return
                     }
                     !cliResult.shouldFallback -> { // already logged
-                        // Exit 10 is "nothing usable to upload" (as on the directory path), not a failed upload.
-                        if (cliResult.exitCode != CLI_EXIT_NOTHING_TO_UPLOAD) {
-                            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
-                        }
+                        // Deliberately no exit-10 carve-out here (unlike the directory path): for a zip
+                        // the CLI warns and exits 0 on an empty/unmatched archive, so 10 means a missing
+                        // input or an I/O error, which is a real failure.
+                        UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
                         return
                     }
                     else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
@@ -566,13 +566,16 @@ internal fun containsFullDebugSymbols(zip: File): Boolean = try {
 }
 
 /**
+ * `bugsee-cli` exit code for "no libraries in the directory". Only for a directory input is it
+ * "nothing to upload" rather than a failure; for a zip it means a missing input or an I/O error.
+ */
+private const val CLI_EXIT_NOTHING_TO_UPLOAD = 10
+
+/**
  * bugsee-cli exit codes that only the directory input can cause: 10 = input not
  * found / no libraries in the directory, 11 = invalid input (a scan I/O error, or an
  * older CLI trying to open the directory as a zip).
  */
-/** `bugsee-cli` exit code for "nothing usable to upload" in the input: not a failed upload. */
-private const val CLI_EXIT_NOTHING_TO_UPLOAD = 10
-
 private val DIRECTORY_INPUT_EXIT_CODES = setOf(CLI_EXIT_NOTHING_TO_UPLOAD, 11)
 
 /**
