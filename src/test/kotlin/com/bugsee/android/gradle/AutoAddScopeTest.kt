@@ -446,13 +446,40 @@ class AutoAddScopeTest {
         declareOn(configuration, coordinate)
     }
 
+    /** Versions of every `bugsee-android` core dependency on `implementation`, auto-added or declared. */
+    private fun Harness.coreVersionsOnImplementation(): List<String?> =
+        project.configurations.getByName("implementation").incoming.dependencies
+            .filter { it.group == "com.bugsee" && it.name == "bugsee-android" }.map { it.version }
+
     @Test
     fun testOnlyCorePinDoesNotSuppressCoreAutoAdd() {
         for (conf in listOf("testImplementation", "androidTestImplementation", "testCompileOnly", "debugUnitTestImplementation")) {
             val h = Harness(null, declareCore = false)
             h.declareOnCreating(conf, core)
             assertEquals(setOf("bugsee-android"), h.autoAdded(), conf)
+            // The test pin does not leak into the version: the floor range is used.
+            assertEquals(listOf<String?>(CoreSdkAutoLoad.range(BugseePlugin.MIN_SDK_VERSION)), h.coreVersionsOnImplementation(), conf)
         }
+    }
+
+    @Test
+    fun customConfigurationExtendedByImplementationSuppressesAutoAdd() {
+        val h = Harness(null, declareCore = false)
+        val custom = h.project.configurations.create("bugseeSdk")
+        h.project.configurations.getByName("implementation").extendsFrom(custom)
+        h.declareOn("bugseeSdk", core)
+        // The inherited pin is the only core dependency; nothing is added on top of it.
+        assertEquals(listOf<String?>(SDK_VERSION), h.coreVersionsOnImplementation())
+    }
+
+    @Test
+    fun testOnlyCoreProjectDependencyDoesNotSuppressCoreAutoAdd() {
+        val h = Harness(null, declareCore = false)
+        val stub = org.gradle.testfixtures.ProjectBuilder.builder().withName("stub").withParent(h.project).build()
+        stub.extensions.extraProperties.set("GROUP", "com.bugsee")
+        h.project.configurations.maybeCreate("testImplementation")
+        h.project.dependencies.add("testImplementation", h.project.dependencies.project(mapOf("path" to ":stub")))
+        assertEquals(setOf("bugsee-android"), h.autoAdded())
     }
 
     @Test
@@ -461,14 +488,18 @@ class AutoAddScopeTest {
             val h = Harness(null, declareCore = false)
             h.declareOnCreating(conf, core)
             assertEquals(emptySet<String>(), h.autoAdded(), conf)
+            // `autoAdded()` hides the name of a pre-declared pin, so also assert no second dependency.
+            if (conf == "implementation") assertEquals(listOf<String?>(SDK_VERSION), h.coreVersionsOnImplementation(), conf)
         }
     }
 
     @Test
     fun testPinAlongsideProductionPinStillDefersToProduction() {
-        val h = Harness(null)
-        h.declareOnCreating("testImplementation", core)
-        assertEquals(emptySet<String>(), h.autoAdded())
+        val h = Harness(null, declareCore = false)
+        h.declareOn("implementation", core)
+        h.declareOnCreating("testImplementation", "com.bugsee:bugsee-android:6.0.0")
+        // Only the production pin is on implementation; no auto-added range on top.
+        assertEquals(listOf<String?>(SDK_VERSION), h.coreVersionsOnImplementation())
     }
 
     /** compileOnly is the documented deferral: the app supplies the SDK at runtime. */

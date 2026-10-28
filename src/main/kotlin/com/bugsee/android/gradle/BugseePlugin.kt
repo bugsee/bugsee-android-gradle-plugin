@@ -1716,12 +1716,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         ignore: Set<Dependency> = emptySet(),
         inDeps: Lazy<List<BugseeSdkDeclarations.Declaration>> = lazy { BugseeSdkDeclarations.inDependencyProjects(project) },
     ): Boolean {
-        val declared = DependencyDetector.declaredVariantNames(project)
-        return project.configurations.any { config ->
-            DependencyDetector.isSdkDeclarationConfiguration(config.name, declared) &&
-                config.dependencies.any { dep ->
-                    !isIgnored(ignore, dep) && (isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep))
-                }
+        return sdkDeclarationDependencies(project).any { dep ->
+            !isIgnored(ignore, dep) && (isCoreSdkExternal(dep) || isCoreSdkProjectDep(project, dep))
         } || inDeps.value.any { it.isCore && it.exposed }
         // ^ A core declared by a project this one depends on counts only when it is
         // `api`-exposed (or the SDK's own local project). An `implementation`-only pin
@@ -1766,7 +1762,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * Adds a Bugsee extension module dependency if not already present.
      * Checks both Maven coordinates (`com.bugsee:{artifactName}`) and
      * project dependencies (`:${projectName}`) to avoid duplicates. Scans
-     * all configurations on the consuming project, not just `implementation`.
+     * production and `compileOnly` configurations (see [sdkDeclarationDependencies]), never test ones.
      *
      * Not reached when `sdkAutoLoad=false` (the withDependencies action returns first).
      */
@@ -1853,26 +1849,38 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     }
 
     companion object {
-        /** True when the user declared the Bugsee module (Maven coordinate or project dependency) anywhere. */
+        /** True when the user declared the Bugsee module (Maven coordinate or project dependency) on a production or `compileOnly` configuration, never a test one (#124). */
         internal fun isModuleDeclared(
             project: Project,
             artifactName: String,
             projectName: String,
             ignore: Set<Dependency> = emptySet(),
         ): Boolean =
-            DependencyDetector.declaredVariantNames(project).let { declared ->
-                project.configurations.any { config ->
-                    DependencyDetector.isSdkDeclarationConfiguration(config.name, declared) &&
-                        config.dependencies.any { dep ->
-                            !isIgnored(ignore, dep) &&
-                                ((dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
-                                    (dep is ProjectDependency &&
-                                        ProjectDependencyCompat.targetProject(project, dep)?.let {
-                                            it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
-                                        } == true))
-                        }
-                }
+            sdkDeclarationDependencies(project).any { dep ->
+                !isIgnored(ignore, dep) &&
+                    ((dep.group == BUGSEE_GROUP && dep.name == artifactName) ||
+                        (dep is ProjectDependency &&
+                            ProjectDependencyCompat.targetProject(project, dep)?.let {
+                                it.findProperty("GROUP") == BUGSEE_GROUP && it.name == projectName
+                            } == true))
             }
+
+        /**
+         * Dependencies that mean the app supplies a Bugsee module itself: those declared on a
+         * production or `compileOnly` configuration (see
+         * [DependencyDetector.isSdkDeclarationConfiguration]) or on any configuration those
+         * extend, so a custom `bugseeSdk` configuration that `implementation` extends still
+         * counts. Test configurations extend `implementation`, never the reverse, so test-only
+         * pins stay out (#124).
+         */
+        internal fun sdkDeclarationDependencies(project: Project): Sequence<Dependency> {
+            val declared = DependencyDetector.declaredVariantNames(project)
+            return project.configurations.asSequence()
+                .filter { DependencyDetector.isSdkDeclarationConfiguration(it.name, declared) }
+                .flatMap { it.hierarchy.asSequence() }
+                .distinct()
+                .flatMap { it.dependencies.asSequence() }
+        }
 
         /** Identity match: excludes dependencies the plugin itself auto-added (see reconcileAutoAdd). */
         private fun isIgnored(ignore: Set<Dependency>, dep: Dependency): Boolean = ignore.any { it === dep }
