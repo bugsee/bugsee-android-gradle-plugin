@@ -582,6 +582,66 @@ class CliUploaderTest {
             debug = false,
         )
 
+    private class ThrowingExec : ExecOperations {
+        override fun exec(action: Action<in ExecSpec>): ExecResult = throw RuntimeException("exec boom")
+        override fun javaexec(action: Action<in JavaExecSpec>): ExecResult = throw AssertionError("no javaexec")
+    }
+
+    /** A [org.gradle.api.logging.Logger] proxy that records every `warn(String)` message. */
+    private fun recordingLogger(warns: MutableList<String>): org.gradle.api.logging.Logger =
+        java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { _, method, args ->
+            if (method.name == "warn" && args?.firstOrNull() is String) warns += args[0] as String
+            when (method.name) {
+                "hashCode" -> System.identityHashCode(this)
+                "equals" -> false
+                "toString" -> "RecordingLogger"
+                else -> if (method.returnType == java.lang.Boolean.TYPE) false else null
+            }
+        } as org.gradle.api.logging.Logger
+
+    private fun withInterruptFlag(interrupted: Boolean, body: () -> Unit) {
+        if (interrupted) Thread.currentThread().interrupt()
+        try { body() } finally { Thread.interrupted() }
+    }
+
+    @Test fun `exec failure logs the fall back warning when not interrupted`() {
+        val warns = mutableListOf<String>()
+        val r = runUploadMapping(ThrowingExec(), executableCliStub(), recordingLogger(warns))
+        assertEquals("exec-failed", r.fallbackReason)
+        assertTrue(warns.any { "will fall back to the Kotlin uploader" in it }, "warns=$warns")
+    }
+
+    @Test fun `exec failure logs no fall back warning when the thread is interrupted`() {
+        val warns = mutableListOf<String>()
+        val cli = executableCliStub()
+        withInterruptFlag(true) {
+            val r = runUploadMapping(ThrowingExec(), cli, recordingLogger(warns))
+            assertEquals("exec-failed", r.fallbackReason) // semantics unchanged
+            assertTrue(Thread.currentThread().isInterrupted, "flag must stay set for the caller to rethrow")
+        }
+        assertTrue(warns.none { "fall back" in it }, "warns=$warns")
+    }
+
+    @Test fun `pack exec failure warns only when not interrupted`() {
+        val cli = executableCliStub()
+        for (interrupted in listOf(false, true)) {
+            val warns = mutableListOf<String>()
+            withInterruptFlag(interrupted) {
+                val ok = CliUploader.packUploadZip(
+                    ThrowingExec(), cli, File("/tmp/app.apk"), null,
+                    File("/tmp/out.zip"), recordingLogger(warns), debug = false,
+                )
+                assertFalse(ok)
+            }
+            assertEquals(
+                !interrupted, warns.any { "using the native packer" in it }, "interrupted=$interrupted warns=$warns",
+            )
+        }
+    }
+
     // ── the app token goes in the environment, never on the command line ──
 
     private val envToken = "tok_SECRET_0123456789abcdef"

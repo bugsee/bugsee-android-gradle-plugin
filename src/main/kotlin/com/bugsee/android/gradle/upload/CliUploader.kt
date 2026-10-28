@@ -296,10 +296,13 @@ internal object CliUploader {
                 spec.isIgnoreExitValue = true
             }.exitValue
         } catch (e: Exception) {
-            logger.warn(
-                "Bugsee: failed to execute bugsee-cli pack: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
-                    "using the native packer.",
-            )
+            // A cancelled build is rethrown by the caller; don't announce a fallback that will not happen.
+            if (!Thread.currentThread().isInterrupted) {
+                logger.warn(
+                    "Bugsee: failed to execute bugsee-cli pack: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
+                        "using the native packer.",
+                )
+            }
             return false
         }
 
@@ -500,10 +503,13 @@ internal object CliUploader {
             }
             result.exitValue
         } catch (e: Exception) {
-            logger.warn(
-                "Bugsee: failed to execute bugsee-cli: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
-                    "will fall back to the Kotlin uploader.",
-            )
+            // A cancelled build is rethrown by the caller; don't announce a fallback that will not happen.
+            if (!Thread.currentThread().isInterrupted) {
+                logger.warn(
+                    "Bugsee: failed to execute bugsee-cli: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
+                        "will fall back to the Kotlin uploader.",
+                )
+            }
             return CliUploadResult(
                 success = false,
                 exitCode = -1,
