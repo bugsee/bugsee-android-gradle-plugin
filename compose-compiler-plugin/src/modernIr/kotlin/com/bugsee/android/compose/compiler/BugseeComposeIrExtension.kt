@@ -384,7 +384,8 @@ private class BugseeComposeTransformer(
      * [calleeFqName] with the file-facade class removed. Kotlin 1.9's lazy IR reports a library
      * top-level function WITH its facade (`androidx.compose.material.TextFieldKt.TextField`, issues
      * #149, #151); the 2.x lines this variant serves are expected to report the bare package-qualified
-     * name, so this should be a no-op here and is harmless if not; it is kept identical to the legacyIr variant so the two cannot drift. The strip is
+     * name, so this should be a no-op here and is harmless if not; it mirrors the legacyIr variant.
+     * The strip is
      * structural: only a top-level `*Kt` class that owns a receiver-less function qualifies, and the
      * allowlist is matched on the full package, so a non-androidx `...Kt.TextField` never matches.
      * Limitation: a facade renamed with `@file:JvmName` that lacks the `Kt` suffix is not stripped.
@@ -393,7 +394,7 @@ private class BugseeComposeTransformer(
         val owner = callee.parent as? IrClass ?: return calleeFqName
         if (owner.parent !is IrPackageFragment ||
             !owner.name.asString().endsWith("Kt") ||
-            callee.dispatchReceiverParameter != null
+            callee.parameters.any { it.kind == IrParameterKind.DispatchReceiver }
         ) {
             return calleeFqName
         }
