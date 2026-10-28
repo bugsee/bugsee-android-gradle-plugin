@@ -44,6 +44,7 @@ class ComposeVariantMatrixTest {
         val cases = listOf(
             // k21 — legacy IR API, registrar without an `override` on pluginId.
             Case("k21", "1.9.22", true, "predates the IR API changes entirely"),
+            Case("k21", "1.9.25", true, "latest 1.9 patch; with real Compose see Kotlin19ComposePipelineTest"),
             Case("k21", "2.0.21", true, "2.0 still has the legacy IR API; the mapping routes it here"),
             Case("k21", "2.1.0", true, "the line k21 is built against"),
             Case("k21", "2.1.10", true, "same line, later patch"),

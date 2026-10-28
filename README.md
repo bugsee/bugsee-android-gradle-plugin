@@ -571,6 +571,17 @@ the upload tasks skip with a single info-level message instead of failing or war
   project-level and uses the same any-scope rule: if one variant enables
   `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
   including variants that disabled it.
+- **Compose on Kotlin 1.9.** The compiler plugin loads and runs. With Compose compiler releases that
+  register through the legacy `ComponentRegistrar` API (verified: 1.5.15, the release for Kotlin
+  1.9.25; 1.5.0 does not) only call sites that pass `modifier` explicitly
+  (`Child(Modifier.padding(8.dp))`) are tagged, and a composable call that omits `modifier` gets no
+  `bugseeTag`: the Kotlin compiler runs those registrations ahead of Bugsee's plugin, so
+  Compose's default-argument lowering has already replaced the omitted argument by the time Bugsee
+  sees it. With the Compose compiler bundled with Kotlin 2.x (modern registration) omitted-`modifier`
+  calls are tagged when Bugsee's plugin runs ahead of Compose's. The same skip applies to `bugseeSecure` on a
+  password field that omits `modifier`; the runtime `SemanticsProperties.Password` fallback still
+  protects it. Pinned for Kotlin 1.9.25 with Compose compiler 1.5.15; with 1.5.0 on 1.9.0 omitted-`modifier` sites were
+  tagged when Bugsee ran first (manual check, not in the test suite).
 - **Compose and test code.** Unless `instrumentation.composeInTests` is enabled
   (default `false`; same any-scope rule: enabling it in any scope applies the
   compiler plugin to every test compilation of the module, and it is read only

@@ -436,9 +436,19 @@ private class BugseeComposeTransformer(
 private fun IrExpression.isDefaultedOrNullArgument(): Boolean {
     if (this is IrConst && this.value == null) return true
     if (this is IrComposite) {
-        if (this.origin == IrStatementOrigin.DEFAULT_VALUE) return true
+        if (this.origin.isDefaultValueOrigin()) return true
         val single = this.statements.singleOrNull()
         if (single is IrConst && single.value == null) return true
     }
     return false
 }
+
+/**
+ * Whether this is Compose's `DEFAULT_VALUE` origin — matched by NAME, not by the
+ * `IrStatementOrigin.DEFAULT_VALUE` constant, because this variant also serves Kotlin 1.9. It is
+ * compiled against 2.1, where the constant is read through the `IrStatementOrigin.Companion` field;
+ * a 1.9 compiler has no such field (the origins are nested objects there), so the reference threw `NoSuchFieldError` the first time a Compose-lowered call site reached
+ * it and aborted the consumer's compilation (issue #119). Origins print their debug name, which is
+ * stable across the lines.
+ */
+private fun IrStatementOrigin?.isDefaultValueOrigin(): Boolean = this?.toString() == "DEFAULT_VALUE"
