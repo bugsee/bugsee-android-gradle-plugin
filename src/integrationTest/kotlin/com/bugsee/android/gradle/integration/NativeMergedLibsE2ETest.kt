@@ -259,6 +259,46 @@ class NativeMergedLibsE2ETest {
     fun `falls back to AGP symbols when the CLI cannot take the directory (exit 11)`() =
         assertFallsBackToZip(11)
 
+    /** A CLI that answers `exitCode` to every invocation, for any input. */
+    private fun constantShim(exitCode: Int): File = temp.newFile("bugsee-cli-const-$exitCode").apply {
+        writeText("#!/bin/sh\necho 'shim: nothing to upload' >&2\nexit $exitCode\n")
+        setExecutable(true)
+    }
+
+    private fun assembleFailingOnUploadError(cliPath: String, vararg extra: String): Pair<Boolean, String> =
+        MockSymbolServer().use { server ->
+            fixture().runTasksAllowingFailure(
+                listOf(":app:assembleRelease"),
+                "-PbugseeE2eEndpoint=${server.url}",
+                "-PbugseeE2eCli=$cliPath",
+                "-PbugseeE2eFailOnUploadError=true",
+                *extra,
+            )
+        }
+
+    @Test
+    fun `failOnUploadError does not fail on directory exit 10 when AGP produces no symbols`() {
+        // No debugSymbolLevel: no AGP source, so exit 10 on the directory is the whole story.
+        val (ok, out) = assembleFailingOnUploadError(constantShim(10).absolutePath)
+        assertTrue("exit 10 is 'nothing to upload', not a failure:\n$out", ok)
+    }
+
+    @Test
+    fun `failOnUploadError does not fail on exit 10 from the AGP zip either`() {
+        val (ok, out) = assembleFailingOnUploadError(
+            constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=FULL",
+        )
+        assertTrue("exit 10 on the zip is 'nothing to upload', not a failure:\n$out", ok)
+    }
+
+    @Test
+    fun `failOnUploadError still fails on a substantive CLI failure for the AGP zip`() {
+        val (ok, out) = assembleFailingOnUploadError(
+            constantShim(21).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
+        )
+        assertTrue("a real CLI failure must fail the build:\n$out", !ok)
+    }
+
     @Test
     fun `a substantive CLI failure on the directory does not retry through the zip`() {
         MockSymbolServer().use { server ->

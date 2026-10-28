@@ -35,12 +35,14 @@ internal data class CliUploadResult(
 ) {
     /**
      * Fallback gate for the build-registration path (`upload build`). Unlike
-     * symbol uploads (idempotent: duplicate 16004 is success), a second
-     * registration is not known to be safe, so a signal exit (> 128) or a Windows
-     * crash/kill status (< -1, other than loader failures such as 0xC0000135) — where
-     * the CLI DID run and may have already registered the build before dying — must
-     * not trigger a retry. Only 1, 2, 126, 127, 128, loader failures and the
-     * plugin-synthesized -1 keep the fallback.
+     * symbol uploads (idempotent: duplicate 16004 is success), a repeated
+     * registration is believed safe (the appserver replaces a build with the same
+     * uuid, as `HttpRetry` relies on; confirmed by code reading during #118, not
+     * verified end to end), so this gate is deliberately conservative: a signal
+     * exit (> 128) or a Windows crash/kill status (< -1, other than loader failures
+     * such as 0xC0000135) — where the CLI DID run and may have already registered
+     * the build before dying — does not trigger a retry. Only 1, 2, 126, 127, 128,
+     * loader failures and the plugin-synthesized -1 keep the fallback.
      */
     val shouldFallbackForBuildRegistration: Boolean
         get() = shouldFallback && !CliUploader.ranAndDied(exitCode)

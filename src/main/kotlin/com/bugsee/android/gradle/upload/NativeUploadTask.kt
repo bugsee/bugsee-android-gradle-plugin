@@ -324,7 +324,7 @@ abstract class NativeUploadTask : DefaultTask() {
                     return
                 }
                 // Exit 10 is "nothing usable in the directory", not a failed upload.
-                dirUploadFailed = result.exitCode != 10
+                dirUploadFailed = result.exitCode != CLI_EXIT_NOTHING_TO_UPLOAD
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
@@ -465,7 +465,10 @@ abstract class NativeUploadTask : DefaultTask() {
                         return
                     }
                     !cliResult.shouldFallback -> { // already logged
-                        UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
+                        // Exit 10 is "nothing usable to upload" (as on the directory path), not a failed upload.
+                        if (cliResult.exitCode != CLI_EXIT_NOTHING_TO_UPLOAD) {
+                            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
+                        }
                         return
                     }
                     else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
@@ -567,7 +570,10 @@ internal fun containsFullDebugSymbols(zip: File): Boolean = try {
  * found / no libraries in the directory, 11 = invalid input (a scan I/O error, or an
  * older CLI trying to open the directory as a zip).
  */
-private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
+/** `bugsee-cli` exit code for "nothing usable to upload" in the input: not a failed upload. */
+private const val CLI_EXIT_NOTHING_TO_UPLOAD = 10
+
+private val DIRECTORY_INPUT_EXIT_CODES = setOf(CLI_EXIT_NOTHING_TO_UPLOAD, 11)
 
 /**
  * [dir] when it exists and holds at least one native library the CLI would

@@ -36,6 +36,7 @@ bugsee {
     debug.set(true)
     cliAutoUpdate.set(false)
     prop("bugseeE2eCli")?.let { cliPath.set(it) }
+    prop("bugseeE2eFailOnUploadError")?.let { failOnUploadError.set(it.toBoolean()) }
     ndk {
         enabled.set(true)
         prop("bugseeE2eAllBuildTypes")?.let { allBuildTypes.set(it.toBoolean()) }
