@@ -238,6 +238,19 @@ tasks.register<Test>("integrationTest") {
     classpath = integrationTest.runtimeClasspath
     dependsOn(buildStubSdkJar)
     dependsOn(publishStubSdkToLocalRepo)
+    // The Compose pipeline fixtures resolve the Bugsee compiler-plugin artifacts from this local
+    // repo, by path only (the producing project's build dir; no cross-project access).
+    dependsOn(":compose-compiler-plugin:publishAllPublicationsToIntegrationTestRepository")
+    // The path below MUST match `integrationTestComposeRepoDir` in compose-compiler-plugin/build.gradle.kts
+    // (referenced by path, never through the other project, so it stays Isolated-Projects clean).
+    systemProperty(
+        "bugsee.testkit.composePluginRepo",
+        layout.projectDirectory.dir("compose-compiler-plugin/build/integrationTest/compose-plugin-repo").asFile.absolutePath
+    )
+    // The jars' CONTENTS are the input (the published repo's SNAPSHOT file names carry a timestamp that
+    // changes on every publish, which would keep this task from ever being up to date).
+    inputs.files(fileTree(layout.projectDirectory.dir("compose-compiler-plugin/build/integrationTest/compose-plugin-repo")) { include("**/*.jar") })
+        .withPropertyName("composePluginJars").withPathSensitivity(PathSensitivity.NONE)
     useJUnit()
     // Forward the local stub-SDK Maven repo path so the fixture's
     // `settings.gradle.kts` can wire it via
