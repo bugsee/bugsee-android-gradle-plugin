@@ -104,6 +104,23 @@ class BugseeKmpLibraryTest {
         assertFalse(first, Regex("\\d+ problems? (was|were) found").containsMatchIn(first))
     }
 
+    @Test
+    fun bugsee_compose_compiler_plugin_stays_out_of_a_kmp_module_with_compose() {
+        assumeKmpLibraryPluginAvailable()
+        val fixture = FixtureProject.materialize("kmp-library", temp.newFolder("kmp-compose"))
+        fixture.projectDir.resolve("kmp/build.gradle.kts").appendText(
+            "\nkotlin { sourceSets { androidMain { dependencies { implementation(\"androidx.compose.runtime:runtime:1.7.8\") } } } }\n",
+        )
+
+        val output = runTasks(fixture.projectDir, ":kmp:compileAndroidMain").output
+        // Had isApplicable() accepted the module, the Bugsee compose compiler plugin would sit on the
+        // Kotlin compiler-plugin classpath of the compilation.
+        val deps = runTasks(fixture.projectDir, ":kmp:dependencies").output
+
+        assertFalse(deps, deps.contains("bugsee-compose-compiler-plugin"))
+        assertFalse(output, output.contains("FAILED"))
+    }
+
     /** AGP >= 8.10 ships the plugin; the default (unset) toolchain is AGP 8.6.0, which does not. */
     private fun assumeKmpLibraryPluginAvailable() {
         val parts = FixtureProject.agpVersion?.split('.')?.map { it.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
