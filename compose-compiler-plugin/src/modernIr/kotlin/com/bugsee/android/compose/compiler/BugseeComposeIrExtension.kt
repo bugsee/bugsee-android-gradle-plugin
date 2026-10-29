@@ -506,9 +506,14 @@ private class BugseeComposeTransformer(
             "androidx.compose.material.OutlinedTextField",
             "androidx.compose.material3.TextField",
             "androidx.compose.material3.OutlinedTextField",
-            "androidx.compose.foundation.text.BasicTextField",
-            "androidx.compose.foundation.text2.BasicTextField"
+            "androidx.compose.foundation.text.BasicTextField"
         )
+        // Deliberately absent (issue #155, verified against real artifacts): there has never been an
+        // `androidx.compose.foundation.text2.BasicTextField`. The experimental text2 API shipped in
+        // foundation 1.6.0 .. 1.7.0-alpha0x as `text2.BasicTextField2` / `text2.BasicSecureTextField`, then
+        // moved into `androidx.compose.foundation.text` (TextFieldState-based `BasicTextField`, 1.7.0+;
+        // `BasicSecureTextField`). None of those take a `VisualTransformation`, so the argument-type check
+        // above can never match them, and the secure pass does not apply to them.
     }
 }
 

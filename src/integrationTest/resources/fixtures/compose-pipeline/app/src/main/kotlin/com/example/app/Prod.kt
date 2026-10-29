@@ -46,6 +46,19 @@ val Marker: Modifier = Modifier.then(Modifier)
     androidx.compose.foundation.text.BasicTextField("", {}, Modifier, visualTransformation = PasswordVisualTransformation())
 }
 
+// The experimental text2 API in foundation 1.6.x (issue #155). `androidx.compose.foundation.text2.BasicTextField`
+// never existed; the real entry points are `BasicTextField2` (no VisualTransformation parameter) and
+// `BasicSecureTextField`, so the secure pass must leave them alone: zero bugseeSecure calls.
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable fun ProdText2Value() {
+    androidx.compose.foundation.text2.BasicTextField2("", {}, Modifier)
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable fun ProdText2State() {
+    androidx.compose.foundation.text2.BasicTextField2(androidx.compose.foundation.text2.input.TextFieldState(), Modifier)
+}
+
 // Look-alike that must NOT be secured: not androidx, though it sits in a `...Kt` facade like the real ones.
 @Composable fun TextField(value: String, modifier: Modifier = Modifier, visualTransformation: androidx.compose.ui.text.input.VisualTransformation? = null) {}
 @Composable fun ProdSecureFake() {

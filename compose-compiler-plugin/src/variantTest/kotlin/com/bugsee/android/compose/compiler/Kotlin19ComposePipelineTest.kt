@@ -264,7 +264,6 @@ class Kotlin19ComposePipelineTest {
             "androidx.compose.material3" to "TextField",
             "androidx.compose.material3" to "OutlinedTextField",
             "androidx.compose.foundation.text" to "BasicTextField",
-            "androidx.compose.foundation.text2" to "BasicTextField",
             // NOT androidx: a same-named function in an `...Kt` facade must never be matched.
             "com.example.lib2" to "TextField",
         )
@@ -342,9 +341,6 @@ class Kotlin19ComposePipelineTest {
             }
             @Composable fun ProdSecureBasic() {
                 androidx.compose.foundation.text.BasicTextField("a", Modifier, PasswordVisualTransformation())
-            }
-            @Composable fun ProdSecureBasic2() {
-                androidx.compose.foundation.text2.BasicTextField("a", Modifier, PasswordVisualTransformation())
             }
             // `modifier` omitted: the allowlisted default is the bare Modifier (exemption from #153).
             @Composable fun ProdSecureOmitted() {
@@ -504,7 +500,7 @@ class Kotlin19ComposePipelineTest {
         /** Library text-field call sites; `ProdSecureFake` calls a non-androidx look-alike that must not be secured. */
         val SECURE_NAMES = listOf(
             "ProdSecureMaterial", "ProdSecureMaterialOutlined", "ProdSecureMaterial3", "ProdSecureMaterial3Outlined",
-            "ProdSecureBasic", "ProdSecureBasic2", "ProdSecureOmitted", "ProdSecureFake",
+            "ProdSecureBasic", "ProdSecureOmitted", "ProdSecureFake",
         )
         val SECURE_CALLS: Map<String, Int> = SECURE_NAMES.associateWith { 1 } + ("ProdSecureFake" to 0) - "ProdSecureOmitted"
 
