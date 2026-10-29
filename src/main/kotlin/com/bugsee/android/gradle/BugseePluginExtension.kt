@@ -290,6 +290,23 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
     val warnDebugOnlySdk: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
 
     /**
+     * Warn once per library module that the plugin targets application modules (the module gets no
+     * Bugsee wiring). Covers `com.android.library` and AGP's KMP library plugin
+     * (`com.android.kotlin.multiplatform.library`).
+     *
+     * Set to `false` for a convention plugin that deliberately applies Bugsee to every Android module:
+     * the warning is then suppressed entirely. This only controls that one message; nothing about the
+     * wiring changes, and no value can turn it into a build failure.
+     *
+     * Global-only, like [warnDebugOnlySdk] (a compile error inside `variant { }` in Kotlin, silently
+     * ignored there in Groovy). Also settable as `plugin.warnLibraryModule` in bugsee.properties (the DSL
+     * wins unless `preferSettingsFile` is set).
+     *
+     * Default: `true`
+     */
+    val warnLibraryModule: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
      * Extra tasks the build-id asset task must run after, by task name.
      *
      * The task that injects `bugsee_build_id.properties` transforms AGP's merged assets

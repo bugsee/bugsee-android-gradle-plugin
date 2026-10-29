@@ -175,6 +175,37 @@ class BugseeLibraryVariantGatingTest {
     }
 
     @Test
+    fun warnLibraryModule_false_in_the_dsl_silences_the_warning_and_the_build_still_succeeds() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-silence-dsl"))
+        fixture.projectDir.resolve("lib/build.gradle.kts").appendText("\nbugsee { warnLibraryModule.set(false) }\n")
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertFalse("DSL false must silence the warning. Output:\n$output", output.contains("is a library module."))
+    }
+
+    @Test
+    fun warnLibraryModule_false_in_bugsee_properties_silences_the_warning() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-silence-props"))
+        fixture.projectDir.resolve("bugsee.properties").writeText("plugin.warnLibraryModule=false\n")
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertFalse("properties false must silence the warning. Output:\n$output", output.contains("is a library module."))
+    }
+
+    @Test
+    fun warnLibraryModule_true_still_warns_and_the_dsl_wins_over_the_file() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-silence-prec"))
+        fixture.projectDir.resolve("bugsee.properties").writeText("plugin.warnLibraryModule=false\n")
+        fixture.projectDir.resolve("lib/build.gradle.kts").appendText("\nbugsee { warnLibraryModule.set(true) }\n")
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertEquals(1, Regex(Regex.escape("Bugsee: :lib is a library module.")).findAll(output).count())
+    }
+
+    @Test
     fun bugsee_sdk_group_library_is_exempt_from_the_warning() {
         // Default fixture group is com.bugsee.testfixture, i.e. one of Bugsee's own SDK modules.
         val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-sdk-group"))

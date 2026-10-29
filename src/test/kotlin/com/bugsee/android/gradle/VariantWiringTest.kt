@@ -438,7 +438,7 @@ class VariantWiringTest {
 
         val messages = generateSequence(failure) { it.cause }.mapNotNull { it.message }.toList()
         assertTrue(
-            messages.any { "Bugsee requires 'com.android.application' or 'com.android.library'" in it },
+            messages.any { "Bugsee requires 'com.android.application', 'com.android.library' or" in it },
             "unexpected failure: $messages",
         )
     }
