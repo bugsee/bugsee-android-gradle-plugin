@@ -59,6 +59,11 @@ val Marker: Modifier = Modifier.then(Modifier)
     androidx.compose.foundation.text2.BasicTextField2(androidx.compose.foundation.text2.input.TextFieldState(), Modifier)
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable fun ProdText2Secure() {
+    androidx.compose.foundation.text2.BasicSecureTextField("", {}, Modifier)
+}
+
 // Look-alike that must NOT be secured: not androidx, though it sits in a `...Kt` facade like the real ones.
 @Composable fun TextField(value: String, modifier: Modifier = Modifier, visualTransformation: androidx.compose.ui.text.input.VisualTransformation? = null) {}
 @Composable fun ProdSecureFake() {

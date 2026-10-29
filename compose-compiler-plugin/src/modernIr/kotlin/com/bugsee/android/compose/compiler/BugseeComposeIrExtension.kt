@@ -512,8 +512,8 @@ private class BugseeComposeTransformer(
         // `androidx.compose.foundation.text2.BasicTextField`. The experimental text2 API shipped in
         // foundation 1.6.0 .. 1.7.0-alpha0x as `text2.BasicTextField2` / `text2.BasicSecureTextField`, then
         // moved into `androidx.compose.foundation.text` (TextFieldState-based `BasicTextField`, 1.7.0+;
-        // `BasicSecureTextField`). None of those take a `VisualTransformation`, so the argument-type check
-        // above can never match them, and the secure pass does not apply to them.
+        // `BasicSecureTextField`). None of those take a `VisualTransformation`, so the `visualTransformation`
+        // parameter lookup in the callee check rejects them, and the secure pass does not apply to them.
     }
 }
 

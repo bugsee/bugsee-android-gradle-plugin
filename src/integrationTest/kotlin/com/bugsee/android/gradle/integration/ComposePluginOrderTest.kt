@@ -143,13 +143,16 @@ class ComposePluginOrderTest {
         val dump = process.inputStream.bufferedReader().readText()
         assertEquals("javap failed:\n$dump", 0, process.waitFor())
         val counts = linkedMapOf<String, Int>().apply { names.forEach { put(it, 0) } }
+        val seen = mutableSetOf<String>()
         var current: String? = null
         for (line in dump.lines()) {
-            METHOD_HEADER.find(line)?.let { current = it.groupValues[1] }
+            METHOD_HEADER.find(line)?.let { current = it.groupValues[1]; seen += it.groupValues[1] }
             if (current in counts && line.contains("invokestatic") && line.contains(callSuffix)) {
                 counts[current!!] = counts.getValue(current!!) + 1
             }
         }
+        // A zero-expected name that never appears in the dump (renamed, not emitted) must not pass vacuously.
+        assertTrue("fixture methods missing from the javap dump: ${names - seen}", seen.containsAll(names))
         return counts
     }
 
@@ -158,7 +161,7 @@ class ComposePluginOrderTest {
             "ProdSecureMaterial" to 1, "ProdSecureMaterialOutlined" to 1, "ProdSecureMaterial3" to 1,
             "ProdSecureMaterial3Outlined" to 1, "ProdSecureBasic" to 1,
             // Real foundation 1.6.8 text2 entry points (issue #155): no VisualTransformation parameter, never secured.
-            "ProdText2Value" to 0, "ProdText2State" to 0,
+            "ProdText2Value" to 0, "ProdText2State" to 0, "ProdText2Secure" to 0,
             // Same-module non-androidx look-alike: never secured.
             "ProdSecureFake" to 0,
         )
