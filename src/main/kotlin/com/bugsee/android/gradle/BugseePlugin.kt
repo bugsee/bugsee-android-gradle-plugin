@@ -64,7 +64,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     // `bugsee { }` block has been evaluated, as SettingsResolver requires.
     private var settingsResolver: SettingsResolver? = null
 
-    // Set once the Android plugin has been seen and the variant wiring registered.
+    // Set once a recognized Android plugin has been seen: the variant wiring is registered, or (AGP's
+    // KMP library plugin) the module was classified as a library with nothing to wire.
     private var androidWired = false
 
     // True once the build script body (so the user's `bugsee { }` block) has been evaluated,
@@ -198,9 +199,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             val isDebug = settingsResolver().globalValue(DEBUG)
             if (isDebug) project.logger.warn("Bugsee: Plugin applied")
 
-            if (project.extensions.findByName("android") == null) {
+            // The AGP KMP library plugin has no `android` extension (its DSL is `kotlin { androidLibrary }`),
+            // so a recognized Android plugin counts on its own, not only the extension.
+            if (!androidWired && project.extensions.findByName("android") == null) {
                 throw IllegalStateException(
-                    "Bugsee requires 'com.android.application' or 'com.android.library' in project ${project.path}"
+                    "Bugsee requires 'com.android.application', 'com.android.library' or " +
+                    "'com.android.kotlin.multiplatform.library' in project ${project.path}"
                 )
             }
             // e.g. com.android.test / dynamic-feature: the Android plugin is there but nothing is wired.
@@ -220,6 +224,44 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 if (androidWired) return@withPlugin // defensive: run once
                 androidWired = true
                 wireAndroidComponents(project)
+            }
+        }
+        // AGP's KMP library plugin (`kotlin { androidLibrary { } }`) is a library module with no
+        // application variants. It has no `android` extension and no AndroidComponentsExtension, so
+        // there is nothing to wire: it only gets the same library-module warning. Without this the
+        // afterEvaluate check above rejected the module with a hard failure.
+        project.pluginManager.withPlugin(KMP_LIBRARY_PLUGIN_ID) {
+            if (androidWired) return@withPlugin // defensive: run once
+            androidWired = true
+            registerLibraryModuleWarning(project, kmp = true)
+        }
+    }
+
+    /**
+     * One default-level warning per library module, emitted in afterEvaluate (a library has debug +
+     * release, so not per variant) and independent of `onVariants`, so it also fires when
+     * `beforeVariants` disables every variant. The plugin skips library variants, so without it the
+     * misapplied plugin is silent unless `debug=true`.
+     *
+     * Silenced by `warnLibraryModule=false` (a convention plugin that applies Bugsee to every module on
+     * purpose). Only this message is affected: a missing or false value can never fail the build.
+     * Bugsee's own SDK modules are libraries on purpose and are exempt. Identified by group only, never
+     * by bare module name: `:library` / `:compose` / `:okhttp` are common names in customer builds.
+     * Evaluated in afterEvaluate because `group` is often assigned after the plugin is applied.
+     */
+    private fun registerLibraryModuleWarning(project: Project, kmp: Boolean = false) {
+        project.afterEvaluate {
+            // Idempotent; makes sure the DSL is final before the setting is read.
+            onDslFinal(project)
+            if (kmp && settingsResolver().globalValue(DEBUG)) {
+                project.logger.warn("Bugsee: KMP library module ${project.path}; nothing wired")
+            }
+            if (settingsResolver().globalValue(WARN_LIBRARY_MODULE) &&
+                !isBugseeSdkGroup(project.group?.toString().orEmpty())
+            ) {
+                project.logger.warn(
+                    libraryModuleMessage(project.path, project.path == ":", project.name)
+                )
             }
         }
     }
@@ -244,21 +286,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
 
-        // One default-level warning per library module, emitted here rather than per variant (a library
-        // has debug + release) and independent of `onVariants`, so it also fires when `beforeVariants`
-        // disables every variant. The plugin skips library variants below, so without it the misapplied
-        // plugin is silent unless `debug=true`.
-        // Bugsee's own SDK modules are libraries on purpose and are exempt. Identified by group only, never
-        // by bare module name: `:library` / `:compose` / `:okhttp` are common names in customer builds.
-        // Evaluated in afterEvaluate because `group` is often assigned after the plugin is applied.
         if (androidComponents is com.android.build.api.variant.LibraryAndroidComponentsExtension) {
-            project.afterEvaluate {
-                if (!isBugseeSdkGroup(project.group?.toString().orEmpty())) {
-                    project.logger.warn(
-                        libraryModuleMessage(project.path, project.path == ":", project.name)
-                    )
-                }
-            }
+            registerLibraryModuleWarning(project)
         }
 
         // The first AGP hook after the build script body and before ANY `onVariants` callback (which
@@ -1373,6 +1402,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>): Boolean {
         val project = kotlinCompilation.target.project
         if (pluginExtension == null) return false
+        // A KMP library module is not wired (library module, see the library-module warning), and its
+        // compilations include non-Android targets the Android-runtime Compose instrumentation must
+        // never reach.
+        if (project.pluginManager.hasPlugin(KMP_LIBRARY_PLUGIN_ID)) return false
         if (!hasComposeDependency(project)) {
             return false
         }
@@ -1945,6 +1978,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
         /** Android plugins whose application wires the variants (see [apply]). */
         private val ANDROID_PLUGIN_IDS = listOf("com.android.application", "com.android.library")
+        private const val KMP_LIBRARY_PLUGIN_ID = "com.android.kotlin.multiplatform.library"
 
         /**
          * [BugseePluginExtension.cliPath] with a relative DSL value resolved against [project]'s directory
@@ -2033,7 +2067,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "Bugsee: ${if (isRoot) "root project '$name'" else projectPath} is a library module. " +
                 "Bugsee registers upload tasks for application modules only; apply the plugin to the " +
                 "application module (in a convention plugin, apply it under " +
-                "pluginManager.withPlugin(\"com.android.application\")). See the README, \"Library modules\"."
+                "pluginManager.withPlugin(\"com.android.application\")). To silence this on purpose, set " +
+                "bugsee { warnLibraryModule.set(false) } or plugin.warnLibraryModule=false. " +
+                "See the README, \"Library modules\"."
 
         /** The per-variant debug summary. [token] is masked; it is never printed in full. */
         internal fun variantResolvedMessage(variantName: String, token: String?, endpoint: String): String =
@@ -2102,6 +2138,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         private val SDK_AUTO_LOAD = SettingDefinitions.booleanByKey("sdkAutoLoad")
         private val FEEDBACK = SettingDefinitions.booleanByKey("feedback")
         private val WARN_DEBUG_ONLY_SDK = SettingDefinitions.booleanByKey("warnDebugOnlySdk")
+        private val WARN_LIBRARY_MODULE = SettingDefinitions.booleanByKey("warnLibraryModule")
         private val LEAK_ENABLED = SettingDefinitions.booleanByKey("leak.enabled")
         private val NDK_ENABLED = SettingDefinitions.booleanByKey("ndk.enabled")
         private val INST_COMPOSE = SettingDefinitions.booleanByKey("instrumentation.compose")

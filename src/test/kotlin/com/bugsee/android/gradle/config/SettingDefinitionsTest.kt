@@ -15,6 +15,7 @@ class SettingDefinitionsTest {
     private val expectedKeys = listOf(
         "endpoint", "cliPath", "cliVersion", "cliAutoUpdate", "uploader", "debug", "failOnUploadError",
         "feedback", "optimizeExtensionsLoading", "sdkAutoLoad", "warnDebugOnlySdk",
+        "warnLibraryModule",
         "ndk.enabled", "ndk.allBuildTypes", "ndk.forceDebugSymbolsUpload", "ndk.useMergedNativeLibs",
         "leak.enabled",
         "buildInfo.enabled", "buildInfo.allBuildTypes",
@@ -34,7 +35,8 @@ class SettingDefinitionsTest {
     )
 
     private val globalKeys = setOf(
-        "cliPath", "cliVersion", "cliAutoUpdate", "uploader", "feedback", "sdkAutoLoad", "warnDebugOnlySdk", "leak.enabled",
+        "cliPath", "cliVersion", "cliAutoUpdate", "uploader", "feedback", "sdkAutoLoad", "warnDebugOnlySdk", "warnLibraryModule",
+        "leak.enabled",
     )
 
     private fun def(key: String) = assertNotNull(SettingDefinitions.byKey(key), key)

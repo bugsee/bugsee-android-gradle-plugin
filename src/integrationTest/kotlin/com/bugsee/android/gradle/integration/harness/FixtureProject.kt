@@ -258,8 +258,8 @@ internal class FixtureProject private constructor(
         }
 
         // `id("com.android.application") version "8.6.0"` / `id("org.jetbrains.kotlin.android") version "2.1.0"`
-        private val AGP_PLUGIN = Regex("""(id\("com\.android\.[a-z]+"\)\s+version\s+")[^"]+(")""")
-        private val KOTLIN_PLUGIN = Regex("""(id\("org\.jetbrains\.kotlin\.android"\)\s+version\s+")[^"]+(")""")
+        private val AGP_PLUGIN = Regex("""(id\("com\.android\.[a-z.]+"\)\s+version\s+")[^"]+(")""")
+        private val KOTLIN_PLUGIN = Regex("""(id\("org\.jetbrains\.kotlin\.(?:android|multiplatform)"\)\s+version\s+")[^"]+(")""")
 
         /**
          * Pins the fixture's AGP / Kotlin plugin versions to the matrix values. Fails loudly when a

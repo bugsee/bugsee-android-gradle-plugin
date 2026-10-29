@@ -182,6 +182,7 @@ dotted-path form as the DSL field names.
 | `plugin.feedback` | Boolean | `false` | `bugsee { feedback.set(…) }` |
 | `plugin.sdkAutoLoad` | Boolean | `true` | `bugsee { sdkAutoLoad.set(…) }` |
 | `plugin.warnDebugOnlySdk` | Boolean | `true` | `bugsee { warnDebugOnlySdk.set(…) }` |
+| `plugin.warnLibraryModule` | Boolean | `true` | `bugsee { warnLibraryModule.set(…) }` |
 | `plugin.optimizeExtensionsLoading` | Boolean | `true` | `bugsee { optimizeExtensionsLoading.set(…) }` |
 
 `failOnUploadError` makes an upload that does not complete (mapping, native symbols or build
@@ -427,7 +428,7 @@ setting, so `variant("x") { feedback true }`, `leak { … }`, `appToken { … }`
 | Scope | Settings |
 |---|---|
 | Per variant | `app_token`; `endpoint`, `debug`, `optimizeExtensionsLoading`; `ndk.*`; `buildInfo.*`; `instrumentation.*` (every toggle and `startupTier`) |
-| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `warnDebugOnlySdk`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
+| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `warnDebugOnlySdk`, `warnLibraryModule`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
 | Global, DSL only | `instrumentation.excludes` (no `plugin.*` file key) |
 
 `cliPath` may be relative. In the DSL (`cliPath.set("../tools/bugsee-cli")`) it is relative
@@ -683,6 +684,17 @@ that names the class and suggests the same `excludes.add(...)`.
 Apply the plugin to the application module only; a library module logs a warning and gets no
 Bugsee upload tasks. In a convention plugin shared by all Android modules, apply it under
 `pluginManager.withPlugin("com.android.application")`.
+
+The warning is emitted once per library module. A convention plugin that applies Bugsee to every module on
+purpose can silence it with `bugsee { warnLibraryModule.set(false) }` or `plugin.warnLibraryModule=false`
+in `bugsee.properties` (global-only; only this message is affected, the wiring is unchanged and no value
+turns it into a failure, so it is safe under warnings-as-errors).
+
+AGP's Kotlin Multiplatform library plugin (`com.android.kotlin.multiplatform.library`) is treated the same
+way: it is a library module with no application variants, so it gets the same warning (and the same
+`warnLibraryModule` opt-out) and nothing is wired, including the Compose compiler plugin. Earlier
+versions failed such a module at configuration time with "Bugsee requires 'com.android.application' or
+'com.android.library'".
 
 ## Diagnostics
 
