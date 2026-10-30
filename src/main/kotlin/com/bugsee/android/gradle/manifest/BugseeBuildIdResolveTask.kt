@@ -15,7 +15,7 @@ import org.gradle.api.tasks.TaskAction
  * chance to produce its mapping file.
  *
  * Wired into AGP, only for variants where R8 may run
- * (`BugseePlugin.mayProduceMapping`: `isMinifyEnabled`, or AGP 9
+ * (`BugseePluginImpl.mayProduceMapping`: `isMinifyEnabled`, or AGP 9
  * `optimization.enable`), via:
  *
  * ```kotlin

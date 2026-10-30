@@ -56,7 +56,7 @@ abstract class BugseeSizeCheckExtension @Inject constructor(objects: ObjectFacto
      * the parent `BugseeSizeAnalysisExtension.enabled`. A convention
      * value makes the property report `isPresent=true`, which would
      * short-circuit the env-var fallback chain in
-     * `BugseePlugin.wireSizeCheckInputs` (`extension.enabled.orElse(envBool(...))`
+     * `BugseePluginImpl.wireSizeCheckInputs` (`extension.enabled.orElse(envBool(...))`
      * would never reach the env). The default-false is supplied at
      * the wiring site instead via a trailing `.orElse(false)` so the
      * DSL ↔ env ↔ default precedence stays correct.

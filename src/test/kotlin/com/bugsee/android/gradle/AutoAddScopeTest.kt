@@ -210,8 +210,8 @@ class AutoAddScopeTest {
         }.filter { it.startsWith("Bugsee:") }
         assertEquals(
             listOf(
-                BugseePlugin.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
-                BugseePlugin.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback"),
+                BugseePluginImpl.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
+                BugseePluginImpl.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback"),
             ),
             bugsee,
             "one warning each for the undeclared ndk and feedback; none for the declared leak module",
@@ -229,15 +229,15 @@ class AutoAddScopeTest {
         h.declare("com.bugsee:bugsee-android-leak:$SDK_VERSION")
         assertEquals(
             listOf("ndk.enabled" to "bugsee-android-ndk", "feedback" to "bugsee-android-feedback"),
-            BugseePlugin.inertOptInModules(h.project, h.resolver()),
+            BugseePluginImpl.inertOptInModules(h.project, h.resolver()),
         )
         assertEquals(
             "Bugsee: ndk.enabled=true but sdkAutoLoad=false and com.bugsee:bugsee-android-ndk is not declared; " +
                 "declare it or the runtime is not added",
-            BugseePlugin.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
+            BugseePluginImpl.sdkAutoLoadOffWarning("ndk.enabled", "bugsee-android-ndk"),
         )
         val none = Harness(null)
-        assertEquals(emptyList(), BugseePlugin.inertOptInModules(none.project, none.resolver()))
+        assertEquals(emptyList(), BugseePluginImpl.inertOptInModules(none.project, none.resolver()))
     }
 
     @Test
@@ -420,7 +420,7 @@ class AutoAddScopeTest {
         val h = Harness(null)
         h.project.configurations.maybeCreate("testImplementation")
         h.declareOn("testImplementation", "androidx.compose.ui:ui:1.6.0")
-        val plugin = h.project.plugins.getPlugin(BugseePlugin::class.java)
+        val plugin = h.project.plugins.getPlugin(BugseePlugin::class.java).implementation()!!
         assertFalse(plugin.hasComposeDependency(h.project), "test-only Compose")
 
         h.declare("androidx.compose.ui:ui:1.6.0")
@@ -581,7 +581,7 @@ class AutoAddScopeTest {
             h.declareOnCreating(conf, core)
             assertEquals(setOf("bugsee-android"), h.autoAdded(), conf)
             // The test pin does not leak into the version: the floor range is used.
-            assertEquals(listOf<String?>(CoreSdkAutoLoad.range(BugseePlugin.MIN_SDK_VERSION)), h.coreVersionsOnImplementation(), conf)
+            assertEquals(listOf<String?>(CoreSdkAutoLoad.range(BugseePluginImpl.MIN_SDK_VERSION)), h.coreVersionsOnImplementation(), conf)
         }
     }
 
@@ -655,7 +655,7 @@ class AutoAddScopeTest {
                 assertEquals(emptySet<String>(), h.autoAdded(), conf)
                 (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
             }.filter { it.startsWith("Bugsee:") }
-            assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines, conf)
+            assertEquals(listOf(BugseePluginImpl.debugOnlyCoreWarning(h.project.path)), lines, conf)
         }
     }
 
@@ -689,7 +689,7 @@ class AutoAddScopeTest {
         val h = Harness("plugin.warnDebugOnlySdk=true\n", declareCore = false) { warnDebugOnlySdk.set(true) }
         val (added, lines) = debugOnlyCoreRun(h)
         assertEquals(emptySet<String>(), added)
-        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+        assertEquals(listOf(BugseePluginImpl.debugOnlyCoreWarning(h.project.path)), lines)
     }
 
     @Test
@@ -697,7 +697,7 @@ class AutoAddScopeTest {
         val h = Harness("plugin.warnDebugOnlySdk=false\n", declareCore = false) { warnDebugOnlySdk.set(true) }
         val (added, lines) = debugOnlyCoreRun(h)
         assertEquals(emptySet<String>(), added)
-        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+        assertEquals(listOf(BugseePluginImpl.debugOnlyCoreWarning(h.project.path)), lines)
     }
 
     /** Set after `implementation` was already read: the warning is decided in the final recompute. */
@@ -736,7 +736,7 @@ class AutoAddScopeTest {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
         }.filter { it.startsWith("Bugsee:") }
-        assertTrue(lines.contains(BugseePlugin.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback")), lines.toString())
+        assertTrue(lines.contains(BugseePluginImpl.sdkAutoLoadOffWarning("feedback", "bugsee-android-feedback")), lines.toString())
     }
 
     @Test
@@ -801,7 +801,7 @@ class AutoAddScopeTest {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
         }.filter { it.startsWith("Bugsee:") }
-        assertEquals(listOf(BugseePlugin.debugOnlyCoreWarning(h.project.path)), lines)
+        assertEquals(listOf(BugseePluginImpl.debugOnlyCoreWarning(h.project.path)), lines)
     }
 
     /** The app pins the core on debug only and depends on `:lib`, which declares [libCoordinate] on [libConfig]. */
@@ -935,7 +935,7 @@ class AutoAddScopeTest {
                 val property = h.extension.instrumentation.propertyForKey(key)!!
 
                 val old = oldIsAutoAddEnabled(h.project, property, key)
-                val new = BugseePlugin.isAutoAddEnabled(
+                val new = BugseePluginImpl.isAutoAddEnabled(
                     h.project, h.resolver(), SettingDefinitions.booleanByKey("instrumentation.$key"), key,
                 )
 
@@ -954,7 +954,7 @@ class AutoAddScopeTest {
                 val property = h.extension.instrumentation.propertyForKey(key)!!
                 val old = !property.isPresent || property.get()
 
-                val new = BugseePlugin.isCompilerFeatureEnabled(
+                val new = BugseePluginImpl.isCompilerFeatureEnabled(
                     h.resolver(), SettingDefinitions.booleanByKey("instrumentation.$key"),
                 )
 

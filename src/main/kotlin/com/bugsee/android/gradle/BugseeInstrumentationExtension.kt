@@ -261,7 +261,7 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
         "compose" -> compose
         "composeSecure" -> composeSecure
         "composeInput" -> composeInput
-        // Compiler-plugin gate only (default FALSE, applied in BugseePlugin.isApplicable); do not
+        // Compiler-plugin gate only (default FALSE, applied in BugseePluginImpl.isApplicable); do not
         // route it through InstrumentationConfigResolver, whose fallback default is true.
         "composeInTests" -> composeInTests
         // Ktor / Cronet: today read only via direct property access in

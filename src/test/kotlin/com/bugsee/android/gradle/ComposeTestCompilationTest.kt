@@ -187,14 +187,14 @@ class ComposeTestCompilationTest {
         assertFalse(ComposeTestCompilation.isTest(oldProduction))
     }
 
-    // --- BugseePlugin.isApplicable itself ---
+    // --- BugseePluginImpl.isApplicable itself ---
 
     class FakeKotlinPlugin : KotlinBasePlugin {
         override val pluginVersion: String = "2.1.0"
         override fun apply(target: Project) {}
     }
 
-    private fun appliedPlugin(): Pair<Project, BugseePlugin> {
+    private fun appliedPlugin(): Pair<Project, BugseePluginImpl> {
         val p = ProjectBuilder.builder().build()
         p.configurations.create("implementation")
         p.dependencies.add("implementation", "androidx.compose.ui:ui:1.7.0")
@@ -218,7 +218,7 @@ class ComposeTestCompilationTest {
             }
         )
         p.plugins.apply(BugseePlugin::class.java)
-        return p to p.plugins.getPlugin(BugseePlugin::class.java)
+        return p to p.plugins.getPlugin(BugseePlugin::class.java).implementation()!!
     }
 
     @Test

@@ -4,6 +4,7 @@ import org.junit.Assert.assertFalse
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.BugseePlugin
+import com.bugsee.android.gradle.BugseePluginImpl
 import com.bugsee.android.gradle.BugseePluginExtension
 import org.gradle.api.Project
 import org.gradle.api.tasks.TaskProvider
@@ -16,7 +17,7 @@ import kotlin.test.assertEquals
 
 /**
  * Pins the CALL SITE of [ExtensionStripGate] inside
- * `BugseePlugin.registerManifestTask`.
+ * `BugseePluginImpl.registerManifestTask`.
  *
  * [ExtensionStripGateTest] pins the gate function itself, but a correct
  * function fed the wrong arguments is the same shipped defect: with
@@ -114,12 +115,12 @@ class ManifestTaskStripGateWiringTest {
     ): Boolean {
         val project = ProjectBuilder.builder().build()
         project.plugins.apply(BugseePlugin::class.java)
-        val plugin = project.plugins.getPlugin(BugseePlugin::class.java)
+        val plugin = project.plugins.getPlugin(BugseePlugin::class.java).implementation()!!
         val extension = project.extensions.getByType(BugseePluginExtension::class.java)
         extension.optimizeExtensionsLoading.set(dslOptimize)
         extension.instrumentation.excludes.set(excludes)
 
-        val method = BugseePlugin::class.java.getDeclaredMethod(
+        val method = BugseePluginImpl::class.java.getDeclaredMethod(
             "registerManifestTask",
             Project::class.java,
             Variant::class.java,

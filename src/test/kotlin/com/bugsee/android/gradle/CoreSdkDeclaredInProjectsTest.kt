@@ -41,7 +41,7 @@ class CoreSdkDeclaredInProjectsTest {
         }
     }
 
-    private val range = CoreSdkAutoLoad.range(BugseePlugin.MIN_SDK_VERSION)
+    private val range = CoreSdkAutoLoad.range(BugseePluginImpl.MIN_SDK_VERSION)
 
     @Test
     fun libraryApiPinIsHonouredNothingAddedOnApp() {

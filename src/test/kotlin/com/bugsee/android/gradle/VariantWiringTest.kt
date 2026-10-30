@@ -49,7 +49,7 @@ class VariantWiringTest {
 
         assertEquals(
             VariantContext("freeStagingRelease", listOf("free", "staging"), "release"),
-            BugseePlugin.variantContextOf(variant),
+            BugseePluginImpl.variantContextOf(variant),
         )
     }
 
@@ -317,7 +317,7 @@ class VariantWiringTest {
             val child = ProjectBuilder.builder().withParent(root).withName(name).build()
             val ext = child.extensions.create("bugsee", BugseePluginExtension::class.java)
             com.bugsee.android.gradle.config.PluginPropertiesApplier.applyTo(child, ext)
-            BugseePlugin.projectRelativeCliPath(child, ext).get()
+            BugseePluginImpl.projectRelativeCliPath(child, ext).get()
         }
         assertEquals(File(root.projectDir, "tools/cli.sh").path, paths[0])
         assertEquals(paths[0], paths[1])
@@ -367,20 +367,20 @@ class VariantWiringTest {
 
     @Test
     fun libraryWarningExemptionIsByBugseeGroupNotByModuleName() {
-        assertTrue(BugseePlugin.isBugseeSdkGroup("com.bugsee"))
-        assertTrue(BugseePlugin.isBugseeSdkGroup("com.bugsee.testfixture"))
+        assertTrue(BugseePluginImpl.isBugseeSdkGroup("com.bugsee"))
+        assertTrue(BugseePluginImpl.isBugseeSdkGroup("com.bugsee.testfixture"))
         // A customer's `:library` / `:compose` module has its own group and must still warn.
-        assertTrue(!BugseePlugin.isBugseeSdkGroup(""))
-        assertTrue(!BugseePlugin.isBugseeSdkGroup("com.bugseeapp"))
-        assertTrue(!BugseePlugin.isBugseeSdkGroup("com.bugsee-labs.app"))
-        assertTrue(!BugseePlugin.isBugseeSdkGroup("com.customer.app"))
+        assertTrue(!BugseePluginImpl.isBugseeSdkGroup(""))
+        assertTrue(!BugseePluginImpl.isBugseeSdkGroup("com.bugseeapp"))
+        assertTrue(!BugseePluginImpl.isBugseeSdkGroup("com.bugsee-labs.app"))
+        assertTrue(!BugseePluginImpl.isBugseeSdkGroup("com.customer.app"))
     }
 
     @Test
     fun libraryModuleMessage_namesModuleAndRootProject() {
-        val sub = BugseePlugin.libraryModuleMessage(":feature:lib", false, "lib")
+        val sub = BugseePluginImpl.libraryModuleMessage(":feature:lib", false, "lib")
         assertTrue(sub.startsWith("Bugsee: :feature:lib is a library module. "), sub)
-        val root = BugseePlugin.libraryModuleMessage(":", true, "mylib")
+        val root = BugseePluginImpl.libraryModuleMessage(":", true, "mylib")
         assertTrue(root.startsWith("Bugsee: root project 'mylib' is a library module. "), root)
         assertTrue(root.contains("pluginManager.withPlugin(\"com.android.application\")"), root)
     }
@@ -390,11 +390,11 @@ class VariantWiringTest {
         assertEquals(
             "Bugsee: variant stagingRelease resolved: token=${AppTokenResolver.maskToken("secret-token-value")} " +
                 "endpoint=https://x.example.com",
-            BugseePlugin.variantResolvedMessage("stagingRelease", "secret-token-value", "https://x.example.com"),
+            BugseePluginImpl.variantResolvedMessage("stagingRelease", "secret-token-value", "https://x.example.com"),
         )
         assertEquals(
             "Bugsee: variant release resolved: token=none endpoint=https://api.bugsee.com",
-            BugseePlugin.variantResolvedMessage("release", null, "https://api.bugsee.com"),
+            BugseePluginImpl.variantResolvedMessage("release", null, "https://api.bugsee.com"),
         )
 
         // The real wiring logs it (only under debug) and never prints the raw token.
@@ -405,7 +405,7 @@ class VariantWiringTest {
         val output = h.captureOutput { h.runVariant("release") }
         assertTrue(output.none { "secret-token-value" in it }, "raw token leaked: $output")
         assertTrue(
-            BugseePlugin.variantResolvedMessage("release", "secret-token-value", "https://api.bugsee.com") in output,
+            BugseePluginImpl.variantResolvedMessage("release", "secret-token-value", "https://api.bugsee.com") in output,
             "summary line missing from: $output",
         )
     }
@@ -511,7 +511,7 @@ class VariantWiringTest {
                 )
                 plugin = project.plugins.apply(BugseePlugin::class.java)
                 // No real Android plugin is applied, so `withPlugin` never fires; wire directly.
-                plugin.wireAndroidComponents(project)
+                plugin.implementation()!!.wireAndroidComponents(project)
             } else {
                 project.plugins.apply(BugseePlugin::class.java)
             }

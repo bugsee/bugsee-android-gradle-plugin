@@ -15,7 +15,7 @@ import org.gradle.build.event.BuildEventsListenerRegistry
  *
  * Lives in this top-level file (alongside
  * [registerBuildTimingListenerOnce]) rather than on
- * [BugseePlugin.Companion] so the test can reference it without
+ * [BugseePluginImpl.Companion] so the test can reference it without
  * dragging the plugin class onto the unit-test classpath.
  */
 internal const val BUILD_TIMING_LISTENER_FLAG_KEY: String =

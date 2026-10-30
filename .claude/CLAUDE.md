@@ -60,7 +60,8 @@ The plugin does four things:
 
 ```
 src/main/kotlin/com/bugsee/android/gradle/
-├── BugseePlugin.kt                          # Entry point: extension, variant wiring, instrumentation
+├── BugseePlugin.kt                          # Thin entry (implementation-class): NO AGP types; warns + returns without AGP, else delegates
+├── BugseePluginImpl.kt                      # The real plugin: extension, variant wiring, instrumentation (AGP-aware)
 ├── BugseePluginExtension.kt                 # DSL: endpoint, appToken, debug, ndk, instrumentationEnabled
 ├── BugseeVariantSettings.kt                 # @BugseeDsl DSL for variant("x") { } blocks (per-variant subset)
 ├── AppTokenProvider.kt                      # Interface: getAppToken(variantName: String)
@@ -99,7 +100,9 @@ src/main/kotlin/com/bugsee/android/gradle/
     └── StringResourceResolver.kt            # Resolve @string/ references from strings.xml
 ```
 
-### Plugin Entry Point (`BugseePlugin.kt`)
+### Plugin Entry Point (`BugseePlugin.kt` -> `BugseePluginImpl.kt`)
+
+`BugseePlugin` must never mention an AGP type (Gradle decorates it by loading every signature type; AGP is compileOnly, so a module without AGP would fail with NoClassDefFoundError, #161). It implements `KotlinCompilerPluginSupportPlugin` (KGP discovers compiler plugins by that interface) and delegates everything to `BugseePluginImpl`, created only when `AndroidComponentsExtension` is loadable. Put all AGP-aware code in `BugseePluginImpl`.
 
 Uses `AndroidComponentsExtension.onVariants` to register per-variant:
 - **Manifest task** — `createBugsee${Variant}ManifestConfig` (all variants)

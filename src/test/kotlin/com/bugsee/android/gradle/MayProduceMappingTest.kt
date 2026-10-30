@@ -10,7 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** [BugseePlugin.mayProduceMapping] gate for the build-id mapping listener (#53). */
+/** [BugseePluginImpl.mayProduceMapping] gate for the build-id mapping listener (#53). */
 class MayProduceMappingTest {
 
     /** Stand-ins for AGP 9's DSL (`buildTypes.<type>.optimization.enable`). */
@@ -81,44 +81,44 @@ class MayProduceMappingTest {
 
     @Test
     fun minifyEnabled_listens() {
-        assertTrue(BugseePlugin.mayProduceMapping(variant(true), null))
+        assertTrue(BugseePluginImpl.mayProduceMapping(variant(true), null))
     }
 
     @Test
     fun minifyDisabled_noAndroidExtension_doesNotListen() {
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false), null))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false), null))
     }
 
     @Test
     fun minifyDisabled_legacyBuildType_doesNotListen() {
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false), extensionWith(LegacyBuildType("release"))))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(LegacyBuildType("release"))))
     }
 
     @Test
     fun minifyDisabled_optimizationWithoutEnable_doesNotListen() {
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false), extensionWith(Agp8BuildType("release"))))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(Agp8BuildType("release"))))
     }
 
     @Test
     fun minifyDisabled_optimizationEnabled_listens() {
-        assertTrue(BugseePlugin.mayProduceMapping(variant(false), extensionWith(FakeBuildType("release", true))))
+        assertTrue(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(FakeBuildType("release", true))))
     }
 
     @Test
     fun minifyDisabled_optimizationDisabled_doesNotListen() {
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false), extensionWith(FakeBuildType("release", false))))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(FakeBuildType("release", false))))
     }
 
     @Test
     fun optimizationEnabledOnOtherBuildType_doesNotListen() {
         val ext = extensionWith(FakeBuildType("release", false), FakeBuildType("staging", true))
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false, "release"), ext))
-        assertTrue(BugseePlugin.mayProduceMapping(variant(false, "staging"), ext))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false, "release"), ext))
+        assertTrue(BugseePluginImpl.mayProduceMapping(variant(false, "staging"), ext))
     }
 
     @Test
     fun minifyDisabled_optimizationUnreadable_keepsListener() {
-        assertTrue(BugseePlugin.mayProduceMapping(variant(false), extensionWith(BrokenBuildType("release"))))
+        assertTrue(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(BrokenBuildType("release"))))
     }
 
     @Test
@@ -126,14 +126,14 @@ class MayProduceMappingTest {
         val flavors = ProjectBuilder.builder().build().container(FakeBuildType::class.java) { n -> FakeBuildType(n, true) }
         flavors.create("paid")
         val ext = FakeExtension(extensionWith(FakeBuildType("release", false)).getBuildTypes(), flavors)
-        assertTrue(BugseePlugin.mayProduceMapping(variant(false, "release", listOf("paid")), ext))
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false, "release", listOf("free")), ext))
+        assertTrue(BugseePluginImpl.mayProduceMapping(variant(false, "release", listOf("paid")), ext))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false, "release", listOf("free")), ext))
     }
 
     @Test
     fun nonPublicDeclaringClass_isStillRead() {
-        assertTrue(BugseePlugin.mayProduceMapping(variant(false), extensionWith(HiddenBuildType("release", true))))
-        assertFalse(BugseePlugin.mayProduceMapping(variant(false), extensionWith(HiddenBuildType("release", false))))
+        assertTrue(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(HiddenBuildType("release", true))))
+        assertFalse(BugseePluginImpl.mayProduceMapping(variant(false), extensionWith(HiddenBuildType("release", false))))
     }
 
     @Test
@@ -143,6 +143,6 @@ class MayProduceMappingTest {
             arrayOf(Variant::class.java),
             InvocationHandler { _, _, _ -> null },
         ) as Variant
-        assertTrue(BugseePlugin.mayProduceMapping(v, null))
+        assertTrue(BugseePluginImpl.mayProduceMapping(v, null))
     }
 }
