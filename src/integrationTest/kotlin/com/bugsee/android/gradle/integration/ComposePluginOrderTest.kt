@@ -80,7 +80,7 @@ class ComposePluginOrderTest {
     @Test
     fun kotlin_2_1_foundation_1_7_state_based_text_fields_are_not_secured_at_compile_time() {
         val fixture = materialize("2.1.0", kotlin2 = true)
-        fixture.buildTasks(listOf(":app17:compileDebugKotlin"), null, *composeRepoArgs(), "-PbugseeFixtureKotlin2=true")
+        fixture.buildTasks(listOf(":app17:compileDebugKotlin"), null, *composeRepoArgs(), "-PbugseeFixtureKotlin2=true", "-PbugseeFixtureApp17=true")
         assertEquals(
             "foundation 1.7.8: state-based BasicTextField and BasicSecureTextField are left to the runtime path (issue #158)",
             STATE_BASED,
