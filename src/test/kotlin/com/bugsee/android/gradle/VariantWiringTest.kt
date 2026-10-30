@@ -462,9 +462,9 @@ class VariantWiringTest {
 
     @Test
     fun noAndroidModuleMessage_namesModuleAndRootProject() {
-        val sub = BugseePlugin.noAndroidModuleMessage(":tools:lint", false, "lint")
+        val sub = BugseePluginImpl.noAndroidModuleMessage(":tools:lint", false, "lint")
         assertTrue(sub.startsWith("Bugsee: :tools:lint has no Android application or library plugin, so nothing is wired."), sub)
-        val root = BugseePlugin.noAndroidModuleMessage(":", true, "m")
+        val root = BugseePluginImpl.noAndroidModuleMessage(":", true, "m")
         assertTrue(root.startsWith("Bugsee: root project 'm' has no Android"), root)
     }
 
