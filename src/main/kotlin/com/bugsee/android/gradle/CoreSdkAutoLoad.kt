@@ -6,7 +6,7 @@ import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
  * Helpers for the plugin's auto-load of the core `com.bugsee:bugsee-android`
  * SDK when an extension module is declared but the core is not.
  *
- * Lives outside [BugseePlugin] (which inherits from AGP/KGP plugin
+ * Lives outside [BugseePluginImpl] (which inherits from AGP/KGP plugin
  * interfaces unavailable on the unit-test classpath) so the range
  * builder can be unit-tested directly.
  */

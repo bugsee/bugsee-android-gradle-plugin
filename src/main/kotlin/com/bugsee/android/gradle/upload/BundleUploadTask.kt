@@ -1,6 +1,6 @@
 package com.bugsee.android.gradle.upload
 
-import com.bugsee.android.gradle.BugseePlugin
+import com.bugsee.android.gradle.BugseePluginImpl
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -100,9 +100,9 @@ abstract class BundleUploadTask : DefaultTask() {
     // Shared BuildService that collects per-task timings across the
     // whole build. `@ServiceReference(name)` declaratively auto-wires
     // the task to the service registered under that name in
-    // `BugseePlugin.apply()` — no explicit `task.set(...)` or
+    // `BugseePluginImpl.apply()` — no explicit `task.set(...)` or
     // `task.usesService(...)` call required on the registration site.
-    @get:ServiceReference(BugseePlugin.BUILD_TIMING_SERVICE_NAME)
+    @get:ServiceReference(BugseePluginImpl.BUILD_TIMING_SERVICE_NAME)
     abstract val timingService: Property<BuildTimingService>
 
     // Android `compileSdk` rendered as a string — wired from the
@@ -186,7 +186,7 @@ abstract class BundleUploadTask : DefaultTask() {
     // ── In-build size-check inputs ─────────────────────────────────
     //
     // Resolved at task registration via DSL → env-var fallback in
-    // `BugseePlugin.registerBundleUploadTask`. A `0` in any threshold
+    // `BugseePluginImpl.registerBundleUploadTask`. A `0` in any threshold
     // is treated as "disabled" (the resolver normalises to absent),
     // so users can leave a single gate active without having to spell
     // out the others.
@@ -305,7 +305,7 @@ abstract class BundleUploadTask : DefaultTask() {
      * fastlane reader's `ACTION_KEYS` list; an unilateral rename on
      * either side silently breaks de-duplication.
      *
-     * Wired by [com.bugsee.android.gradle.BugseePlugin] to
+     * Wired by [com.bugsee.android.gradle.BugseePluginImpl] to
      * `<project>/build/intermediates/bugsee/<variant>/build-actions.json`
      * — same parent dir as `build-id.txt`, so a single glob
      * matching every file under each per-variant
@@ -929,7 +929,7 @@ abstract class BundleUploadTask : DefaultTask() {
             obj.put("machine", it)
         }
 
-        obj.put("plugin_version", BugseePlugin.PLUGIN_VERSION)
+        obj.put("plugin_version", BugseePluginImpl.PLUGIN_VERSION)
         // Renamed from the earlier `gradle_version` as part of cross-
         // platform schema harmonisation — the same slot carries the
         // Xcode version on iOS builds.

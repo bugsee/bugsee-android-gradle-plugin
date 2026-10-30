@@ -127,7 +127,7 @@ class AutoAddEarlyResolutionTest {
 
         p.bugsee { sdkAutoLoad.set(false) }
         val warnings = mutableListOf<String>()
-        p.plugins.getPlugin(BugseePlugin::class.java).uncorrectableAutoAddHook = { warnings.add(it) }
+        p.plugins.getPlugin(BugseePlugin::class.java).implementation()!!.uncorrectableAutoAddHook = { warnings.add(it) }
         p.evaluateNow() // must not throw
         assertTrue(
             warnings.singleOrNull()?.contains("a configuration extending it has already been resolved") == true &&

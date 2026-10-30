@@ -19,7 +19,7 @@ import org.gradle.api.logging.Logger
  *
  * for free, without changing a single existing extension class.
  *
- * Run from [com.bugsee.android.gradle.BugseePlugin.apply] right after
+ * Run from [com.bugsee.android.gradle.BugseePluginImpl.apply] right after
  * `project.extensions.create(...)` builds the extension tree but
  * BEFORE the user's `bugsee { ... }` block evaluates. Gradle invokes
  * the user's DSL after the plugin's apply returns, so our conventions

@@ -713,6 +713,21 @@ the module, says nothing is wired (no tasks, no auto-added SDK dependency, no Co
 Earlier versions failed such a module at configuration time with "Bugsee requires 'com.android.application'
 or 'com.android.library'".
 
+A module where the Android Gradle Plugin (AGP) is not on the plugin classpath visible to Bugsee (for example a
+plain `kotlin("jvm")` or `java-library` project with no AGP in its own or a parent project's `plugins {}`)
+gets one warning, "Bugsee: the Android Gradle Plugin is not on the plugin classpath of project ...", and the
+plugin does nothing there. Earlier versions failed such a module with a raw `NoClassDefFoundError`. This
+warning cannot be silenced with `warnLibraryModule` (the setting lives in the plugin's AGP-aware half, which
+is not loaded without AGP): do not apply the plugin to such modules. A `java-library` module without the
+Kotlin plugin still fails earlier, because the plugin also serves as a Kotlin compiler plugin and needs the
+Kotlin Gradle plugin on the classpath.
+
+If `com.android.application` IS applied in the module but AGP is not visible to Bugsee (Bugsee declared in
+the root project's `plugins {}` with `apply false` while AGP is declared only in the app module), the build
+fails with a message saying so, rather than building an app with nothing wired. Declare AGP in the root
+`plugins {}` block too (`apply false`), or both plugins in the app module's own block. (Only `com.android.application` fails this way; a library
+module in the same situation just gets the warning above, since the plugin wires nothing there anyway.)
+
 ## Diagnostics
 
 The plugin logs `bugsee.properties` issues at the most-appropriate

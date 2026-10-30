@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
  * Boolean properties: `httpEngine` (camelCase variant), `ktor`,
  * `cronet` were missing. Even though the production code paths that
  * read those DSL properties today happen to bypass `propertyForKey`
- * (the auto-install flow at `BugseePlugin.kt:131-143` calls
+ * (the auto-install flow at `BugseePluginImpl.kt` calls
  * `isFeatureEnabled(property: Property<Boolean>)` directly with the
  * typed DSL property), a future bytecode instrumentation that
  * added a registrar entry with `key = "ktor"` would silently

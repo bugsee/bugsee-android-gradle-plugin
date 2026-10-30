@@ -1,7 +1,7 @@
 package com.bugsee.android.gradle
 
 /**
- * Artifact names of every extension module `BugseePlugin.computeAutoAdds` can auto-add. The single
+ * Artifact names of every extension module `BugseePluginImpl.computeAutoAdds` can auto-add. The single
  * source for those call sites and for the tests that guard [ExtensionFirstRelease] coverage: add a
  * new auto-added extension here (and a row in [ExtensionFirstRelease]).
  */

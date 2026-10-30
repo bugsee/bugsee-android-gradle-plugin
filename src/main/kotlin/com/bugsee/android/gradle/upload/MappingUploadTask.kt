@@ -122,7 +122,7 @@ abstract class MappingUploadTask : DefaultTask() {
 
     /**
      * Whether the build-id resolve task listens for the R8 mapping (see
-     * `BugseePlugin.mayProduceMapping`). False plus a present [mappingFile] means a
+     * `BugseePluginImpl.mayProduceMapping`). False plus a present [mappingFile] means a
      * non-AGP producer (e.g. DexGuard with minify off) supplied it: the build id is then
      * not mapping-derived, and the task warns.
      */
