@@ -13,7 +13,7 @@ import org.junit.rules.TemporaryFolder
  * `DependencyDetector.hasBugseeDependency` scans `project.configurations.any { }` —
  * every configuration, not the variant's. `InstrumentationRegistrar.applyAll(variant)`
  * runs per-variant but calls `shouldApply(project, …)`, which cannot see the variant,
- * and nothing filters variants at the call site (`BugseePlugin.kt:347`).
+ * and nothing filters variants at the call site (`BugseePluginImpl.kt`).
  *
  * So on paper a `debug`-only SDK dependency makes the gate answer true for `release`
  * too, and release bytecode gets Bugsee calls injected against a class that is not on

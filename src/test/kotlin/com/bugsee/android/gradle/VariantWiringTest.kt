@@ -28,7 +28,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Pins how `BugseePlugin`'s `onVariants` callback wires each variant to its
+ * Pins how `BugseePluginImpl`'s `onVariants` callback wires each variant to its
  * resolved (effective) settings, and that a build with no per-variant input
  * wires exactly what the global extension says.
  *

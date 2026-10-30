@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle
 
+import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.provider.Provider
@@ -41,8 +42,15 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     override fun apply(project: Project) {
         if (!isAgpLoadable()) {
             // The settings extension (and with it any opt-out) is part of the AGP-aware plugin, so
-            // this cannot be silenced; it is one line per module and never fails the build.
+            // this cannot be silenced; it is one line per module.
             project.logger.warn(noAgpMessage(project.path))
+            // AGP exists in the module but is not visible from here: Bugsee was loaded in a parent
+            // classloader scope (e.g. `id("com.bugsee.android.gradle") apply false` in the root, AGP
+            // only in :app). Warning and carrying on would ship an app with no manifest UUID, no
+            // symbol upload and no instrumentation, so this one case fails, with a message.
+            project.pluginManager.withPlugin("com.android.application") {
+                throw GradleException(agpNotVisibleMessage(project.path))
+            }
             return
         }
         impl = BugseePluginImpl(listenerRegistry).also { it.apply(project) }
@@ -50,10 +58,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
 
     // --- KotlinCompilerPluginSupportPlugin ---
 
-    override fun getCompilerPluginId(): String = BugseePluginImpl.COMPILER_PLUGIN_ID
+    override fun getCompilerPluginId(): String = PluginMetadata.COMPILER_PLUGIN_ID
 
     override fun getPluginArtifact(): SubpluginArtifact =
-        impl?.getPluginArtifact() ?: BugseePluginImpl.baseArtifact()
+        impl?.getPluginArtifact()
+            // Never reached without an implementation (isApplicable refuses first); keeps the method total.
+            ?: SubpluginArtifact("com.bugsee", ComposeKotlinCompatibility.ARTIFACT_BASE, PluginMetadata.VERSION)
 
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>): Boolean =
         impl?.isApplicable(kotlinCompilation) ?: false
@@ -81,6 +91,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         internal fun noAgpMessage(projectPath: String): String =
             "Bugsee: the Android Gradle Plugin is not on the plugin classpath of project $projectPath, " +
                 "so the Bugsee plugin does nothing here. Apply 'com.bugsee.android.gradle' only to Android " +
-                "application modules (AGP declared in a parent or sibling project's plugin classpath counts)."
+                "application modules, in a build where AGP is on the same plugin classpath as Bugsee (or a parent's)."
+
+        internal fun agpNotVisibleMessage(projectPath: String): String =
+            "Bugsee: 'com.android.application' is applied in project $projectPath, but the Android Gradle " +
+                "Plugin is not visible to the Bugsee plugin, so nothing could be wired. Declare both plugins " +
+                "in the same plugins {} block, or declare AGP in the root project's plugins {} block " +
+                "(`id(\"com.android.application\") version \"...\" apply false`) alongside Bugsee."
     }
 }

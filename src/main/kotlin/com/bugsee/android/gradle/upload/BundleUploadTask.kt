@@ -305,7 +305,7 @@ abstract class BundleUploadTask : DefaultTask() {
      * fastlane reader's `ACTION_KEYS` list; an unilateral rename on
      * either side silently breaks de-duplication.
      *
-     * Wired by [com.bugsee.android.gradle.BugseePlugin] to
+     * Wired by [com.bugsee.android.gradle.BugseePluginImpl] to
      * `<project>/build/intermediates/bugsee/<variant>/build-actions.json`
      * — same parent dir as `build-id.txt`, so a single glob
      * matching every file under each per-variant

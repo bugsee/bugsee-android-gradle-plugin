@@ -104,7 +104,7 @@ class ManifestTaskStripGateWiringTest {
     }
 
     /**
-     * Registers the manifest task the way `BugseePlugin` does for one variant
+     * Registers the manifest task the way `BugseePluginImpl` does for one variant
      * and returns the resolved value of its `optimizeExtensionsLoading` input.
      */
     private fun resolveStripFlag(

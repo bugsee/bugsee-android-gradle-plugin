@@ -1433,7 +1433,7 @@ internal class BugseePluginImpl(
 
     // --- KotlinCompilerPluginSupportPlugin ---
 
-    fun getCompilerPluginId(): String = COMPILER_PLUGIN_ID
+    fun getCompilerPluginId(): String = PluginMetadata.COMPILER_PLUGIN_ID
 
     /**
      * The compiler-plugin artifact matching the CONSUMER's Kotlin version.
@@ -1966,11 +1966,6 @@ internal class BugseePluginImpl(
     }
 
     companion object {
-        const val COMPILER_PLUGIN_ID = "com.bugsee.compose.compiler"
-
-        /** The artifact reported when no implementation exists (AGP absent); never actually loaded. */
-        fun baseArtifact() = SubpluginArtifact("com.bugsee", ComposeKotlinCompatibility.ARTIFACT_BASE, PLUGIN_VERSION)
-
         /** True when the user declared the Bugsee module (Maven coordinate or project dependency) on a production or `compileOnly` configuration, never a test one (#124). */
         internal fun isModuleDeclared(
             project: Project,
@@ -2239,11 +2234,7 @@ internal class BugseePluginImpl(
         // the per-variant task wiring so both land on the same
         // service instance per build.
         internal const val BUILD_TIMING_SERVICE_NAME = "bugseeBuildTimingService"
-        internal val PLUGIN_VERSION: String by lazy {
-            BugseePluginImpl::class.java.getResourceAsStream("/bugsee-plugin-version.txt")
-                ?.bufferedReader()?.readText()?.trim()
-                ?: "4.99.118-SNAPSHOT"
-        }
+        internal val PLUGIN_VERSION: String get() = PluginMetadata.VERSION
 
         // Minimum compatible Bugsee Android SDK version. Used when the plugin
         // auto-adds the core SDK to a consuming app that hasn't declared it.
