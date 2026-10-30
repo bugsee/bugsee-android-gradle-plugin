@@ -173,7 +173,20 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     //    can be assigned after the plugin is applied).
                     // A module with no Android plugin (a Kotlin/JVM module, lint-only module, ...) must
                     // never receive the Android SDK AARs: they cannot resolve on a JVM classpath.
-                    if (!isAndroidModule(project)) return@withDependencies
+                    if (!isAndroidModule(project)) {
+                        // Bugsee may be applied before the Android plugin and `implementation` read in
+                        // between: decide again in afterEvaluate ([reconcileAutoAdd]) instead of
+                        // skipping for good. Past the DSL-final point the module type is settled.
+                        if (!dslFinal) {
+                            autoAddRecord = AutoAddRecord(
+                                config,
+                                AutoAddResult(
+                                    readAutoAddInputs(project, freshSettingsResolver()), emptyList(), emptyList(),
+                                ),
+                            )
+                        }
+                        return@withDependencies
+                    }
                     val projectGroup = project.group?.toString().orEmpty()
                     if (projectGroup.startsWith("com.bugsee")
                             || project.name in BUGSEE_INTERNAL_MODULE_NAMES) {
@@ -657,6 +670,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private fun reconcileAutoAdd(project: Project) {
         val record = autoAddRecord ?: return
         autoAddRecord = null
+        // Recorded while the module was not (yet) an Android module and still is not: nothing to add.
+        if (!isAndroidModule(project)) return
         val config = record.config
         val early = record.result
 

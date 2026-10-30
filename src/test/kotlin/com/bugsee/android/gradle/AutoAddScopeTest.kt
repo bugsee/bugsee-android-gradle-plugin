@@ -506,6 +506,28 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun sdkIsAutoAddedWhenImplementationIsReadBeforeTheAndroidPluginIsApplied() {
+        val h = Harness(null, declareCore = false, androidExtension = false)
+        // First read of `implementation` happens before any Android plugin exists: provisional skip.
+        assertEquals(emptySet<String>(), h.autoAdded())
+        h.project.extensions.add("android", Any()) // the Android plugin arrives afterwards
+        (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+
+        val names = h.project.configurations.getByName("implementation").dependencies.map { it.name }
+        assertTrue("bugsee-android" in names, "core SDK must be reconciled in afterEvaluate: $names")
+    }
+
+    @Test
+    fun sdkIsNotAddedToAModuleThatNeverBecomesAnAndroidModule() {
+        val h = Harness(null, declareCore = false, androidExtension = false)
+        assertEquals(emptySet<String>(), h.autoAdded())
+        (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+
+        val names = h.project.configurations.getByName("implementation").dependencies.map { it.name }
+        assertTrue(names.none { it.startsWith("bugsee") }, "no SDK for a non-Android module: $names")
+    }
+
+    @Test
     fun extensionBelowFirstReleaseIsNotWarnedWhenDeclaredByTheUser() {
         val h = Harness(null, declareCore = false) { ndk.enabled.set(true) }
         h.declare("com.bugsee:bugsee-android:7.0.0-beta1")
