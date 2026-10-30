@@ -466,6 +466,13 @@ private class BugseeComposeTransformer(
          * as secure when their `visualTransformation` is a
          * [PasswordVisualTransformation]. Covers Material 1, Material 3,
          * and the Foundation BasicTextField variants.
+         *
+         * Intentionally NOT listed (issue #158): the `TextFieldState`-based `BasicTextField` and
+         * `BasicSecureTextField` of foundation 1.7+ (and the 1.6.x `text2` equivalents). They have no
+         * `visualTransformation` parameter for this pass to inspect. `BasicSecureTextField` always sets
+         * `SemanticsProperties.Password`, so the runtime scanner already masks it, and masking through an
+         * `OutputTransformation` cannot be told apart statically from other transformations; such fields opt in
+         * with `Modifier.bugseeSecure()`.
          */
         val SENSITIVE_TEXT_FIELD_CALLEES = setOf(
             "androidx.compose.material.TextField",
