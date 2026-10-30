@@ -596,6 +596,17 @@ the upload tasks skip with a single info-level message instead of failing or war
   rejected: a library callee's default expression is not available to the compiler plugin, and a
   same-module one can read the callee's other parameters. Pinned on Kotlin 2.1, 2.2 and 2.4 by
   real-Compose-compiler tests that execute the compiled call paths, and in a real AGP consumer.
+- **State-based text fields are not in the compile-time secure pass.** `bugseeSecure` is injected only for text
+  fields that take a `VisualTransformation` (the `String` / `TextFieldValue` overloads of `BasicTextField`, Material
+  and Material 3 `TextField` / `OutlinedTextField`). `BasicTextField(TextFieldState, ...)` and `BasicSecureTextField`
+  (foundation 1.7+) and the `TextFieldState` overloads of Material 3 `TextField` / `OutlinedTextField` and
+  `SecureTextField` / `OutlinedSecureTextField` (Material 3 1.4, checked with `javap`) have no such parameter and are
+  never secured by this pass, even though the Material 3 names are in the allowlist. The secure variants are still
+  protected at runtime, because they set `SemanticsProperties.Password`, which the SDK scanner masks. A state-based
+  `BasicTextField` or Material 3 `TextField` / `OutlinedTextField` does not set it, even when its `outputTransformation` masks the text, so a field that shows or
+  masks sensitive text this way must opt in with `Modifier.bugseeSecure()` (or `Modifier.semantics { contentType = ContentType.Password }`
+  on Compose 1.8+). The compile-time behavior is pinned on foundation 1.7.8 by the `compose-pipeline` fixture; the
+  runtime semantics were checked on 1.7.8 and 1.12.1 with `ComposeTestRule` (issue #158).
 - **Compose on Kotlin 1.9.** Composable calls that omit `modifier` are tagged as well as the explicit
   ones, when the callee is declared in the same module with the plain `Modifier` default
   (`modifier: Modifier = Modifier`). A Compose compiler release that registers through the legacy

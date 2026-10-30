@@ -66,3 +66,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "compose-pipeline-fixture"
 include(":app", ":stub")
+// `:app17` (foundation 1.7.8, issue #158) is included only by the test that builds it (`-PbugseeFixtureApp17=true`); it needs the Kotlin 2.x Compose plugin.
+if (providers.gradleProperty("bugseeFixtureApp17").orNull == "true") include(":app17")

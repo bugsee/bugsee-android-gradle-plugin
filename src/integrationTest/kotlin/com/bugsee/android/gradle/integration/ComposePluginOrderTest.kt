@@ -74,6 +74,20 @@ class ComposePluginOrderTest {
     fun kotlin_2_2_compose_applied_first_skips_omitted_modifier_sites() =
         assertKotlin2("2.2.0", composeFirst = true, expected = mapOf("ProdDefault" to 0, "ProdExplicit" to 1, "ProdCustomDefault" to 0))
 
+    // Issue #158: real foundation 1.7.8 TextFieldState-based fields (no VisualTransformation parameter) are intentionally
+    // not matched by the compile-time pass; the String overload on the same version is the positive control. This pins
+    // existing behavior (it passes on main too). Kotlin 2.x only, see :app17.
+    @Test
+    fun kotlin_2_1_foundation_1_7_state_based_text_fields_are_not_secured_at_compile_time() {
+        val fixture = materialize("2.1.0", kotlin2 = true)
+        fixture.buildTasks(listOf(":app17:compileDebugKotlin"), null, *composeRepoArgs(), "-PbugseeFixtureKotlin2=true", "-PbugseeFixtureApp17=true")
+        assertEquals(
+            "foundation 1.7.8: state-based BasicTextField and BasicSecureTextField are left to the runtime path (issue #158)",
+            STATE_BASED,
+            countCalls(fixture, ".bugseeSecure:", STATE_BASED.keys.toList(), "app17/build/tmp/kotlin-classes/debug/com/example/app17/Prod17Kt.class"),
+        )
+    }
+
     private fun assertKotlin2(kotlin: String, composeFirst: Boolean, expected: Map<String, Int>) {
         val fixture = materialize(kotlin, kotlin2 = true)
         val flags = arrayOf("-PbugseeFixtureKotlin2=true", "-PbugseeFixtureComposeFirst=$composeFirst")
@@ -135,8 +149,13 @@ class ComposePluginOrderTest {
     private fun secureCounts(fixture: FixtureProject): Map<String, Int> =
         countCalls(fixture, ".bugseeSecure:", SECURE_ALL.keys.toList())
 
-    private fun countCalls(fixture: FixtureProject, callSuffix: String, names: List<String>): Map<String, Int> {
-        val classFile = fixture.projectDir.resolve("app/build/tmp/kotlin-classes/debug/com/example/app/ProdKt.class")
+    private fun countCalls(
+        fixture: FixtureProject,
+        callSuffix: String,
+        names: List<String>,
+        classPath: String = "app/build/tmp/kotlin-classes/debug/com/example/app/ProdKt.class",
+    ): Map<String, Int> {
+        val classFile = fixture.projectDir.resolve(classPath)
         assertTrue("compiled fixture class missing: $classFile", classFile.isFile)
         val javap = File(File(System.getProperty("java.home"), "bin"), "javap").absolutePath
         val process = ProcessBuilder(javap, "-c", "-p", classFile.absolutePath).redirectErrorStream(true).start()
@@ -164,6 +183,10 @@ class ComposePluginOrderTest {
             "ProdText2Value" to 0, "ProdText2State" to 0, "ProdText2Secure" to 0,
             // Same-module non-androidx look-alike: never secured.
             "ProdSecureFake" to 0,
+        )
+        // :app17, real foundation 1.7.8 (issue #158); the String overload is the live-pass control.
+        val STATE_BASED = linkedMapOf(
+            "ProdStateBasic" to 0, "ProdStateBasicMasked" to 0, "ProdStateSecure" to 0, "ProdValueSecure" to 1,
         )
         val METHOD_HEADER = Regex("""^\s{2}\S[^(]*?\b([\w$]+)\(.*;$""")
     }
