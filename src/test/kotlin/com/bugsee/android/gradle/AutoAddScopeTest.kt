@@ -530,6 +530,17 @@ class AutoAddScopeTest {
     }
 
     @Test
+    fun bugseeSdkGroupAssignedAfterAnEarlyReadTakesBackTheProvisionalAutoAdd() {
+        val h = Harness(null, declareCore = false)
+        assertTrue(h.autoAdded().isNotEmpty(), "the provisional pass adds the SDK")
+        h.project.group = "com.bugsee" // assigned late, after the read
+        (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
+
+        val names = h.project.configurations.getByName("implementation").dependencies.map { it.name }
+        assertTrue(names.none { it.startsWith("bugsee") }, "provisional add must be removed: $names")
+    }
+
+    @Test
     fun sdkIsNotAddedToAModuleThatNeverBecomesAnAndroidModule() {
         val h = Harness(null, declareCore = false, androidExtension = false)
         assertEquals(emptySet<String>(), h.autoAdded())

@@ -672,7 +672,14 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         autoAddRecord = null
         // Recorded while the module was not (yet) an Android module and still is not: nothing to add.
         // The group is assigned late, so the Bugsee-module exemption is evaluated here too.
-        if (!isAndroidModule(project) || isBugseeInternalModule(project)) return
+        if (!isAndroidModule(project)) return
+        if (isBugseeInternalModule(project)) {
+            // Group assigned after the early read: take back what the provisional pass added.
+            if (record.result.dependencies.isNotEmpty()) {
+                runCatching { record.config.dependencies.removeAll(record.result.dependencies.toSet()) }
+            }
+            return
+        }
         val config = record.config
         val early = record.result
 
