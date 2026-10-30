@@ -725,7 +725,8 @@ Kotlin Gradle plugin on the classpath.
 If `com.android.application` IS applied in the module but AGP is not visible to Bugsee (Bugsee declared in
 the root project's `plugins {}` with `apply false` while AGP is declared only in the app module), the build
 fails with a message saying so, rather than building an app with nothing wired. Declare AGP in the root
-`plugins {}` block too (`apply false`), or both plugins in the app module's own block.
+`plugins {}` block too (`apply false`), or both plugins in the app module's own block. (Only `com.android.application` fails this way; a library
+module in the same situation just gets the warning above, since the plugin wires nothing there anyway.)
 
 ## Diagnostics
 

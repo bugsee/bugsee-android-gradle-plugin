@@ -23,8 +23,9 @@ import javax.inject.Inject
  * loadable and, when it is, delegates to [BugseePluginImpl], which holds all the AGP-aware code.
  *
  * It still implements [KotlinCompilerPluginSupportPlugin], because the Kotlin Gradle plugin discovers
- * compiler plugins by that interface on the applied plugin instance; Kotlin types are safe here since
- * a Kotlin plugin is what makes this a Kotlin project at all.
+ * compiler plugins by that interface on the applied plugin instance. That keeps one known limitation:
+ * a module whose build has no Kotlin Gradle plugin on Bugsee's classpath (a bare `java-library`) still
+ * fails with a NoClassDefFoundError for that interface.
  */
 abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin {
 

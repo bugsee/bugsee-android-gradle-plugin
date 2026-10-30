@@ -27,6 +27,11 @@ class BugseePluginEntryAgpFreeTest {
             c.declaredConstructors.forEach { addAll(it.parameterTypes) }
             c.declaredClasses.forEach { add(it) }
         }
+        // Gradle's decoration also loads BugseePluginImpl (via the implementation() accessor), so its
+        // supertypes must be AGP-free too.
+        val impl = BugseePluginImpl::class.java
+        val offendersImpl = (listOf(impl.superclass) + impl.interfaces).map { it.name }.filter { it.startsWith("com.android.") }
+        assertTrue(offendersImpl.isEmpty(), "AGP supertypes on BugseePluginImpl: $offendersImpl")
         val offenders = referenced.map { it.name }.filter { it.startsWith("com.android.") }
         assertTrue(offenders.isEmpty(), "AGP types in BugseePlugin's signature: $offenders")
     }
