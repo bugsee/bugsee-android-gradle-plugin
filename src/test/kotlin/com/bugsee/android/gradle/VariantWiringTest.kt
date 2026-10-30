@@ -431,16 +431,41 @@ class VariantWiringTest {
     }
 
     @Test
-    fun noAndroidPlugin_failsEvaluationWithAClearMessage() {
-        val h = Harness(null)
+    fun noAndroidPlugin_warnsOnceAndNeverFailsEvaluation() {
+        val h = Harness(null, withComponents = false)
 
-        val failure = assertFailsWith<Throwable> { (h.project as ProjectInternal).evaluate() }
+        val output = h.captureOutput { (h.project as ProjectInternal).evaluate() }
 
-        val messages = generateSequence(failure) { it.cause }.mapNotNull { it.message }.toList()
-        assertTrue(
-            messages.any { "Bugsee requires 'com.android.application', 'com.android.library' or" in it },
-            "unexpected failure: $messages",
-        )
+        val warnings = output.filter { "has no Android application or library plugin" in it }
+        assertEquals(1, warnings.size, "output: $output")
+        assertTrue("README, \"Library modules\"" in warnings.single(), warnings.single())
+    }
+
+    @Test
+    fun noAndroidPlugin_warnLibraryModuleFalseSilencesTheWarning() {
+        val h = Harness(null, withComponents = false) { warnLibraryModule.set(false) }
+
+        val output = h.captureOutput { (h.project as ProjectInternal).evaluate() }
+
+        assertTrue(output.none { "has no Android application or library plugin" in it }, "output: $output")
+    }
+
+    @Test
+    fun noAndroidPlugin_bugseeSdkGroupIsExempt() {
+        val h = Harness(null, withComponents = false)
+        h.project.group = "com.bugsee.sdk"
+
+        val output = h.captureOutput { (h.project as ProjectInternal).evaluate() }
+
+        assertTrue(output.none { "has no Android application or library plugin" in it }, "output: $output")
+    }
+
+    @Test
+    fun noAndroidModuleMessage_namesModuleAndRootProject() {
+        val sub = BugseePlugin.noAndroidModuleMessage(":tools:lint", false, "lint")
+        assertTrue(sub.startsWith("Bugsee: :tools:lint has no Android application or library plugin, so nothing is wired."), sub)
+        val root = BugseePlugin.noAndroidModuleMessage(":", true, "m")
+        assertTrue(root.startsWith("Bugsee: root project 'm' has no Android"), root)
     }
 
     @Test
@@ -463,6 +488,7 @@ class VariantWiringTest {
     private class Harness(
         propertiesText: String?,
         moduleName: String? = null,
+        withComponents: Boolean = true,
         configure: BugseePluginExtension.() -> Unit = {},
     ) {
         val root: Project = ProjectBuilder.builder().build()
@@ -475,15 +501,20 @@ class VariantWiringTest {
             propertiesText?.let { File(root.projectDir, "bugsee.properties").writeText(it) }
             project.configurations.create("implementation")
             project.dependencies.add("implementation", "com.bugsee:bugsee-android:$SDK_VERSION")
-            @Suppress("UNCHECKED_CAST")
-            project.extensions.add(
-                AndroidComponentsExtension::class.java as Class<Any>,
-                "androidComponents",
-                fakeComponents(),
-            )
-            val plugin = project.plugins.apply(BugseePlugin::class.java)
-            // No real Android plugin is applied, so `withPlugin` never fires; wire directly.
-            plugin.wireAndroidComponents(project)
+            val plugin: BugseePlugin
+            if (withComponents) {
+                @Suppress("UNCHECKED_CAST")
+                project.extensions.add(
+                    AndroidComponentsExtension::class.java as Class<Any>,
+                    "androidComponents",
+                    fakeComponents(),
+                )
+                plugin = project.plugins.apply(BugseePlugin::class.java)
+                // No real Android plugin is applied, so `withPlugin` never fires; wire directly.
+                plugin.wireAndroidComponents(project)
+            } else {
+                project.plugins.apply(BugseePlugin::class.java)
+            }
             extension = project.extensions.getByType(BugseePluginExtension::class.java)
             extension.configure()
         }

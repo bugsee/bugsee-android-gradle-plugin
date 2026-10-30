@@ -65,7 +65,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
     private var settingsResolver: SettingsResolver? = null
 
     // Set once a recognized Android plugin has been seen: the variant wiring is registered, or (AGP's
-    // KMP library plugin) the module was classified as a library with nothing to wire.
+    // KMP library and fused library plugins) the module was classified as a library with nothing to wire.
     private var androidWired = false
 
     // True once the build script body (so the user's `bugsee { }` block) has been evaluated,
@@ -171,6 +171,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     //    subprojects that have not yet had their `group`
                     //    set during `withDependencies` evaluation (group
                     //    can be assigned after the plugin is applied).
+                    // A module with no Android plugin (a Kotlin/JVM module, lint-only module, ...) must
+                    // never receive the Android SDK AARs: they cannot resolve on a JVM classpath.
+                    if (!isAndroidModule(project)) return@withDependencies
                     val projectGroup = project.group?.toString().orEmpty()
                     if (projectGroup.startsWith("com.bugsee")
                             || project.name in BUGSEE_INTERNAL_MODULE_NAMES) {
@@ -199,19 +202,19 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             val isDebug = settingsResolver().globalValue(DEBUG)
             if (isDebug) project.logger.warn("Bugsee: Plugin applied")
 
-            // The AGP KMP library plugin has no `android` extension (its DSL is `kotlin { androidLibrary }`),
-            // so a recognized Android plugin counts on its own, not only the extension.
-            if (!androidWired && project.extensions.findByName("android") == null) {
-                throw IllegalStateException(
-                    "Bugsee requires 'com.android.application', 'com.android.library' or " +
-                    "'com.android.kotlin.multiplatform.library' in project ${project.path}"
-                )
-            }
-            // e.g. com.android.test / dynamic-feature: the Android plugin is there but nothing is wired.
-            if (!androidWired && isDebug) {
-                project.logger.warn(
-                    "Bugsee: only application modules are configured; nothing wired for ${project.path}"
-                )
+            // A module type never fails the build. Plugins without an `android` extension (asset-pack,
+            // ai-pack, lint, r8, a non-Android JVM module in a multi-module build, future AGP plugins)
+            // only get a warning; the library-like ones (KMP library, fused library) were already
+            // marked wired by their own `withPlugin` hook below and get the library-module warning.
+            if (!androidWired) {
+                if (project.extensions.findByName("android") == null) {
+                    warnNoAndroidModule(project)
+                } else if (isDebug) {
+                    // e.g. com.android.test / dynamic-feature: the Android plugin is there but nothing is wired.
+                    project.logger.warn(
+                        "Bugsee: only application modules are configured; nothing wired for ${project.path}"
+                    )
+                }
             }
         }
 
@@ -226,14 +229,44 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                 wireAndroidComponents(project)
             }
         }
-        // AGP's KMP library plugin (`kotlin { androidLibrary { } }`) is a library module with no
-        // application variants. It has no `android` extension and no AndroidComponentsExtension, so
-        // there is nothing to wire: it only gets the same library-module warning. Without this the
-        // afterEvaluate check above rejected the module with a hard failure.
-        project.pluginManager.withPlugin(KMP_LIBRARY_PLUGIN_ID) {
-            if (androidWired) return@withPlugin // defensive: run once
-            androidWired = true
-            registerLibraryModuleWarning(project, kmp = true)
+        // AGP's KMP library plugin (`kotlin { androidLibrary { } }`) and fused library plugin
+        // (`androidFusedLibrary { }`) are library modules with no application variants. Neither has an
+        // `android` extension or an AndroidComponentsExtension, so there is nothing to wire: they only get
+        // the same library-module warning. Without this the afterEvaluate check rejected such modules.
+        for (libraryPluginId in LIBRARY_LIKE_PLUGIN_IDS) {
+            project.pluginManager.withPlugin(libraryPluginId) {
+                if (androidWired) return@withPlugin // defensive: run once
+                androidWired = true
+                registerLibraryModuleWarning(project, libraryPluginId)
+            }
+        }
+    }
+
+    /** True when [project] has an AGP module plugin that provides the Android DSL or components. */
+    private fun isAndroidModule(project: Project): Boolean =
+        project.extensions.findByName("android") != null ||
+            project.extensions.findByName("androidComponents") != null ||
+            ANDROID_PLUGIN_IDS.any { project.pluginManager.hasPlugin(it) }
+
+    /**
+     * Default-level warning for a module that applies the plugin but has no recognized Android plugin
+     * and no `android` extension: nothing is wired. Silenced by `warnLibraryModule=false` (a convention
+     * plugin that applies Bugsee to every module), and exempt for Bugsee's own SDK group like the
+     * library-module warning. A logger call cannot fail a build, so a build running with warnings as
+     * errors is unaffected. The settings read is guarded as well, so this one message can never be the
+     * cause of a failure.
+     */
+    private fun warnNoAndroidModule(project: Project) {
+        // A recognized plugin applied after this check was registered (e.g. by a late afterEvaluate in a
+        // convention plugin) is not a "no Android plugin" module.
+        if (isAndroidModule(project) || LIBRARY_LIKE_PLUGIN_IDS.any { project.pluginManager.hasPlugin(it) }) return
+        val enabled = try {
+            settingsResolver().globalValue(WARN_LIBRARY_MODULE)
+        } catch (e: Exception) {
+            true
+        }
+        if (enabled && !isBugseeSdkGroup(project.group?.toString().orEmpty())) {
+            project.logger.warn(noAndroidModuleMessage(project.path, project.path == ":", project.name))
         }
     }
 
@@ -249,12 +282,12 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
      * by bare module name: `:library` / `:compose` / `:okhttp` are common names in customer builds.
      * Evaluated in afterEvaluate because `group` is often assigned after the plugin is applied.
      */
-    private fun registerLibraryModuleWarning(project: Project, kmp: Boolean = false) {
+    private fun registerLibraryModuleWarning(project: Project, pluginId: String? = null) {
         project.afterEvaluate {
             // Idempotent; makes sure the DSL is final before the setting is read.
             onDslFinal(project)
-            if (kmp && settingsResolver().globalValue(DEBUG)) {
-                project.logger.warn("Bugsee: KMP library module ${project.path}; nothing wired")
+            if (pluginId != null && settingsResolver().globalValue(DEBUG)) {
+                project.logger.warn("Bugsee: library module ${project.path} ($pluginId); nothing wired")
             }
             if (settingsResolver().globalValue(WARN_LIBRARY_MODULE) &&
                 !isBugseeSdkGroup(project.group?.toString().orEmpty())
@@ -1406,6 +1439,9 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         // compilations include non-Android targets the Android-runtime Compose instrumentation must
         // never reach.
         if (project.pluginManager.hasPlugin(KMP_LIBRARY_PLUGIN_ID)) return false
+        // The instrumentation emits calls into the Bugsee Android SDK: a non-Android Kotlin module
+        // (e.g. kotlin("jvm") with a Compose runtime dependency) does not have it on its classpath.
+        if (!isAndroidModule(project)) return false
         if (!hasComposeDependency(project)) {
             return false
         }
@@ -1979,6 +2015,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         /** Android plugins whose application wires the variants (see [apply]). */
         private val ANDROID_PLUGIN_IDS = listOf("com.android.application", "com.android.library")
         private const val KMP_LIBRARY_PLUGIN_ID = "com.android.kotlin.multiplatform.library"
+        private const val FUSED_LIBRARY_PLUGIN_ID = "com.android.fused-library"
+
+        /** Library-like AGP plugins with no `android` extension: library-module warning, nothing wired. */
+        private val LIBRARY_LIKE_PLUGIN_IDS = listOf(KMP_LIBRARY_PLUGIN_ID, FUSED_LIBRARY_PLUGIN_ID)
 
         /**
          * [BugseePluginExtension.cliPath] with a relative DSL value resolved against [project]'s directory
@@ -2067,6 +2107,18 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             "Bugsee: ${if (isRoot) "root project '$name'" else projectPath} is a library module. " +
                 "Bugsee registers upload tasks for application modules only; apply the plugin to the " +
                 "application module (in a convention plugin, apply it under " +
+                "pluginManager.withPlugin(\"com.android.application\")). To silence this on purpose, set " +
+                "bugsee { warnLibraryModule.set(false) } or plugin.warnLibraryModule=false. " +
+                "See the README, \"Library modules\"."
+
+        /**
+         * Default-level warning for a module with no recognized Android plugin and no `android`
+         * extension (asset-pack, ai-pack, lint, a non-Android module, ...). Never a failure.
+         */
+        internal fun noAndroidModuleMessage(projectPath: String, isRoot: Boolean, name: String): String =
+            "Bugsee: ${if (isRoot) "root project '$name'" else projectPath} has no Android application or " +
+                "library plugin, so nothing is wired. Bugsee registers upload tasks for application modules " +
+                "only; apply the plugin to the application module (in a convention plugin, apply it under " +
                 "pluginManager.withPlugin(\"com.android.application\")). To silence this on purpose, set " +
                 "bugsee { warnLibraryModule.set(false) } or plugin.warnLibraryModule=false. " +
                 "See the README, \"Library modules\"."

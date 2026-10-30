@@ -33,6 +33,7 @@ class CoreSdkDeclaredInProjectsTest {
 
         /** Applies the plugin to :app and returns "name:version" of every dependency the auto-add contributed. */
         fun autoAdded(declaredOnApp: Set<String> = emptySet()): Set<String> {
+            app.extensions.add("android", Any()) // an Android module: the auto-add is skipped otherwise
             app.plugins.apply(BugseePlugin::class.java)
             val deps: Set<Dependency> = app.configurations.getByName("implementation").incoming.dependencies
             return deps.filter { it.group == "com.bugsee" && "${it.name}:${it.version}" !in declaredOnApp }

@@ -19,7 +19,7 @@ class AutoAddEarlyResolutionTest {
     private fun project(): Project {
         val project = ProjectBuilder.builder().build()
         project.configurations.create("implementation")
-        project.extensions.add("android", Any()) // satisfies the plugin's afterEvaluate check
+        project.extensions.add("android", Any()) // makes the module an Android module (the auto-add is skipped otherwise)
         project.plugins.apply(BugseePlugin::class.java)
         return project
     }

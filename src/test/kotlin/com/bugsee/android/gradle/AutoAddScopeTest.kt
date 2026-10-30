@@ -201,7 +201,6 @@ class AutoAddScopeTest {
             feedback.set(true)
         }
         h.declare("com.bugsee:bugsee-android-leak:$SDK_VERSION")
-        h.project.extensions.add("android", Any()) // lets the plugin's afterEvaluate run
         val bugsee = captureOutput {
             h.autoAdded()
             h.autoAdded() // a second read must not repeat the warnings
@@ -344,7 +343,7 @@ class AutoAddScopeTest {
     /** End to end: the names are read from a (stubbed) Android DSL and drive the auto-add. */
     @Test
     fun okHttpOnDeclaredLatestTestFlavorConfigurationIsAutoAdded() {
-        val h = Harness(null)
+        val h = Harness(null, androidExtension = false)
         h.project.extensions.add(
             com.android.build.api.dsl.CommonExtension::class.java, "android",
             fakeDsl(flavors = listOf("latestTest"), buildTypes = listOf("debug", "release")),
@@ -448,7 +447,6 @@ class AutoAddScopeTest {
             feedback.set(true)
         }
         h.declare("com.bugsee:bugsee-android:7.0.0-beta8")
-        h.project.extensions.add("android", Any())
         val lines = captureOutput {
             val added = h.autoAdded()
             assertTrue("bugsee-android-ndk" in added, "ndk exists from beta6")
@@ -470,7 +468,6 @@ class AutoAddScopeTest {
             ndk.enabled.set(true)
             feedback.set(true)
         }
-        h.project.extensions.add("android", Any())
         val early = h.autoAdded() // first read: DSL not final, core is auto-added at the range
         assertTrue("bugsee-android-ndk" in early, "early pass adds ndk at the range: $early")
         h.declare("com.bugsee:bugsee-android:7.0.0-beta1")
@@ -494,7 +491,6 @@ class AutoAddScopeTest {
                 feedback.set(true)
             }
             h.declareOnCreating(conf, "com.bugsee:bugsee-android:7.0.0-beta1")
-            h.project.extensions.add("android", Any())
             val lines = captureOutput {
                 val added = h.autoAdded()
                 assertFalse("bugsee-android-ndk" in added, conf)
@@ -514,7 +510,6 @@ class AutoAddScopeTest {
         val h = Harness(null, declareCore = false) { ndk.enabled.set(true) }
         h.declare("com.bugsee:bugsee-android:7.0.0-beta1")
         h.declare("com.bugsee:bugsee-android-ndk:7.0.0-beta1")
-        h.project.extensions.add("android", Any())
         val lines = captureOutput {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -611,7 +606,6 @@ class AutoAddScopeTest {
         for (conf in listOf("debugImplementation", "freeDebugApi", "debugCompileOnly")) {
             val h = Harness(null, declareCore = false)
             h.declareOnCreating(conf, core)
-            h.project.extensions.add("android", Any())
             val lines = captureOutput {
                 assertEquals(emptySet<String>(), h.autoAdded(), conf)
                 (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -623,7 +617,6 @@ class AutoAddScopeTest {
     /** The Bugsee lines for a debug-only core pin, plus what was auto-added (must stay empty: the setting only gates the warning). */
     private fun debugOnlyCoreRun(h: Harness): Pair<Set<String>, List<String>> {
         h.declareOnCreating("debugImplementation", core)
-        h.project.extensions.add("android", Any())
         var added = emptySet<String>()
         val lines = captureOutput {
             added = h.autoAdded()
@@ -667,7 +660,6 @@ class AutoAddScopeTest {
     fun warnDebugOnlySdkSetAfterAnEarlyReadStillSilences() {
         val h = Harness(null, declareCore = false)
         h.declareOnCreating("debugImplementation", core)
-        h.project.extensions.add("android", Any())
         val lines = captureOutput {
             h.autoAdded()
             h.extension.warnDebugOnlySdk.set(false)
@@ -695,7 +687,6 @@ class AutoAddScopeTest {
             sdkAutoLoad.set(false)
             feedback.set(true)
         }
-        h.project.extensions.add("android", Any())
         val lines = captureOutput {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -715,7 +706,6 @@ class AutoAddScopeTest {
             val h = Harness(null, declareCore = false)
             h.declareOnCreating("debugImplementation", core)
             h.declareOnCreating(other, core)
-            h.project.extensions.add("android", Any())
             val lines = captureOutput {
                 h.autoAdded()
                 (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -729,7 +719,6 @@ class AutoAddScopeTest {
         val h = Harness(null, declareCore = false)
         h.declareOnCreating("debugImplementation", core)
         h.declareOnCreating("implementation", "com.squareup.okhttp3:okhttp:4.12.0")
-        h.project.extensions.add("android", Any())
         val lines = captureOutput {
             assertEquals(setOf("bugsee-android-okhttp"), h.autoAdded())
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -742,7 +731,6 @@ class AutoAddScopeTest {
         val ext = Harness(null, declareCore = false)
         ext.declareOnCreating("debugImplementation", core)
         ext.declareOnCreating("implementation", "com.bugsee:bugsee-android-okhttp:$SDK_VERSION")
-        ext.project.extensions.add("android", Any())
         val extLines = captureOutput {
             ext.autoAdded()
             (ext.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -751,7 +739,6 @@ class AutoAddScopeTest {
 
         val off = Harness(null, declareCore = false) { sdkAutoLoad.set(false) }
         off.declareOnCreating("debugImplementation", core)
-        off.project.extensions.add("android", Any())
         val offLines = captureOutput {
             off.autoAdded()
             (off.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -765,7 +752,6 @@ class AutoAddScopeTest {
         h.declareOnCreating("debugImplementation", core)
         org.gradle.testfixtures.ProjectBuilder.builder().withName("lib").withParent(h.project).build()
         h.project.dependencies.add("implementation", h.project.dependencies.project(mapOf("path" to ":lib")))
-        h.project.extensions.add("android", Any())
         val lines = captureOutput {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -782,7 +768,6 @@ class AutoAddScopeTest {
         lib.configurations.maybeCreate(libConfig)
         lib.dependencies.add(libConfig, libCoordinate)
         h.project.dependencies.add("implementation", h.project.dependencies.project(mapOf("path" to ":lib")))
-        h.project.extensions.add("android", Any())
         return captureOutput {
             h.autoAdded()
             (h.project as org.gradle.api.internal.project.ProjectInternal).evaluate()
@@ -1018,6 +1003,7 @@ class AutoAddScopeTest {
         private val propertiesText: String?,
         gradleProperties: Map<String, String> = emptyMap(),
         declareCore: Boolean = true,
+        androidExtension: Boolean = true,
         configure: BugseePluginExtension.() -> Unit = {},
     ) {
         val project: Project = ProjectBuilder.builder().build()
@@ -1028,6 +1014,7 @@ class AutoAddScopeTest {
             propertiesText?.let { File(project.projectDir, "bugsee.properties").writeText(it) }
             gradleProperties.forEach { (k, v) -> project.extensions.extraProperties.set(k, v) }
             project.configurations.create("implementation")
+            if (androidExtension) project.extensions.add("android", Any()) // an Android module: the auto-add is skipped otherwise
             if (declareCore) declare("com.bugsee:bugsee-android:$SDK_VERSION")
             project.plugins.apply(BugseePlugin::class.java)
             extension = project.extensions.getByType(BugseePluginExtension::class.java)
