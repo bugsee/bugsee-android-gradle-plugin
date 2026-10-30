@@ -291,8 +291,10 @@ abstract class BugseePluginExtension @Inject constructor(private val objects: Ob
 
     /**
      * Warn once per library module that the plugin targets application modules (the module gets no
-     * Bugsee wiring). Covers `com.android.library` and AGP's KMP library plugin
-     * (`com.android.kotlin.multiplatform.library`).
+     * Bugsee wiring). Covers `com.android.library`, AGP's KMP library plugin
+     * (`com.android.kotlin.multiplatform.library`) and fused library plugin (`com.android.fused-library`).
+     * Also controls the equivalent warning for a module with no Android application/library plugin at all
+     * (asset-pack, ai-pack, lint, a non-Android module): applying Bugsee there never fails the build.
      *
      * Set to `false` for a convention plugin that deliberately applies Bugsee to every Android module:
      * the warning is then suppressed entirely. This only controls that one message; nothing about the

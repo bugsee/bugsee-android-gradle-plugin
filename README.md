@@ -701,11 +701,17 @@ purpose can silence it with `bugsee { warnLibraryModule.set(false) }` or `plugin
 in `bugsee.properties` (global-only; only this message is affected, the wiring is unchanged and no value
 turns it into a failure, so it is safe under warnings-as-errors).
 
-AGP's Kotlin Multiplatform library plugin (`com.android.kotlin.multiplatform.library`) is treated the same
-way: it is a library module with no application variants, so it gets the same warning (and the same
-`warnLibraryModule` opt-out) and nothing is wired, including the Compose compiler plugin. Earlier
-versions failed such a module at configuration time with "Bugsee requires 'com.android.application' or
-'com.android.library'".
+AGP's Kotlin Multiplatform library plugin (`com.android.kotlin.multiplatform.library`) and fused library
+plugin (`com.android.fused-library`) are treated the same way: they are library modules with no application
+variants (and no `android` extension), so they get the same warning (and the same `warnLibraryModule`
+opt-out) and nothing is wired, including the Compose compiler plugin.
+
+Applying the plugin to any other module that has no Android application or library plugin (for example
+`com.android.asset-pack`, `com.android.ai-pack`, `com.android.lint`, a non-Android JVM module in a
+multi-module build that also contains Android modules, or a plugin a future AGP adds) never fails the build either: it logs one warning naming
+the module, says nothing is wired (no tasks, no auto-added SDK dependency, no Compose compiler plugin), and continues. `warnLibraryModule=false` silences that warning too.
+Earlier versions failed such a module at configuration time with "Bugsee requires 'com.android.application'
+or 'com.android.library'".
 
 ## Diagnostics
 
