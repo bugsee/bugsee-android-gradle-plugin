@@ -501,9 +501,11 @@ private class BugseeComposeTransformer(
          * [PasswordVisualTransformation]. Covers Material 1, Material 3,
          * and the Foundation BasicTextField variants.
          *
-         * Not secured by this pass, intentionally (issue #158): the `TextFieldState`-based `BasicTextField` (its
-         * name matches the entry above, but it has no `visualTransformation` parameter, so the lookup in the
-         * callee check rejects it), and `BasicSecureTextField` plus the 1.6.x `text2` equivalents (not listed).
+         * Not secured by this pass, intentionally (issue #158): the `TextFieldState` overloads of foundation
+         * `BasicTextField` and Material 3 `TextField` / `OutlinedTextField` (their names match the entries above,
+         * but they take `outputTransformation` and have no `visualTransformation` parameter, so the lookup in
+         * the callee check rejects them), and `BasicSecureTextField`, Material 3 `SecureTextField` /
+         * `OutlinedSecureTextField` and the 1.6.x `text2` equivalents (not listed).
          * `BasicSecureTextField` always sets `SemanticsProperties.Password`, so the runtime scanner already masks
          * it, and masking through an `OutputTransformation` cannot be told apart statically from other
          * transformations; such fields opt in with `Modifier.bugseeSecure()`.

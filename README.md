@@ -599,9 +599,11 @@ the upload tasks skip with a single info-level message instead of failing or war
 - **State-based text fields are not in the compile-time secure pass.** `bugseeSecure` is injected only for text
   fields that take a `VisualTransformation` (the `String` / `TextFieldValue` overloads of `BasicTextField`, Material
   and Material 3 `TextField` / `OutlinedTextField`). `BasicTextField(TextFieldState, ...)` and `BasicSecureTextField`
-  (foundation 1.7+) have no such parameter and are never secured by this pass. `BasicSecureTextField` is still protected at
-  runtime, because it sets `SemanticsProperties.Password`, which the SDK scanner masks. A state-based
-  `BasicTextField` does not set it, even when its `outputTransformation` masks the text, so a field that shows or
+  (foundation 1.7+) and the `TextFieldState` overloads of Material 3 `TextField` / `OutlinedTextField` and
+  `SecureTextField` / `OutlinedSecureTextField` (Material 3 1.4, checked with `javap`) have no such parameter and are
+  never secured by this pass, even though the Material 3 names are in the allowlist. The secure variants are still
+  protected at runtime, because they set `SemanticsProperties.Password`, which the SDK scanner masks. A state-based
+  `BasicTextField` or Material 3 `TextField` / `OutlinedTextField` does not set it, even when its `outputTransformation` masks the text, so a field that shows or
   masks sensitive text this way must opt in with `Modifier.bugseeSecure()` (or `Modifier.semantics { contentType = ContentType.Password }`
   on Compose 1.8+). The compile-time behavior is pinned on foundation 1.7.8 by the `compose-pipeline` fixture; the
   runtime semantics were checked on 1.7.8 and 1.12.1 with `ComposeTestRule` (issue #158).
