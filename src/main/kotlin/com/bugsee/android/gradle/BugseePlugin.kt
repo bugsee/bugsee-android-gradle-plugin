@@ -171,6 +171,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                     //    subprojects that have not yet had their `group`
                     //    set during `withDependencies` evaluation (group
                     //    can be assigned after the plugin is applied).
+                    if (isBugseeInternalModule(project)) return@withDependencies
                     // A module with no Android plugin (a Kotlin/JVM module, lint-only module, ...) must
                     // never receive the Android SDK AARs: they cannot resolve on a JVM classpath.
                     if (!isAndroidModule(project)) {
@@ -185,11 +186,6 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
                                 ),
                             )
                         }
-                        return@withDependencies
-                    }
-                    val projectGroup = project.group?.toString().orEmpty()
-                    if (projectGroup.startsWith("com.bugsee")
-                            || project.name in BUGSEE_INTERNAL_MODULE_NAMES) {
                         return@withDependencies
                     }
 
@@ -254,6 +250,10 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
         }
     }
+
+    /** Bugsee's own SDK modules never receive the auto-add (circular dependency); see [BUGSEE_INTERNAL_MODULE_NAMES]. */
+    private fun isBugseeInternalModule(project: Project): Boolean =
+        project.group?.toString().orEmpty().startsWith("com.bugsee") || project.name in BUGSEE_INTERNAL_MODULE_NAMES
 
     /** True when [project] has an AGP module plugin that provides the Android DSL or components. */
     private fun isAndroidModule(project: Project): Boolean =
@@ -671,7 +671,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         val record = autoAddRecord ?: return
         autoAddRecord = null
         // Recorded while the module was not (yet) an Android module and still is not: nothing to add.
-        if (!isAndroidModule(project)) return
+        // The group is assigned late, so the Bugsee-module exemption is evaluated here too.
+        if (!isAndroidModule(project) || isBugseeInternalModule(project)) return
         val config = record.config
         val early = record.result
 
