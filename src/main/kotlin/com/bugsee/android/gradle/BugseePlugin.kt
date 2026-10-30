@@ -54,7 +54,11 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
             }
             return
         }
-        impl = BugseePluginImpl(listenerRegistry).also { it.apply(project) }
+        // Assigned before apply() so the compiler-plugin hooks answer as soon as the implementation's
+        // state exists, as they did when this was one class.
+        val created = BugseePluginImpl(listenerRegistry)
+        impl = created
+        created.apply(project)
     }
 
     // --- KotlinCompilerPluginSupportPlugin ---
@@ -92,7 +96,8 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         internal fun noAgpMessage(projectPath: String): String =
             "Bugsee: the Android Gradle Plugin is not on the plugin classpath of project $projectPath, " +
                 "so the Bugsee plugin does nothing here. Apply 'com.bugsee.android.gradle' only to Android " +
-                "application modules, in a build where AGP is on the same plugin classpath as Bugsee (or a parent's)."
+                "application modules, in a build where AGP (7.0 or newer) is on the same plugin classpath as Bugsee " +
+                "(or a parent's). The probe class is $AGP_PROBE_CLASS."
 
         internal fun agpNotVisibleMessage(projectPath: String): String =
             "Bugsee: 'com.android.application' is applied in project $projectPath, but the Android Gradle " +
