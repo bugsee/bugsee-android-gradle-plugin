@@ -21,6 +21,7 @@ import java.io.File
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Proxy
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -466,6 +467,20 @@ class VariantWiringTest {
         assertTrue(sub.startsWith("Bugsee: :tools:lint has no Android application or library plugin, so nothing is wired."), sub)
         val root = BugseePluginImpl.noAndroidModuleMessage(":", true, "m")
         assertTrue(root.startsWith("Bugsee: root project 'm' has no Android"), root)
+    }
+
+    @Test
+    fun featureOrTestModuleMessage_namesTheModuleTypeAndTheCompileOnlyRule() {
+        val feature = BugseePluginImpl.featureOrTestModuleMessage(":dyn", false, "dyn", "com.android.dynamic-feature")
+        assertTrue(feature.startsWith("Bugsee: :dyn is a dynamic-feature module (com.android.dynamic-feature)"), feature)
+        val test = BugseePluginImpl.featureOrTestModuleMessage(":", true, "t", "com.android.test")
+        assertTrue(test.startsWith("Bugsee: root project 't' is a test module (com.android.test)"), test)
+        assertTrue("the SDK cannot be in a feature alone" in feature, feature)
+        assertFalse("alone" in test, test)
+        for (m in listOf(feature, test)) {
+            assertTrue("must declare it itself as compileOnly" in m, m)
+            assertTrue("warnLibraryModule" in m && "README, \"Library modules\"" in m, m)
+        }
     }
 
     @Test
