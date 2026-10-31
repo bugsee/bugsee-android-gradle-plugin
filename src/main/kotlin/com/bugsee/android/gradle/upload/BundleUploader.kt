@@ -102,12 +102,21 @@ internal object BundleUploader {
         return -1
     }
 
-    // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped).
+    // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped,
+    // including the escaped `\n`/`\r`/`\t` of a Debug- or JSON-rendered body).
     private fun atXmlBoundary(text: String, tagStart: Int): Boolean {
         var i = tagStart - 1
-        while (i >= 0 && text[i].isWhitespace()) i--
+        while (i >= 0) {
+            val c = text[i]
+            if (c.isWhitespace()) i--
+            else if (i >= 1 && text[i - 1] == '\\' && (c == 'n' || c == 'r' || c == 't')) i -= 2
+            else break
+        }
         return i < 0 || text[i] == '>'
     }
+
+    // S3's session-token echo (`<Token-0>`): the numbered form is specific enough to redact wherever it appears.
+    private val NUMBERED_TOKEN_TAG = Regex("(?i)token-\\d{1,3}")
 
     private fun redactAttrs(tag: String, allSecret: Boolean): String =
         tag.replace(XML_ATTR) { a ->
@@ -145,11 +154,17 @@ internal object BundleUploader {
                 if (close >= 0) {
                     out.append("<redacted>")
                     end = close
-                } else if (localName(name) in LEGACY_SECRET_XML_NAMES || atXmlBoundary(text, start)) {
-                    // CDATA sections and comments belong to the element text, so the span runs past them.
+                } else if (localName(name) in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(localName(name)) || atXmlBoundary(text, start)) {
+                    // CDATA sections and comments belong to the element text: jump to their terminator.
                     var nextLt = text.indexOf('<', end)
-                    while (nextLt >= 0 && (text.startsWith("<![CDATA[", nextLt) || text.startsWith("<!--", nextLt))) {
-                        nextLt = text.indexOf('<', nextLt + 1)
+                    while (nextLt >= 0) {
+                        val term = when {
+                            text.startsWith("<![CDATA[", nextLt) -> "]]>"
+                            text.startsWith("<!--", nextLt) -> "-->"
+                            else -> break
+                        }
+                        val t = text.indexOf(term, nextLt)
+                        nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
                     }
                     val next = if (nextLt < 0) text.length else nextLt
                     if (next > end) out.append("<redacted>")

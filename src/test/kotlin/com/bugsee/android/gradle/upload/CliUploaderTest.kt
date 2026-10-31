@@ -1173,6 +1173,14 @@ class CliUploaderTest {
         }
     }
 
+    @Test fun `escaped newlines and prose prefixes do not hide an unclosed token element`() {
+        val escaped = "body: \"<Error>\\n  <Code>ExpiredToken</Code>\\n  <SessionToken>FwoGSECRET1"
+        assertFalse(BundleUploader.scrubForLog(escaped).contains("SECRET1"))
+        assertFalse(BundleUploader.scrubForLog("Error: S3 PUT failed (400): <Token-0>FwoGSECRET9").contains("SECRET9"))
+        val sec = listOf("<Error><Token><![CDATA[abc<SECRETA]]>", "<Error><Token><!-- a <b --> SECRETB", "<Error><StringToSign><![CDATA[AWS4<SECRETD]]>")
+        for (c in sec) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
     @Test fun `unclosed secret element with CDATA or comment is redacted past it`() {
         for (c in listOf("<Error><Token><![CDATA[CDSECRET]]>", "<Error><Token><!-- c -->CMSECRET", "<Error><StringToSign><![CDATA[CDSECRET]]>")) {
             assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
