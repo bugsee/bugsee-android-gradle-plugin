@@ -69,7 +69,95 @@ internal object BundleUploader {
     private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
-    private val SECRET_XML_TAG = Regex("<(StringToSign|StringToSignBytes|SignatureProvided|AWSAccessKeyId|CanonicalRequest|CanonicalRequestBytes|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
+    // Opening (or self-closing) tag candidates. Name and attribute lengths are bounded, so scanning is linear.
+    private val XML_OPEN_TAG = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s[^<>]{0,512})?>")
+    private val SECRET_NAME_PATTERN =
+        "token|secret|credential|signature|password|passwd|authoriz|stringtosign|canonicalrequest|argumentvalue" +
+            "|passphrase|cookie|accesskey|accountkey|sharedkey|masterkey|storagekey|apikey|privatekey|signingkey|sessionkey|encryptionkey|authkey|[_.\\-]key|key[_.\\-]?id"
+    private val SECRET_XML_TAG_NAME = Regex(SECRET_NAME_PATTERN, RegexOption.IGNORE_CASE)
+
+    // Element names the scrubber has always redacted (S3 error bodies); these keep the original "to the next
+    // tag" behaviour wherever they appear. Other credential-named elements need an XML-looking position.
+    private val LEGACY_SECRET_XML_NAMES = setOf(
+        "stringtosign", "stringtosignbytes", "signatureprovided", "awsaccesskeyid", "canonicalrequest",
+        "canonicalrequestbytes", "signature", "credential", "policy",
+    )
+
+    // Possessive, anchored name so each attribute is tried once per tag (no O(L^2) rescans).
+    private val XML_ATTR = Regex("(?<![\\w.:\\-])([\\w.:\\-]{1,80}+)(\\s*=\\s*)(\"[^\"]*\"|'[^']*')")
+    private const val MAX_XML_ELEMENT_TEXT = 4096
+
+    private fun localName(name: String) = name.substringAfterLast(':').lowercase()
+
+    private fun isSecretXmlTag(name: String): Boolean =
+        localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
+
+    // Bounded search: never scans past [limit] (an unbounded indexOf per opening tag would be quadratic).
+    private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): Int {
+        var i = text.indexOf('<', from)
+        while (i in 0..limit) {
+            if (text.startsWith(closeTag, i)) return i
+            i = text.indexOf('<', i + 1)
+        }
+        return -1
+    }
+
+    // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped).
+    private fun atXmlBoundary(text: String, tagStart: Int): Boolean {
+        var i = tagStart - 1
+        while (i >= 0 && text[i].isWhitespace()) i--
+        return i < 0 || text[i] == '>'
+    }
+
+    private fun redactAttrs(tag: String, allSecret: Boolean): String =
+        tag.replace(XML_ATTR) { a ->
+            if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) "${a.groupValues[1]}${a.groupValues[2]}\"<redacted>\"" else a.value
+        }
+
+    /**
+     * Redact the text of credential-named XML elements (`<Token-0>`, `<x:SessionToken>`, `<ClientSecret>`, ...)
+     * and the values of credential-named attributes. An element is redacted up to its closing tag when that
+     * tag is within [MAX_XML_ELEMENT_TEXT] chars. Otherwise (truncated body, odd closing tag, huge element)
+     * the text up to the next tag is redacted, but for names outside the legacy S3 list only when the tag sits
+     * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
+     * `List<AccessToken> but` or `=<your-token>.` is left alone.
+     */
+    private fun redactSecretXml(text: String): String {
+        if (text.indexOf('<') < 0) return text
+        val out = StringBuilder(text.length)
+        var pos = 0
+        // Per close tag: scanned-through position of a failed search, so dense unclosed tags do not rescan the same window.
+        val searchedTo = HashMap<String, Int>()
+        var m = XML_OPEN_TAG.find(text)
+        while (m != null) {
+            val start = m.range.first
+            var end = m.range.last + 1
+            out.append(text, pos, start)
+            val name = m.groupValues[1]
+            val attrs = m.groupValues[2]
+            val secretTag = isSecretXmlTag(name)
+            out.append(if (attrs.isEmpty()) m.value else redactAttrs(m.value, secretTag))
+            if (secretTag && !attrs.endsWith("/")) {
+                val closeTag = "</$name>"
+                val limit = minOf(text.length, end + MAX_XML_ELEMENT_TEXT)
+                val close = findClosingTag(text, closeTag, maxOf(end, searchedTo[closeTag] ?: 0), limit)
+                if (close < 0) searchedTo[closeTag] = limit + 1
+                if (close >= 0) {
+                    out.append("<redacted>")
+                    end = close
+                } else if (localName(name) in LEGACY_SECRET_XML_NAMES || atXmlBoundary(text, start)) {
+                    val next = text.indexOf('<', end).let { if (it < 0) text.length else it }
+                    if (next > end) out.append("<redacted>")
+                    end = next
+                }
+            }
+            pos = end
+            m = XML_OPEN_TAG.find(text, pos)
+        }
+        out.append(text, pos, text.length)
+        return out.toString()
+    }
+
     private val XML_ERROR_CODE = Regex("<Code>([A-Za-z0-9_.\\-]{1,64})</Code>")
     private val HTML_TITLE = Regex("<title>([^<]{1,100})</title>", RegexOption.IGNORE_CASE)
 
@@ -82,7 +170,7 @@ internal object BundleUploader {
     internal fun scrubForLog(text: String, appToken: String? = null): String {
         // Mask first: truncating first could cut the token in half so the exact match no longer fires.
         val masked = if (!appToken.isNullOrEmpty()) text.replace(appToken, maskAppToken(appToken)) else text
-        val unxml = masked.replace(SECRET_XML_TAG, "<$1><redacted></$1>")
+        val unxml = redactSecretXml(masked)
         val bounded = if (unxml.length > MAX_SCRUBBED_TEXT_CHARS) unxml.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else unxml
         return bounded
             .replace(QUERY_WITH_PARAMS, "?<redacted>")

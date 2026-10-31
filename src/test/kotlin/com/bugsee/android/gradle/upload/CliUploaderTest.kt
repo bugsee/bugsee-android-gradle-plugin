@@ -1050,4 +1050,134 @@ class CliUploaderTest {
         assertTrue(CliUploader.scrubCliOutput("x".repeat(100_000)).length <= 4100)
         assertEquals("", CliUploader.scrubCliOutput("  \n"))
     }
+
+    private val s3ExpiredToken = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ExpiredToken</Code>" +
+        "<Message>The provided token has expired.</Message><Token-0>FwoGZXIvYXdzEJr//SESSIONSECRET</Token-0>" +
+        "<RequestId>4442587FB7D0A2F9</RequestId><HostId>HOSTID123abc</HostId></Error>"
+
+    @Test fun `S3 ExpiredToken body redacts Token-0 but keeps benign elements`() {
+        val out = CliUploader.scrubCliOutput("error: " + s3ExpiredToken)
+        assertFalse(out.contains("SESSIONSECRET"), out)
+        assertTrue(out.contains("<Token-0><redacted></Token-0>"), out)
+        for (keep in listOf("<Code>ExpiredToken</Code>", "<Message>The provided token has expired.</Message>",
+            "<RequestId>4442587FB7D0A2F9</RequestId>", "<HostId>HOSTID123abc</HostId>")) {
+            assertTrue(out.contains(keep), "lost $keep in $out")
+        }
+    }
+
+    @Test fun `generalised XML secret tags cover suffixes namespaces attributes and unknown names`() {
+        val cases = listOf(
+            "<Token-1>S1</Token-1>", "<x:SessionToken>S2</x:SessionToken>", "<SecurityToken>S3</SecurityToken>",
+            "<ClientSecret>S4</ClientSecret>", "<Password>S5</Password>", "<ApiKey>S6</ApiKey>",
+            "<SecretAccessKey>S7</SecretAccessKey>", "<AWSAccessKeyId>S8</AWSAccessKeyId>",
+            "<Token-0 type=\"x\">S9</Token-0>", "<token>S10</token>", "<Credential>S11</Credential>",
+            "<Token-0>S12", "<Token-0 a=\"b\">S13", "<private_key>S14</private_key>", "<signing-key>S15</signing-key>",
+            "<Token><![CDATA[S16]]></Token>", "<Token>S17<!-- c --></Token>", "<Token value=\"S18\"/>", "<Item token=\"S19\">x</Item>",
+        )
+        for (c in cases) {
+            val out = CliUploader.scrubCliOutput("<Error>$c<Code>X</Code></Error>")
+            assertFalse(Regex("S\\d+").containsMatchIn(out), "leaked in $out")
+            assertTrue(out.contains("<Code>X</Code>"), out)
+        }
+    }
+
+    @Test fun `benign XML elements are untouched`() {
+        val benign = "<Error><Code>AccessDenied</Code><Message>Request has expired</Message><RequestId>R1</RequestId>" +
+            "<HostId>H1</HostId><Resource>/bucket/obj</Resource><Expires>2026-01-01T00:00:00Z</Expires>" +
+            "<Key>some/object</Key><KeyCount>3</KeyCount><Empty/><Token/></Error>"
+        assertEquals(benign, CliUploader.scrubCliOutput(benign))
+    }
+
+    @Test fun `prose and CLI usage with token-like placeholders is unchanged`() {
+        val usage = "Usage: bugsee-cli upload --app-token <APP_TOKEN> --type <TYPE>\n\nFor more information try --help"
+        assertEquals(usage, CliUploader.scrubCliOutput(usage))
+        val msg = "expected List<AccessToken> but got null at Foo.kt:12 (caused by bar)"
+        assertEquals(msg, BundleUploader.scrubForLog(msg))
+        val benignKeys = "<Error><NextKeyMarker>m</NextKeyMarker><PolicyName>p</PolicyName><Monkey>x</Monkey></Error>"
+        assertEquals(benignKeys, BundleUploader.scrubForLog(benignKeys))
+    }
+
+    @Test fun `truncated or oversized secret elements are redacted to the next tag`() {
+        val cases = mapOf(
+            "<Error><CanonicalRequestBytes>50 55 54 0a X-Amz-Security-Token=FwoGLEAK1 41 42" to "LEAK1",
+            "<Error><CanonicalRequest>PUT\n/b/k\nX-Amz-Security-Token=FwoGLEAK2" to "LEAK2",
+            "<Error><StringToSign>AWS4-HMAC-SHA256 20260101T000000Z LEAK3" to "LEAK3",
+            "<Error><Code>X</Code>\n  <SessionToken>\n    LEAK4" to "LEAK4",
+            "<Token>" + "C".repeat(4096) + "LEAK5</Token>" to "LEAK5",
+            "<SessionToken>" + "A".repeat(5000) + "LEAK6</SessionToken>" to "LEAK6",
+            "<Policy>{\"c\": [\"LEAK7\"]}" + " ".repeat(4100) + "</Policy>" to "LEAK7",
+            "<Token-0>abc LEAK8</Token-0 >" to "LEAK8",
+            "<Error><ArgumentName>x-amz-security-token</ArgumentName><ArgumentValue>FwoGLEAK9</ArgumentValue></Error>" to "LEAK9",
+        )
+        for ((input, leak) in cases) {
+            assertFalse(BundleUploader.scrubForLog(input).contains(leak), "scrubForLog leaked $leak")
+        }
+    }
+
+    @Test fun `scrubForLog redacts credential attributes and keeps clap-style prose`() {
+        assertFalse(BundleUploader.scrubForLog("<Item token=\"SECRETA\">x</Item>").contains("SECRETA"))
+        assertFalse(BundleUploader.scrubForLog("<Token value='SECRETB'/>").contains("SECRETB"))
+        for (prose in listOf(
+            "error: a value is required for '--app-token <APP_TOKEN>' but none was supplied",
+            "invalid value 'x' for '--app-token <APP_TOKEN>': too short",
+            "Set BUGSEE_APP_TOKEN=<your-token>.",
+            "got (<Token>)",
+        )) {
+            assertEquals(prose, BundleUploader.scrubForLog(prose))
+        }
+    }
+
+    @Test fun `legacy S3 secret elements still redact exactly as before`() {
+        val body = "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIAXX</AWSAccessKeyId>" +
+            "<StringToSign>AWS4\n2026</StringToSign><SignatureProvided>abc123</SignatureProvided>" +
+            "<CanonicalRequestBytes>41 4b</CanonicalRequestBytes><Policy>p</Policy></Error>"
+        val out = BundleUploader.scrubForLog(body)
+        for (leak in listOf("AKIAXX", "AWS4", "abc123", "41 4b", ">p<")) assertFalse(out.contains(leak), out)
+        assertTrue(out.contains("<Code>SignatureDoesNotMatch</Code>"), out)
+    }
+
+    @Test fun `self-closing secret tag does not swallow following text and the window limit is honoured`() {
+        assertEquals("<Token a=\"<redacted>\"/>keep me<Code>X</Code>", BundleUploader.scrubForLog("<Token a=\"b\"/>keep me<Code>X</Code>"))
+        val inside = "<Token>" + "x".repeat(4000) + "<![CDATA[IN]]></Token>"
+        assertFalse(BundleUploader.scrubForLog(inside).contains("IN]]"), "close tag inside the window must redact the CDATA")
+        val outside = "<Token>" + "x".repeat(4100) + "<b>AFTER</b></Token>"
+        val out = BundleUploader.scrubForLog(outside)
+        assertTrue(out.contains("<b>AFTER</b>"), "text after a nested tag beyond the window is the accepted limit")
+        assertFalse(out.contains("xxxx"), out)
+    }
+
+    @Test fun `new credential names and line-start placeholders`() {
+        val body = "<Error><AccountKey>S1</AccountKey><SharedKey>S2</SharedKey><Passphrase>S3</Passphrase><Cookie>S4</Cookie></Error>"
+        assertFalse(Regex("S\\d").containsMatchIn(BundleUploader.scrubForLog(body)))
+        val help = "Arguments:\n  <TOKEN>  Bugsee app token\n\nOptions:\n  -h <HELP>"
+        assertEquals(help, BundleUploader.scrubForLog(help))
+    }
+
+    @Test fun `redactBodyForLog JSON string values are scrubbed`() {
+        val out = BundleUploader.redactBodyForLog("{\"detail\":\"<Token-0>JSONSECRET</Token-0> failed\",\"n\":1}")
+        assertFalse(out.contains("JSONSECRET"), out)
+    }
+
+    @Test fun `XML scrub time scales linearly`() {
+        fun time(n: Int): Long {
+            val input = "<Token>".repeat(n)
+            BundleUploader.scrubForLog(input)
+            val s = System.nanoTime(); repeat(3) { BundleUploader.scrubForLog(input) }
+            return (System.nanoTime() - s) / 3
+        }
+        time(20_000)
+        val small = time(100_000); val big = time(200_000)
+        assertTrue(big < small * 4 + 20_000_000, "small=$small big=$big")
+    }
+
+    @Test fun `XML tag scrub is bounded-time on adversarial input`() {
+        for (nasty in listOf("<" + "a".repeat(1_000_000), "<a ".repeat(300_000), "<Token" + "-".repeat(1_000_000), "<a>".repeat(300_000),
+            "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000),
+            "<a " + "key_".repeat(125) + ">", ("<a " + "key_".repeat(125) + ">").repeat(2000), ("<a " + "b".repeat(500) + ">").repeat(2000),
+            ("<token " + "b".repeat(500) + ">").repeat(2000), ("<_key>" + "<".repeat(1000)).repeat(1000))) {
+            val start = System.nanoTime()
+            BundleUploader.scrubForLog(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 3_000, "slow on ${nasty.take(20)}")
+        }
+    }
 }
