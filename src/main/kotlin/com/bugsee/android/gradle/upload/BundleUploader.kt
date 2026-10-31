@@ -71,6 +71,8 @@ internal object BundleUploader {
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
     // Opening (or self-closing) tag candidates. Name and attribute lengths are bounded, so scanning is linear.
     private val XML_OPEN_TAG = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s[^<>]{0,512})?>")
+    // Deliberately narrower than SENSITIVE_KEY_PATTERN (JSON keys): no bare `key`, `x-amz` or `policy` (exact-name
+    // only, see isSecretXmlTag), because element names like <Key>, <KeyCount> or <PolicyName> are benign S3 fields.
     private val SECRET_NAME_PATTERN =
         "token|secret|credential|signature|password|passwd|authoriz|stringtosign|canonicalrequest|argumentvalue" +
             "|passphrase|cookie|accesskey|accountkey|sharedkey|masterkey|storagekey|apikey|privatekey|signingkey|sessionkey|encryptionkey|authkey|[_.\\-]key|key[_.\\-]?id"
@@ -83,20 +85,34 @@ internal object BundleUploader {
         "canonicalrequestbytes", "signature", "credential", "policy",
     )
 
+    // S3's session-token echo (`<Token-0>`): the numbered form is specific enough to redact wherever it appears.
+    private val NUMBERED_TOKEN_TAG = Regex("(?i)token-\\d{1,3}")
+
     // Possessive, anchored name so each attribute is tried once per tag (no O(L^2) rescans).
-    private val XML_ATTR = Regex("(?<![\\w.:\\-])([\\w.:\\-]{1,80}+)(\\s*=\\s*)(\"[^\"]*\"|'[^']*')")
+    private val XML_ATTR = Regex("(?<![\\w.:\\-])([\\w.:\\-]{1,80}+)(\\s*=\\s*)(\\\\?\"[^\"]*\"|'[^']*')")
     private const val MAX_XML_ELEMENT_TEXT = 4096
 
     private fun localName(name: String) = name.substringAfterLast(':').lowercase()
 
-    private fun isSecretXmlTag(name: String): Boolean =
-        localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
-
-    // Bounded search: never scans past [limit] (an unbounded indexOf per opening tag would be quadratic).
+    // Bounded, case-insensitive search for [closeTag]: never scans past [limit] (an unbounded indexOf per opening
+    // tag would be quadratic). CDATA sections and comments are skipped, so a close tag quoted inside one does not
+    // end the element; a section that does not terminate within the window gives -1 (the caller's unclosed path).
     private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): Int {
         var i = text.indexOf('<', from)
         while (i in 0..limit) {
-            if (text.startsWith(closeTag, i)) return i
+            val term = when {
+                text.startsWith("<![CDATA[", i) -> "]]>"
+                text.startsWith("<!--", i) -> "-->"
+                else -> null
+            }
+            if (term != null) {
+                var j = i + 1
+                while (j <= limit && !text.startsWith(term, j)) j++
+                if (j > limit) return -1
+                i = text.indexOf('<', j + term.length)
+                continue
+            }
+            if (text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) return i
             i = text.indexOf('<', i + 1)
         }
         return -1
@@ -115,9 +131,6 @@ internal object BundleUploader {
         return i < 0 || text[i] == '>'
     }
 
-    // S3's session-token echo (`<Token-0>`): the numbered form is specific enough to redact wherever it appears.
-    private val NUMBERED_TOKEN_TAG = Regex("(?i)token-\\d{1,3}")
-
     private fun redactAttrs(tag: String, allSecret: Boolean): String =
         tag.replace(XML_ATTR) { a ->
             if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) "${a.groupValues[1]}${a.groupValues[2]}\"<redacted>\"" else a.value
@@ -131,7 +144,7 @@ internal object BundleUploader {
      * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
      * `List<AccessToken> but` or `=<your-token>.` is left alone.
      */
-    private fun redactSecretXml(text: String): String {
+    internal fun redactSecretXml(text: String): String {
         if (text.indexOf('<') < 0) return text
         val out = StringBuilder(text.length)
         var pos = 0
@@ -144,31 +157,34 @@ internal object BundleUploader {
             out.append(text, pos, start)
             val name = m.groupValues[1]
             val attrs = m.groupValues[2]
-            val secretTag = isSecretXmlTag(name)
+            val local = localName(name)
+            val secretTag = local == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
             out.append(if (attrs.isEmpty()) m.value else redactAttrs(m.value, secretTag))
             if (secretTag && !attrs.endsWith("/")) {
-                val closeTag = "</$name>"
+                val closeKey = "</${name.lowercase()}>"
                 val limit = minOf(text.length, end + MAX_XML_ELEMENT_TEXT)
-                val close = findClosingTag(text, closeTag, maxOf(end, searchedTo[closeTag] ?: 0), limit)
-                if (close < 0) searchedTo[closeTag] = limit + 1
+                val close = findClosingTag(text, "</$name>", maxOf(end, searchedTo[closeKey] ?: 0), limit)
                 if (close >= 0) {
                     out.append("<redacted>")
                     end = close
-                } else if (localName(name) in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(localName(name)) || atXmlBoundary(text, start)) {
-                    // CDATA sections and comments belong to the element text: jump to their terminator.
-                    var nextLt = text.indexOf('<', end)
-                    while (nextLt >= 0) {
-                        val term = when {
-                            text.startsWith("<![CDATA[", nextLt) -> "]]>"
-                            text.startsWith("<!--", nextLt) -> "-->"
-                            else -> break
+                } else {
+                    searchedTo[closeKey] = limit + 1
+                    if (local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)) {
+                        // CDATA sections and comments belong to the element text: jump to their terminator.
+                        var nextLt = text.indexOf('<', end)
+                        while (nextLt >= 0) {
+                            val term = when {
+                                text.startsWith("<![CDATA[", nextLt) -> "]]>"
+                                text.startsWith("<!--", nextLt) -> "-->"
+                                else -> break
+                            }
+                            val t = text.indexOf(term, nextLt)
+                            nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
                         }
-                        val t = text.indexOf(term, nextLt)
-                        nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
+                        val next = if (nextLt < 0) text.length else nextLt
+                        if (next > end) out.append("<redacted>")
+                        end = next
                     }
-                    val next = if (nextLt < 0) text.length else nextLt
-                    if (next > end) out.append("<redacted>")
-                    end = next
                 }
             }
             pos = end
@@ -185,7 +201,7 @@ internal object BundleUploader {
      * Mask [appToken] and drop credentials from free text such as an exception message or a JSON string
      * value: `?name=value` query strings (a presigned URL's query is a write credential), SigV4-style
      * `Signature=`/`Credential=` pairs, `Bearer`/`Basic` tokens, `Authorization`/`Cookie`/`X-Amz-*` header
-     * lines and S3 secret XML elements (StringToSign, ...). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
+     * lines and the text of credential-named XML elements (`<Token-0>`, `<StringToSign>`, ...; see [redactSecretXml]). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
      */
     internal fun scrubForLog(text: String, appToken: String? = null): String {
         // Mask first: truncating first could cut the token in half so the exact match no longer fires.

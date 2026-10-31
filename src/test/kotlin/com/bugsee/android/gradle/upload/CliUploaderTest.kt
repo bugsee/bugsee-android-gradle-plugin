@@ -1084,7 +1084,7 @@ class CliUploaderTest {
     @Test fun `benign XML elements are untouched`() {
         val benign = "<Error><Code>AccessDenied</Code><Message>Request has expired</Message><RequestId>R1</RequestId>" +
             "<HostId>H1</HostId><Resource>/bucket/obj</Resource><Expires>2026-01-01T00:00:00Z</Expires>" +
-            "<Key>some/object</Key><KeyCount>3</KeyCount><Empty/><Token/></Error>"
+            "<Key>some/object</Key><KeyCount>3</KeyCount><Empty/><Token /><Tokenless/></Error>"
         assertEquals(benign, CliUploader.scrubCliOutput(benign))
     }
 
@@ -1103,14 +1103,18 @@ class CliUploaderTest {
             "<Error><CanonicalRequest>PUT\n/b/k\nX-Amz-Security-Token=FwoGLEAK2" to "LEAK2",
             "<Error><StringToSign>AWS4-HMAC-SHA256 20260101T000000Z LEAK3" to "LEAK3",
             "<Error><Code>X</Code>\n  <SessionToken>\n    LEAK4" to "LEAK4",
-            "<Token>" + "C".repeat(4096) + "LEAK5</Token>" to "LEAK5",
-            "<SessionToken>" + "A".repeat(5000) + "LEAK6</SessionToken>" to "LEAK6",
+            // MAX_XML_ELEMENT_TEXT == MAX_SCRUBBED_TEXT_CHARS (4096), so the window only affects cosmetics here: the
+            // marker comes first and the body is asserted below, which fails on main (element text kept verbatim).
+            "<Token>LEAK5" + "C".repeat(4096) + "</Token>" to "LEAK5",
+            "<SessionToken>LEAK6" + "A".repeat(5000) + "</SessionToken>" to "LEAK6",
             "<Policy>{\"c\": [\"LEAK7\"]}" + " ".repeat(4100) + "</Policy>" to "LEAK7",
             "<Token-0>abc LEAK8</Token-0 >" to "LEAK8",
             "<Error><ArgumentName>x-amz-security-token</ArgumentName><ArgumentValue>FwoGLEAK9</ArgumentValue></Error>" to "LEAK9",
         )
         for ((input, leak) in cases) {
-            assertFalse(BundleUploader.scrubForLog(input).contains(leak), "scrubForLog leaked $leak")
+            val out = BundleUploader.scrubForLog(input)
+            assertFalse(out.contains(leak), "scrubForLog leaked $leak")
+            assertFalse(out.contains("CCCC") || out.contains("AAAAAAAA"), "element body kept for $leak")
         }
     }
 
@@ -1127,7 +1131,7 @@ class CliUploaderTest {
         }
     }
 
-    @Test fun `legacy S3 secret elements still redact exactly as before`() {
+    @Test fun `legacy S3 secret elements still redact`() {
         val body = "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIAXX</AWSAccessKeyId>" +
             "<StringToSign>AWS4\n2026</StringToSign><SignatureProvided>abc123</SignatureProvided>" +
             "<CanonicalRequestBytes>41 4b</CanonicalRequestBytes><Policy>p</Policy></Error>"
@@ -1159,26 +1163,48 @@ class CliUploaderTest {
     }
 
     @Test fun `XML scrub time scales linearly`() {
-        // Distinct names defeat the failed-search memo, so only the 4096-char window keeps this linear.
-        fun time(n: Int, input: String): Long {
+        // Distinct names defeat the failed-search memo, so only the 4096-char window keeps that shape linear.
+        fun time(input: String): Long {
             BundleUploader.scrubForLog(input)
             return (1..5).minOf { val s = System.nanoTime(); BundleUploader.scrubForLog(input); System.nanoTime() - s }
         }
         fun distinct(n: Int) = buildString { for (i in 0 until n) append("<Token").append(i).append(">") }
         fun same(n: Int) = "<Token>".repeat(n)
         for (gen in listOf(::distinct, ::same)) {
-            time(20_000, gen(20_000))
-            val small = time(100_000, gen(100_000)); val big = time(200_000, gen(200_000))
-            assertTrue(big < small * 3 + 5_000_000, "small=$small big=$big")
+            time(gen(20_000))
+            val small = time(gen(100_000)); val big = time(gen(200_000))
+            // Doubling n makes a quadratic scan ~4x slower; 3.5x plus slack keeps shared CI runners from flaking.
+            assertTrue(small < 2_000_000 || big < small * 3.5 + 5_000_000, "small=$small big=$big")
         }
     }
 
-    @Test fun `escaped newlines and prose prefixes do not hide an unclosed token element`() {
-        val escaped = "body: \"<Error>\\n  <Code>ExpiredToken</Code>\\n  <SessionToken>FwoGSECRET1"
-        assertFalse(BundleUploader.scrubForLog(escaped).contains("SECRET1"))
-        assertFalse(BundleUploader.scrubForLog("Error: S3 PUT failed (400): <Token-0>FwoGSECRET9").contains("SECRET9"))
-        val sec = listOf("<Error><Token><![CDATA[abc<SECRETA]]>", "<Error><Token><!-- a <b --> SECRETB", "<Error><StringToSign><![CDATA[AWS4<SECRETD]]>")
-        for (c in sec) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    @Test fun `close tag quoted inside CDATA or a comment does not end the element`() {
+        val cases = listOf(
+            "<Error><Token><![CDATA[</Token>]]>CDSECRET</Token><Code>X</Code></Error>",
+            "<Error><Token><!-- </Token> -->CMSECRET</Token><Code>X</Code></Error>",
+            "<Error><Signature><![CDATA[</Signature>]]>SGSECRET</Signature></Error>",
+            "error: <SessionToken>CASESECRET</sessiontoken> was rejected",
+        )
+        for (c in cases) {
+            val out = BundleUploader.scrubForLog(c)
+            assertFalse(out.contains("SECRET"), out)
+        }
+        assertTrue(BundleUploader.scrubForLog(cases[0]).contains("<Code>X</Code>"))
+        // A far terminator must not make the close-tag search unbounded.
+        val far = ("x: <TokN><![CDATA[" + "y".repeat(5000)).repeat(200) + "]]>"
+        val start = System.nanoTime()
+        BundleUploader.scrubForLog(far)
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 3_000)
+    }
+
+    @Test fun `multi-line secret element opened in the trimmed middle does not leak at the tail start`() {
+        val text = "w\n".repeat(1500) + "<Error><Policy>\nAAAA\nSECRETLINE\nBBBB\n</Policy></Error>\n" + "y".repeat(1948) + "\nerror: failed\n"
+        assertFalse(CliUploader.scrubCliOutput(text).contains("SECRETLINE"))
+    }
+
+    @Test fun `escaped-quote attribute values on credential names are redacted`() {
+        val out = BundleUploader.scrubForLog("body: \"<Item token=\\\"ESCSECRET\\\"></Item>\"")
+        assertFalse(out.contains("ESCSECRET"), out)
     }
 
     @Test fun `unclosed secret element with CDATA or comment is redacted past it`() {

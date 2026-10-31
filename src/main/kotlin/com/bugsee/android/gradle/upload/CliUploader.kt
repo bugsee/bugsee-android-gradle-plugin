@@ -397,11 +397,13 @@ internal object CliUploader {
     /**
      * Log-safe rendering of bugsee-cli's stderr/stdout. The CLI embeds raw HTTP response bodies, presigned
      * URLs and request URLs in its diagnostics, so the text goes through [BundleUploader.scrubForLog]
-     * (masks [appToken], drops URL query strings, SigV4 pairs, bearer tokens, credential headers and S3 secret
-     * XML elements; capped at 4096 chars) plus the CLI-specific patterns above, and is trimmed.
+     * (masks [appToken], drops URL query strings, SigV4 pairs, bearer tokens, credential headers and the text
+     * of credential-named XML elements; capped at 4096 chars) plus the CLI-specific patterns above, and is trimmed.
      */
     internal fun scrubCliOutput(text: String, appToken: String? = null): String =
-        BundleUploader.scrubForLog(headAndTail(ANSI_ESCAPE.replace(text, "")), appToken)
+        // The XML pass runs on the full text, before head/tail trimming: a multi-line secret element whose opening
+        // tag falls in the dropped middle would otherwise leak the lines that land at the start of the tail.
+        BundleUploader.scrubForLog(headAndTail(BundleUploader.redactSecretXml(ANSI_ESCAPE.replace(text, ""))), appToken)
             .replace(CLI_SECRET_FIELD) { "${it.groupValues[1]}: <redacted>" }
             .replace(CLI_SECRET_JSON_PAIR, "\"$1\":\"<redacted>\"")
             .let(::scrubKeyValuePairs)
