@@ -487,8 +487,9 @@ class VariantWiringTest {
 
     @Test
     fun androidPluginWithoutWiring_logsThatNothingWasWired() {
-        // An `android` extension without the application/library plugin ids (com.android.test,
-        // dynamic-feature): evaluation passes, and debug mode says why nothing is wired.
+        // The generic fallback: an `android` extension from a plugin that is neither application/library
+        // nor dynamic-feature/test (e.g. a future AGP plugin). Evaluation passes, and debug mode says why
+        // nothing is wired. Feature and test modules have their own branch (BugseeFeatureAndTestModulesTest).
         val h = Harness(null) { debug.set(true) }
         h.project.extensions.add("android", Any())
 

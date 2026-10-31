@@ -223,7 +223,8 @@ internal class BugseePluginImpl(
                     // Android modules the plugin deliberately does not wire; same opt-out as the library warning.
                     warnFeatureOrTestModule(project, isDebug)
                 } else if (isDebug) {
-                    // e.g. com.android.test / dynamic-feature: the Android plugin is there but nothing is wired.
+                    // An `android` extension from an AGP plugin that is neither wired nor a feature/test module
+                    // (e.g. a future AGP plugin): the Android plugin is there but nothing is wired.
                     project.logger.warn(
                         "Bugsee: only application modules are configured; nothing wired for ${project.path}"
                     )
@@ -296,7 +297,9 @@ internal class BugseePluginImpl(
 
     /**
      * Default-level warning for a dynamic-feature or test module that applies the plugin: nothing is
-     * wired and no SDK is added. Silenced by `warnLibraryModule=false`; exempt for Bugsee's own group.
+     * wired (no upload tasks, no ASM instrumentation). The SDK is added only when Compose needs it (see
+     * [isSdkModule]), so the warning also fires for such a module. Silenced by `warnLibraryModule=false`;
+     * exempt for Bugsee's own group.
      * Guarded like [warnNoAndroidModule] so the message can never be a cause of failure.
      */
     private fun warnFeatureOrTestModule(project: Project, isDebug: Boolean) {
@@ -392,6 +395,8 @@ internal class BugseePluginImpl(
         // The first AGP hook after the build script body and before ANY `onVariants` callback (which
         // reads the declared dependencies to gate instrumentation) — the earliest point at which
         // the DSL is final and late enough that the auto-add can still be corrected.
+        // (Feature and test modules never reach this hook: nothing is wired for them, so their DSL is
+        // declared final by the plugin's own afterEvaluate, and the early-read reconcile covers them.)
         androidComponents.finalizeDsl { onDslFinal(project) }
 
         androidComponents.onVariants { variant ->
@@ -730,7 +735,11 @@ internal class BugseePluginImpl(
             if (record.result.dependencies.isNotEmpty()) {
                 val failure = runCatching { record.config.dependencies.removeAll(record.result.dependencies.toSet()) }
                     .exceptionOrNull()
-                if (failure != null) {
+                // A Bugsee SDK-group module never needed the auto-add (and main stayed silent here): its group
+                // was assigned after the early read, so the provisional add is not worth a user-facing warning.
+                if (failure != null && isBugseeInternalModule(project)) {
+                    project.logger.debug("Bugsee: could not take back the provisional auto-add", failure)
+                } else if (failure != null) {
                     project.logger.debug("Bugsee: could not take back the provisional auto-add", failure)
                     val message = "Bugsee: '${record.config.name}' was read before the bugsee { } block was " +
                         "evaluated and a configuration extending it has already been resolved, so the " +

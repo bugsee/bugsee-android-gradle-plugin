@@ -727,6 +727,10 @@ dependencies {
 }
 ```
 
+The base application module has to apply Bugsee (or declare the SDK itself) for any of this to work: a
+feature's or test module's `compileOnly` SDK, and the Compose carve-out below, assume the base app holds the
+SDK at runtime.
+
 **Upgrading:** earlier versions added the SDK (`implementation`) and the matching extension modules (OkHttp,
 Ktor, ...) to these modules automatically whenever Bugsee was applied to them. They no longer do, except that
 a module that uses Compose keeps all of it as before (the SDK, the extension modules and the Compose compiler
