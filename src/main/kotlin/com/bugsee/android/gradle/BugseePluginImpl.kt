@@ -728,7 +728,18 @@ internal class BugseePluginImpl(
         if (!isSdkModule(project, settingsResolver())) {
             // Settled as a dynamic-feature/test module after a provisional pass added dependencies.
             if (record.result.dependencies.isNotEmpty()) {
-                runCatching { record.config.dependencies.removeAll(record.result.dependencies.toSet()) }
+                val failure = runCatching { record.config.dependencies.removeAll(record.result.dependencies.toSet()) }
+                    .exceptionOrNull()
+                if (failure != null) {
+                    project.logger.debug("Bugsee: could not take back the provisional auto-add", failure)
+                    val message = "Bugsee: '${record.config.name}' was read before the bugsee { } block was " +
+                        "evaluated and a configuration extending it has already been resolved, so the " +
+                        "Bugsee SDK added provisionally to ${project.path} could not be taken back. " +
+                        "Bugsee dependencies are not meant to be added to this module: remove them or " +
+                        "apply the Bugsee plugin and its bugsee { } block before whatever reads the configuration."
+                    project.logger.warn(message)
+                    uncorrectableAutoAddHook?.invoke(message)
+                }
             }
             return
         }
@@ -2210,7 +2221,8 @@ internal class BugseePluginImpl(
                 "belongs in the application module, which holds the SDK as an implementation dependency" +
                 (if (test) "" else "; the SDK cannot be in a feature alone") +
                 ". Code here that calls the SDK must declare it itself as compileOnly. The SDK (and the " +
-                "Compose compiler plugin) is still added to this module only when it uses Compose. To " +
+                "Compose compiler plugin) is still added to this module only when it uses Compose" +
+                (if (test) " with instrumentation.composeInTests=true" else "") + ". To " +
                 "silence this on purpose, set bugsee { warnLibraryModule.set(false) } or " +
                 "plugin.warnLibraryModule=false. See the README, \"Library modules\" (Dynamic-feature and " +
                 "test modules)."

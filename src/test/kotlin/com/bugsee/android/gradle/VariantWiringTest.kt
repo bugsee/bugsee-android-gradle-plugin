@@ -477,6 +477,8 @@ class VariantWiringTest {
         assertTrue(test.startsWith("Bugsee: root project 't' is a test module (com.android.test)"), test)
         assertTrue("the SDK cannot be in a feature alone" in feature, feature)
         assertFalse("alone" in test, test)
+        assertTrue("with instrumentation.composeInTests=true" in test, test)
+        assertFalse("composeInTests" in feature, feature)
         for (m in listOf(feature, test)) {
             assertTrue("must declare it itself as compileOnly" in m, m)
             assertTrue("warnLibraryModule" in m && "README, \"Library modules\"" in m, m)
