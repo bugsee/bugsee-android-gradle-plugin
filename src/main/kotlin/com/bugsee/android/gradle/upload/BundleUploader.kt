@@ -96,7 +96,11 @@ internal object BundleUploader {
 
     // Bounded, case-insensitive search for [closeTag]: never scans past [limit] (an unbounded indexOf per opening
     // tag would be quadratic). CDATA sections and comments are skipped, so a close tag quoted inside one does not
-    // end the element; a section that does not terminate within the window gives -1 (the caller's unclosed path).
+    // end the element. Returns [NOT_FOUND] when the window holds no close tag, or [UNTERMINATED_SECTION] when a CDATA
+    // section or comment does not end within it (the text after it was not searched, so the caller must not memoise).
+    private const val NOT_FOUND = -1
+    private const val UNTERMINATED_SECTION = -2
+
     private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): Int {
         var i = text.indexOf('<', from)
         while (i in 0..limit) {
@@ -108,14 +112,14 @@ internal object BundleUploader {
             if (term != null) {
                 var j = i + 1
                 while (j <= limit && !text.startsWith(term, j)) j++
-                if (j > limit) return -1
+                if (j > limit) return UNTERMINATED_SECTION
                 i = text.indexOf('<', j + term.length)
                 continue
             }
             if (text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) return i
             i = text.indexOf('<', i + 1)
         }
-        return -1
+        return NOT_FOUND
     }
 
     // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped,
@@ -168,7 +172,7 @@ internal object BundleUploader {
                     out.append("<redacted>")
                     end = close
                 } else {
-                    searchedTo[closeKey] = limit + 1
+                    if (close == NOT_FOUND) searchedTo[closeKey] = limit + 1
                     if (local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)) {
                         // CDATA sections and comments belong to the element text: jump to their terminator.
                         var nextLt = text.indexOf('<', end)

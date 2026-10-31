@@ -1213,9 +1213,45 @@ class CliUploaderTest {
         }
     }
 
+    @Test fun `failed close-tag search through an unterminated CDATA does not hide a later element`() {
+        for (c in listOf("x <Token><![CDATA[ junk <Token>MEMOSECRET</Token> tail", "x <Token><!-- junk <Token>MEMOSECRET</Token> tail")) {
+            assertFalse(BundleUploader.scrubForLog(c).contains("MEMOSECRET"), c)
+        }
+    }
+
+    @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
+        assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
+        assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
+        assertEquals("<Error><Policy><redacted></Policy></Error>", BundleUploader.scrubForLog("<Error><Policy>p</Policy></Error>"))
+    }
+
+    @Test fun `over-redaction of credential-looking but benign names is intended`() {
+        for (tag in listOf("NextContinuationToken", "SSEKMSKeyId", "SignatureVersion", "Tokenizer", "CookieJar", "partition_key")) {
+            val out = BundleUploader.scrubForLog("<$tag>v</$tag>")
+            assertEquals("<$tag><redacted></$tag>", out)
+        }
+        val ns = "<Error xmlns=\"u\"><Code>X</Code></Error>"
+        assertEquals(ns, BundleUploader.scrubForLog(ns))
+    }
+
+    @Test fun `no input redacted by the old fixed-tag regex leaks now`() {
+        val old = Regex("<(StringToSign|StringToSignBytes|SignatureProvided|AWSAccessKeyId|CanonicalRequest|CanonicalRequestBytes|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
+        val frags = listOf("<Signature>", "</Signature>", "<Policy>", "</Policy>", "<StringToSign>", "</StringToSign>", "<Credential>", "<AWSAccessKeyId>",
+            "<CanonicalRequest>", "</CanonicalRequest>", "<![CDATA[", "]]>", "<!--", "-->", "<Code>", "</Code>", "SECRET", "SECRET", "\n", " ", "x", "<", ">", "<Token>", "</Token>")
+        val rnd = java.util.Random(131)
+        repeat(4000) {
+            val input = buildString { repeat(1 + rnd.nextInt(14)) { append(frags[rnd.nextInt(frags.size)]) } }
+            val before = old.replace(input, "<\$1><redacted></\$1>")
+            if (!before.contains("SECRET")) assertFalse(BundleUploader.scrubForLog(input).contains("SECRET"), "leaks: $input")
+        }
+    }
+
     @Test fun `XML tag scrub is bounded-time on adversarial input`() {
         for (nasty in listOf("<" + "a".repeat(1_000_000), "<a ".repeat(300_000), "<Token" + "-".repeat(1_000_000), "<a>".repeat(300_000),
             "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000),
+            buildString { for (i in 0 until 40_000) append("<Tok").append(i).append("><![CDATA[") },
+            buildString { for (i in 0 until 40_000) append("<Tok").append(i).append("><!--") },
+            buildString { for (i in 0 until 15_000) append("<Tok").append(i).append(">").append("<".repeat(50)) },
             "<a " + "key_".repeat(125) + ">", ("<a " + "key_".repeat(125) + ">").repeat(2000), ("<a " + "b".repeat(500) + ">").repeat(2000),
             ("<token " + "b".repeat(500) + ">").repeat(2000), ("<_key>" + "<".repeat(1000)).repeat(1000))) {
             val start = System.nanoTime()
