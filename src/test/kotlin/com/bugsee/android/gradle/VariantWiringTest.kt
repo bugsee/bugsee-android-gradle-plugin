@@ -21,6 +21,7 @@ import java.io.File
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Proxy
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -469,9 +470,26 @@ class VariantWiringTest {
     }
 
     @Test
+    fun featureOrTestModuleMessage_namesTheModuleTypeAndTheCompileOnlyRule() {
+        val feature = BugseePluginImpl.featureOrTestModuleMessage(":dyn", false, "dyn", "com.android.dynamic-feature")
+        assertTrue(feature.startsWith("Bugsee: :dyn is a dynamic-feature module (com.android.dynamic-feature)"), feature)
+        val test = BugseePluginImpl.featureOrTestModuleMessage(":", true, "t", "com.android.test")
+        assertTrue(test.startsWith("Bugsee: root project 't' is a test module (com.android.test)"), test)
+        assertTrue("the SDK cannot be in a feature alone" in feature, feature)
+        assertFalse("alone" in test, test)
+        assertTrue("with instrumentation.composeInTests=true" in test, test)
+        assertFalse("composeInTests" in feature, feature)
+        for (m in listOf(feature, test)) {
+            assertTrue("must declare it itself as compileOnly" in m, m)
+            assertTrue("warnLibraryModule" in m && "README, \"Library modules\"" in m, m)
+        }
+    }
+
+    @Test
     fun androidPluginWithoutWiring_logsThatNothingWasWired() {
-        // An `android` extension without the application/library plugin ids (com.android.test,
-        // dynamic-feature): evaluation passes, and debug mode says why nothing is wired.
+        // The generic fallback: an `android` extension from a plugin that is neither application/library
+        // nor dynamic-feature/test (e.g. a future AGP plugin). Evaluation passes, and debug mode says why
+        // nothing is wired. Feature and test modules have their own branch (BugseeFeatureAndTestModulesTest).
         val h = Harness(null) { debug.set(true) }
         h.project.extensions.add("android", Any())
 

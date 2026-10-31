@@ -706,6 +706,39 @@ plugin (`com.android.fused-library`) are treated the same way: they are library 
 variants (and no `android` extension), so they get the same warning (and the same `warnLibraryModule`
 opt-out) and nothing is wired, including the Compose compiler plugin.
 
+### Dynamic-feature and test modules
+
+`com.android.dynamic-feature` and `com.android.test` modules are not wired either (no upload tasks, no
+bytecode instrumentation), so applying Bugsee to them, for example from a convention plugin shared by every
+module, logs one default-level warning per module. `warnLibraryModule=false` silences it.
+
+The SDK belongs in the base application module, declared there as an `implementation` dependency (the plugin
+adds it for you). It cannot be in a feature alone: a build where only a dynamic-feature module has the SDK
+fails in the base app's resource linking (`resource string/bugsee_foreground_service_description not found`).
+An SDK dependency in the base app is also not on a feature's or a test module's compile classpath, so
+**a feature or test module that calls the SDK has to declare it itself as `compileOnly`** (the base app holds
+the implementation; AGP does not package a `compileOnly` dependency into the feature):
+
+```kotlin
+// feature/build.gradle.kts
+dependencies {
+    implementation(project(":app"))
+    compileOnly("com.bugsee:bugsee-android:<version of the base app's SDK>")
+}
+```
+
+The base application module has to apply Bugsee (or declare the SDK itself) for any of this to work: a
+feature's or test module's `compileOnly` SDK, and the Compose carve-out below, assume the base app holds the
+SDK at runtime.
+
+**Upgrading:** earlier versions added the SDK (`implementation`) and the matching extension modules (OkHttp,
+Ktor, ...) to these modules automatically whenever Bugsee was applied to them. They no longer do, except that
+a module that uses Compose keeps all of it as before (the SDK, the extension modules and the Compose compiler
+plugin): a dynamic-feature module with a Compose dependency (and `instrumentation.compose` or `composeSecure`
+on, the defaults), and a `com.android.test` module with `instrumentation.composeInTests=true`. If a feature or
+test module relied on the automatic SDK to compile calls into the SDK, declare it `compileOnly` as above (or
+accept the warning and remove the Bugsee plugin from that module).
+
 Applying the plugin to any other module that has no Android application or library plugin (for example
 `com.android.asset-pack`, `com.android.ai-pack`, `com.android.lint`, a non-Android JVM module in a
 multi-module build that also contains Android modules, or a plugin a future AGP adds) never fails the build either: it logs one warning naming
