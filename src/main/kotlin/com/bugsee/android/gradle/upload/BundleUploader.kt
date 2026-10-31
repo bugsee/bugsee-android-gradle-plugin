@@ -146,7 +146,12 @@ internal object BundleUploader {
                     out.append("<redacted>")
                     end = close
                 } else if (localName(name) in LEGACY_SECRET_XML_NAMES || atXmlBoundary(text, start)) {
-                    val next = text.indexOf('<', end).let { if (it < 0) text.length else it }
+                    // CDATA sections and comments belong to the element text, so the span runs past them.
+                    var nextLt = text.indexOf('<', end)
+                    while (nextLt >= 0 && (text.startsWith("<![CDATA[", nextLt) || text.startsWith("<!--", nextLt))) {
+                        nextLt = text.indexOf('<', nextLt + 1)
+                    }
+                    val next = if (nextLt < 0) text.length else nextLt
                     if (next > end) out.append("<redacted>")
                     end = next
                 }

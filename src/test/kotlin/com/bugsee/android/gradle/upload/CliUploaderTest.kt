@@ -1159,15 +1159,24 @@ class CliUploaderTest {
     }
 
     @Test fun `XML scrub time scales linearly`() {
-        fun time(n: Int): Long {
-            val input = "<Token>".repeat(n)
+        // Distinct names defeat the failed-search memo, so only the 4096-char window keeps this linear.
+        fun time(n: Int, input: String): Long {
             BundleUploader.scrubForLog(input)
-            val s = System.nanoTime(); repeat(3) { BundleUploader.scrubForLog(input) }
-            return (System.nanoTime() - s) / 3
+            return (1..5).minOf { val s = System.nanoTime(); BundleUploader.scrubForLog(input); System.nanoTime() - s }
         }
-        time(20_000)
-        val small = time(100_000); val big = time(200_000)
-        assertTrue(big < small * 4 + 20_000_000, "small=$small big=$big")
+        fun distinct(n: Int) = buildString { for (i in 0 until n) append("<Token").append(i).append(">") }
+        fun same(n: Int) = "<Token>".repeat(n)
+        for (gen in listOf(::distinct, ::same)) {
+            time(20_000, gen(20_000))
+            val small = time(100_000, gen(100_000)); val big = time(200_000, gen(200_000))
+            assertTrue(big < small * 3 + 5_000_000, "small=$small big=$big")
+        }
+    }
+
+    @Test fun `unclosed secret element with CDATA or comment is redacted past it`() {
+        for (c in listOf("<Error><Token><![CDATA[CDSECRET]]>", "<Error><Token><!-- c -->CMSECRET", "<Error><StringToSign><![CDATA[CDSECRET]]>")) {
+            assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+        }
     }
 
     @Test fun `XML tag scrub is bounded-time on adversarial input`() {
