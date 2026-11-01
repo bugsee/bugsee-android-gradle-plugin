@@ -1294,6 +1294,14 @@ class CliUploaderTest {
         assertEquals("<Error><Token><Code>", BundleUploader.scrubForLog("<Error><Token><Code>"))
     }
 
+    @Test fun `gt inside a quoted attribute value does not end the tag`() {
+        for (c in listOf("<Error password=\"a>SECRET1\"><Code>X</Code></Error>", "<Item token='x>SECRET2'>v</Item>", "<Token a=\"b>c\">SECRET3</Token>", "<Item token=\"SEC>RET4\" other=\"1\">")) {
+            assertFalse(BundleUploader.scrubForLog(c).contains("SECRET") || BundleUploader.scrubForLog(c).contains("RET4"), c)
+        }
+        assertEquals("<Error a=\"x>y\"><Code>X</Code></Error>", BundleUploader.scrubForLog("<Error a=\"x>y\"><Code>X</Code></Error>"))
+        assertEquals("<a x=\"foo>bar", BundleUploader.scrubForLog("<a x=\"foo>bar"))
+    }
+
     @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
         assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
         assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
@@ -1334,7 +1342,7 @@ class CliUploaderTest {
 
     @Test fun `XML tag scrub is bounded-time on adversarial input`() {
         for (nasty in listOf("<" + "a".repeat(1_000_000), "<a ".repeat(300_000), "<Token" + "-".repeat(1_000_000), "<a>".repeat(300_000),
-            "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000),
+            "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000), "<a x=\"y\" ".repeat(80_000), "<Token a=\"".repeat(100_000), "<Token a='".repeat(100_000),
             buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><![CDATA[") },
             buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><!--") },
             buildString { for (i in 0 until 15_000) append("<Token").append(i).append(">").append("<".repeat(50)) },

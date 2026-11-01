@@ -69,8 +69,14 @@ internal object BundleUploader {
     private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
-    // Opening (or self-closing) tag candidates. Name and attribute lengths are bounded, so scanning is linear.
-    private val XML_OPEN_TAG = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s[^<>]{0,512})?>")
+    // Opening (or self-closing) tag candidates. Quote-aware: a `>` inside a quoted attribute value does not end the tag.
+    // Every alternative is possessive and none can cross a `<`, so a start position scans at most up to the next `<`
+    // (linear overall); an unmatched quote is taken literally.
+    private val XML_OPEN_TAG = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s(?:[^<>\"']++|\"[^\"<]*+\"|'[^'<]*+'|[\"'])*+)?>")
+
+    // Tag matcher of the strict baseline scan (not quote-aware, attributes bounded): kept as it was so the baseline
+    // keeps redacting everything it ever redacted.
+    private val XML_OPEN_TAG_STRICT = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s[^<>]{0,512})?>")
     // Deliberately narrower than SENSITIVE_KEY_PATTERN (JSON keys): no bare `key`, `x-amz` or `policy` (exact-name
     // only, see isSecretXmlTag), because element names like <Key>, <KeyCount> or <PolicyName> are benign S3 fields.
     private val SECRET_NAME_PATTERN =
@@ -251,7 +257,8 @@ internal object BundleUploader {
         var pos = 0
         // Per close tag: scanned-through position of a failed search, so dense unclosed tags do not rescan the same window.
         val searchedTo = HashMap<String, Int>()
-        var m = XML_OPEN_TAG.find(text, pos)
+        val tagRegex = if (refined) XML_OPEN_TAG else XML_OPEN_TAG_STRICT
+        var m = tagRegex.find(text, pos)
         while (m != null) {
             val start = m.range.first
             val afterOpen = m.range.last + 1
@@ -280,7 +287,7 @@ internal object BundleUploader {
                 }
             }
             pos = end
-            m = XML_OPEN_TAG.find(text, pos)
+            m = tagRegex.find(text, pos)
         }
         return spans
     }
