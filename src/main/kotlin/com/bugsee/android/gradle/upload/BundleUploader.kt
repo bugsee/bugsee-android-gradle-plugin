@@ -104,6 +104,8 @@ internal object BundleUploader {
 
     private fun scanForClose(text: String, closeTag: String, from: Int, limit: Int, skipSections: Boolean): CloseScan {
         val r = CloseScan()
+        var openCdata = false
+        var openComment = false // an unterminated section of a kind cannot be terminated by a later one in the window
         var i = text.indexOf('<', from)
         while (i in 0..limit) {
             val term = if (!skipSections) null else when {
@@ -111,7 +113,7 @@ internal object BundleUploader {
                 text.startsWith("<!--", i) -> "-->"
                 else -> null
             }
-            if (term != null) {
+            if (term != null && !(if (term == "]]>") openCdata else openComment)) {
                 var j = i + 1
                 while (j <= limit && !text.startsWith(term, j)) j++
                 if (j <= limit) {
@@ -119,6 +121,7 @@ internal object BundleUploader {
                     i = text.indexOf('<', j + term.length)
                     continue
                 }
+                if (term == "]]>") openCdata = true else openComment = true
             }
             if (text.startsWith(closeTag, i)) { r.exact = i; return r }
             if (r.caseInsensitive < 0 && text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) r.caseInsensitive = i
@@ -127,11 +130,6 @@ internal object BundleUploader {
         return r
     }
 
-    // Close-tag choice, so that nothing the original exact-case "first close tag" rule redacted can leak:
-    // 1. the first exact-case close tag outside CDATA/comments; 2. else the first exact-case one anywhere (a quoted
-    // close tag then still closes, as before); 3. else the first differently-cased one. Returns [NOT_FOUND] when the
-    // window has none and nothing was skipped (safe to memoise), [NOT_FOUND_SKIPPED] otherwise (the main loop does not
-    // skip sections, so a same-name tag inside one must search for itself).
     // The strict baseline: first exact-case close tag in the window, sections not skipped.
     private fun findStrictClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
         val r = scanForClose(text, closeTag, from, limit, skipSections = false)
@@ -140,6 +138,11 @@ internal object BundleUploader {
 
     private class CloseHit(val pos: Int, val caseInsensitiveOnly: Boolean = false)
 
+    // Close-tag choice, so that nothing the original exact-case "first close tag" rule redacted can leak:
+    // 1. the first exact-case close tag outside CDATA/comments; 2. else the first exact-case one anywhere (a quoted
+    // close tag then still closes, as before); 3. else the first differently-cased one. Returns [NOT_FOUND] when the
+    // window has none and nothing was skipped (safe to memoise), [NOT_FOUND_SKIPPED] otherwise (the main loop does not
+    // skip sections, so a same-name tag inside one must search for itself).
     private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
         val outside = scanForClose(text, closeTag, from, limit, skipSections = true)
         if (outside.exact >= 0) return CloseHit(outside.exact)
@@ -170,14 +173,6 @@ internal object BundleUploader {
             if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) "${a.groupValues[1]}${a.groupValues[2]}\"<redacted>\"" else a.value
         }
 
-    /**
-     * Redact the text of credential-named XML elements (`<Token-0>`, `<x:SessionToken>`, `<ClientSecret>`, ...)
-     * and the values of credential-named attributes. An element is redacted up to its closing tag when that
-     * tag is within [MAX_XML_ELEMENT_TEXT] chars. Otherwise (truncated body, odd closing tag, huge element)
-     * the text up to the next tag is redacted, but for names outside the legacy S3 list only when the tag sits
-     * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
-     * `List<AccessToken> but` or `=<your-token>.` is left alone.
-     */
     // End of an unclosed element's text: the next tag, skipping CDATA sections and comments (an unterminated one
     // runs to the end of the text).
     private fun unclosedEnd(text: String, from: Int): Int {
@@ -194,6 +189,18 @@ internal object BundleUploader {
         return if (nextLt < 0) text.length else nextLt
     }
 
+    /**
+     * Redact the text of credential-named XML elements (`<Token-0>`, `<x:SessionToken>`, `<ClientSecret>`, ...)
+     * and the values of credential-named attributes. An element is redacted up to its closing tag when that
+     * tag is within [MAX_XML_ELEMENT_TEXT] chars. Otherwise (truncated body, odd closing tag, huge element)
+     * the text up to the next tag is redacted, but for names outside the legacy S3 list only when the tag sits
+     * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
+     * `List<AccessToken> but` or `=<your-token>.` is left alone.
+     *
+     * Two scans are unioned: a strict one (first exact-case close tag, sections not skipped) and a refined one
+     * (skips terminated CDATA/comments, differently-cased close tags), so nothing the strict one redacts can leak.
+     * Not idempotent: the inserted `<redacted>` ends in `>`, so a second pass can only redact more.
+     */
     internal fun redactSecretXml(text: String): String {
         if (text.indexOf('<') < 0) return text
         // Two scans whose redacted spans are unioned: the strict scan (first exact-case close tag, no section
@@ -229,7 +236,7 @@ internal object BundleUploader {
         val merged = ArrayList<IntRange>()
         for (sp in sorted) {
             val cur = merged.lastOrNull()
-            if (cur != null && (sp.first < cur.last || (sp.first == cur.first))) {
+            if (cur != null && (sp.first <= cur.last)) {
                 if (sp.last > cur.last) merged[merged.size - 1] = cur.first..sp.last
             } else {
                 merged.add(sp)
@@ -253,7 +260,8 @@ internal object BundleUploader {
             val local = localName(name)
             val secretTag = local == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
             if (secretTag && !attrs.endsWith("/")) {
-                val closeKey = "</${name.lowercase()}>"
+                // The strict scan matches exact case, so its memo key must too; the refined scan ignores case.
+                val closeKey = if (refined) "</${name.lowercase()}>" else "</$name>"
                 val limit = minOf(text.length, afterOpen + MAX_XML_ELEMENT_TEXT)
                 val from = maxOf(afterOpen, searchedTo[closeKey] ?: 0)
                 val hit = if (refined) findClosingTag(text, "</$name>", from, limit) else findStrictClosingTag(text, "</$name>", from, limit)

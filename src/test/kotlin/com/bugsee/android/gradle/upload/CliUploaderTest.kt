@@ -1228,6 +1228,31 @@ class CliUploaderTest {
         for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
     }
 
+    @Test fun `strict scan half of the union and its memo stay covered`() {
+        val cases = listOf(
+            "<TOKEN><Policy>a</Token>SECRET</Policy>",
+            "<SIGNATURE><Signature><b/></signature>SECRET</Signature>",
+            "<TOKEN><Token><b/></token>SECRET</Token>",
+        )
+        for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
+    @Test fun `touching redacted spans are merged into one marker`() {
+        assertEquals("<TOKEN><redacted></SessionToken>", BundleUploader.scrubForLog("<TOKEN><SessionToken></Token></SessionToken>"))
+    }
+
+    @Test fun `unterminated CDATA and comment openers stay linear`() {
+        for (nasty in listOf(
+            buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><!--") },
+            buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><!--<!--<!--<!--") },
+            buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><![CDATA[") },
+        )) {
+            val start = System.nanoTime()
+            BundleUploader.scrubForLog(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 3_000, "slow on ${nasty.take(20)}")
+        }
+    }
+
     @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
         assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
         assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
