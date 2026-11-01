@@ -226,15 +226,18 @@ internal object BundleUploader {
     }
 
     // Credential-named attribute values (all attribute values on a credential-named tag), outside redacted spans.
+    // Both tag matchers run: the quote-aware one handles `>` inside a value, the strict one still recognises a tag
+    // whose stray unpaired quote (`<Item note=O'Brien password="x">Don't`) makes the quote-aware one give up.
     private fun redactTagAttrs(segment: String): String {
         if (segment.indexOf('<') < 0) return segment
-        return XML_OPEN_TAG.replace(segment) { m ->
+        val rewrite = { m: MatchResult ->
             val attrs = m.groupValues[2]
             if (attrs.isEmpty()) m.value else {
                 val name = m.groupValues[1]
                 redactAttrs(m.value, localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name))
             }
         }
+        return XML_OPEN_TAG_STRICT.replace(XML_OPEN_TAG.replace(segment, rewrite), rewrite)
     }
 
     // Spans are [first, last) with last == first for an empty closed element; overlapping ones are merged.
