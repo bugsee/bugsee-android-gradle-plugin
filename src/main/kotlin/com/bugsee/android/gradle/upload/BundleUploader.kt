@@ -94,17 +94,19 @@ internal object BundleUploader {
 
     private fun localName(name: String) = name.substringAfterLast(':').lowercase()
 
-    // Bounded, case-insensitive search for [closeTag]: never scans past [limit] (an unbounded indexOf per opening
-    // tag would be quadratic). CDATA sections and comments are skipped, so a close tag quoted inside one does not
-    // end the element. Returns [NOT_FOUND] when the window holds no close tag, or [UNTERMINATED_SECTION] when a CDATA
-    // section or comment does not end within it (the text after it was not searched, so the caller must not memoise).
     private const val NOT_FOUND = -1
-    private const val UNTERMINATED_SECTION = -2
+    private const val NOT_FOUND_SKIPPED = -2
 
-    private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): Int {
+    // One bounded window scan (never past [limit]; an unbounded indexOf per opening tag would be quadratic).
+    // With [skipSections], a CDATA section or comment that terminates within the window is jumped over, so a close
+    // tag quoted inside it does not end the element; an unterminated one is scanned as plain text.
+    private class CloseScan(var exact: Int = -1, var caseInsensitive: Int = -1, var skipped: Boolean = false)
+
+    private fun scanForClose(text: String, closeTag: String, from: Int, limit: Int, skipSections: Boolean): CloseScan {
+        val r = CloseScan()
         var i = text.indexOf('<', from)
         while (i in 0..limit) {
-            val term = when {
+            val term = if (!skipSections) null else when {
                 text.startsWith("<![CDATA[", i) -> "]]>"
                 text.startsWith("<!--", i) -> "-->"
                 else -> null
@@ -112,14 +114,42 @@ internal object BundleUploader {
             if (term != null) {
                 var j = i + 1
                 while (j <= limit && !text.startsWith(term, j)) j++
-                if (j > limit) return UNTERMINATED_SECTION
-                i = text.indexOf('<', j + term.length)
-                continue
+                if (j <= limit) {
+                    r.skipped = true
+                    i = text.indexOf('<', j + term.length)
+                    continue
+                }
             }
-            if (text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) return i
+            if (text.startsWith(closeTag, i)) { r.exact = i; return r }
+            if (r.caseInsensitive < 0 && text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) r.caseInsensitive = i
             i = text.indexOf('<', i + 1)
         }
-        return NOT_FOUND
+        return r
+    }
+
+    // Close-tag choice, so that nothing the original exact-case "first close tag" rule redacted can leak:
+    // 1. the first exact-case close tag outside CDATA/comments; 2. else the first exact-case one anywhere (a quoted
+    // close tag then still closes, as before); 3. else the first differently-cased one. Returns [NOT_FOUND] when the
+    // window has none and nothing was skipped (safe to memoise), [NOT_FOUND_SKIPPED] otherwise (the main loop does not
+    // skip sections, so a same-name tag inside one must search for itself).
+    // The strict baseline: first exact-case close tag in the window, sections not skipped.
+    private fun findStrictClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
+        val r = scanForClose(text, closeTag, from, limit, skipSections = false)
+        return CloseHit(if (r.exact >= 0) r.exact else NOT_FOUND)
+    }
+
+    private class CloseHit(val pos: Int, val caseInsensitiveOnly: Boolean = false)
+
+    private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
+        val outside = scanForClose(text, closeTag, from, limit, skipSections = true)
+        if (outside.exact >= 0) return CloseHit(outside.exact)
+        val anywhere = if (outside.skipped) scanForClose(text, closeTag, from, limit, skipSections = false) else outside
+        return when {
+            anywhere.exact >= 0 -> CloseHit(anywhere.exact)
+            outside.caseInsensitive >= 0 -> CloseHit(outside.caseInsensitive, caseInsensitiveOnly = true)
+            anywhere.caseInsensitive >= 0 -> CloseHit(anywhere.caseInsensitive, caseInsensitiveOnly = true)
+            else -> CloseHit(if (outside.skipped) NOT_FOUND_SKIPPED else NOT_FOUND)
+        }
     }
 
     // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped,
@@ -148,54 +178,104 @@ internal object BundleUploader {
      * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
      * `List<AccessToken> but` or `=<your-token>.` is left alone.
      */
+    // End of an unclosed element's text: the next tag, skipping CDATA sections and comments (an unterminated one
+    // runs to the end of the text).
+    private fun unclosedEnd(text: String, from: Int): Int {
+        var nextLt = text.indexOf('<', from)
+        while (nextLt >= 0) {
+            val term = when {
+                text.startsWith("<![CDATA[", nextLt) -> "]]>"
+                text.startsWith("<!--", nextLt) -> "-->"
+                else -> break
+            }
+            val t = text.indexOf(term, nextLt)
+            nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
+        }
+        return if (nextLt < 0) text.length else nextLt
+    }
+
     internal fun redactSecretXml(text: String): String {
         if (text.indexOf('<') < 0) return text
+        // Two scans whose redacted spans are unioned: the strict scan (first exact-case close tag, no section
+        // skipping) is the baseline behaviour, so nothing it redacts can leak; the refined scan only adds coverage
+        // (a close tag quoted in CDATA/comments does not end the element, differently-cased close tags).
+        val spans = mergeSpans(collectSecretSpans(text, refined = false) + collectSecretSpans(text, refined = true))
         val out = StringBuilder(text.length)
+        var pos = 0
+        for (sp in spans) {
+            out.append(redactTagAttrs(text.substring(pos, sp.first)))
+            out.append("<redacted>")
+            pos = sp.last
+        }
+        out.append(redactTagAttrs(text.substring(pos)))
+        return out.toString()
+    }
+
+    // Credential-named attribute values (all attribute values on a credential-named tag), outside redacted spans.
+    private fun redactTagAttrs(segment: String): String {
+        if (segment.indexOf('<') < 0) return segment
+        return XML_OPEN_TAG.replace(segment) { m ->
+            val attrs = m.groupValues[2]
+            if (attrs.isEmpty()) m.value else {
+                val name = m.groupValues[1]
+                redactAttrs(m.value, localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name))
+            }
+        }
+    }
+
+    // Spans are [first, last) with last == first for an empty closed element; overlapping ones are merged.
+    private fun mergeSpans(all: List<IntRange>): List<IntRange> {
+        val sorted = all.sortedWith(compareBy({ it.first }, { it.last }))
+        val merged = ArrayList<IntRange>()
+        for (sp in sorted) {
+            val cur = merged.lastOrNull()
+            if (cur != null && (sp.first < cur.last || (sp.first == cur.first))) {
+                if (sp.last > cur.last) merged[merged.size - 1] = cur.first..sp.last
+            } else {
+                merged.add(sp)
+            }
+        }
+        return merged
+    }
+
+    private fun collectSecretSpans(text: String, refined: Boolean): List<IntRange> {
+        val spans = ArrayList<IntRange>()
         var pos = 0
         // Per close tag: scanned-through position of a failed search, so dense unclosed tags do not rescan the same window.
         val searchedTo = HashMap<String, Int>()
-        var m = XML_OPEN_TAG.find(text)
+        var m = XML_OPEN_TAG.find(text, pos)
         while (m != null) {
             val start = m.range.first
-            var end = m.range.last + 1
-            out.append(text, pos, start)
+            val afterOpen = m.range.last + 1
+            var end = afterOpen
             val name = m.groupValues[1]
             val attrs = m.groupValues[2]
             val local = localName(name)
             val secretTag = local == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
-            out.append(if (attrs.isEmpty()) m.value else redactAttrs(m.value, secretTag))
             if (secretTag && !attrs.endsWith("/")) {
                 val closeKey = "</${name.lowercase()}>"
-                val limit = minOf(text.length, end + MAX_XML_ELEMENT_TEXT)
-                val close = findClosingTag(text, "</$name>", maxOf(end, searchedTo[closeKey] ?: 0), limit)
+                val limit = minOf(text.length, afterOpen + MAX_XML_ELEMENT_TEXT)
+                val from = maxOf(afterOpen, searchedTo[closeKey] ?: 0)
+                val hit = if (refined) findClosingTag(text, "</$name>", from, limit) else findStrictClosingTag(text, "</$name>", from, limit)
+                val close = hit.pos
+                val unclosedEligible = local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)
                 if (close >= 0) {
-                    out.append("<redacted>")
                     end = close
+                    // A differently-cased close tag is only a hint: never redact less than the unclosed rule would.
+                    if (hit.caseInsensitiveOnly && unclosedEligible) end = maxOf(end, unclosedEnd(text, afterOpen))
+                    spans.add(afterOpen..end)
                 } else {
                     if (close == NOT_FOUND) searchedTo[closeKey] = limit + 1
-                    if (local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)) {
-                        // CDATA sections and comments belong to the element text: jump to their terminator.
-                        var nextLt = text.indexOf('<', end)
-                        while (nextLt >= 0) {
-                            val term = when {
-                                text.startsWith("<![CDATA[", nextLt) -> "]]>"
-                                text.startsWith("<!--", nextLt) -> "-->"
-                                else -> break
-                            }
-                            val t = text.indexOf(term, nextLt)
-                            nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
-                        }
-                        val next = if (nextLt < 0) text.length else nextLt
-                        if (next > end) out.append("<redacted>")
-                        end = next
+                    if (unclosedEligible) {
+                        end = unclosedEnd(text, afterOpen)
+                        if (end > afterOpen) spans.add(afterOpen..end)
                     }
                 }
             }
             pos = end
             m = XML_OPEN_TAG.find(text, pos)
         }
-        out.append(text, pos, text.length)
-        return out.toString()
+        return spans
     }
 
     private val XML_ERROR_CODE = Regex("<Code>([A-Za-z0-9_.\\-]{1,64})</Code>")

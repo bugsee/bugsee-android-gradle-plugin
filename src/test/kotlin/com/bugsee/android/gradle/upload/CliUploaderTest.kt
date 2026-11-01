@@ -1219,6 +1219,15 @@ class CliUploaderTest {
         }
     }
 
+    @Test fun `memo does not cover a skipped CDATA or comment section holding a same-name element`() {
+        val cases = listOf(
+            "x<SessionToken>a" + "<![CDATA[<SessionToken>SECRET2</SessionToken>]]>",
+            "x<Token>a<![CDATA[<Token>SECRET1</Token>]]>",
+            "x<Token>a<!-- <Token>SECRET3</Token> -->",
+        )
+        for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
     @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
         assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
         assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
