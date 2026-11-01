@@ -1302,6 +1302,15 @@ class CliUploaderTest {
         assertEquals("<a x=\"foo>bar", BundleUploader.scrubForLog("<a x=\"foo>bar"))
         assertFalse(BundleUploader.scrubForLog("<Item note=O'Brien password=\"hunter2\">Don't</Item>").contains("hunter2"))
         assertFalse(BundleUploader.scrubForLog("<Item note=O'Brien api_key=\"hunter3\">Don't</Item>").contains("hunter3"))
+        for ((c, secret) in listOf(
+            "<Item api_key=\"K1\" a='q password=\"S2\">y' b=\"c\">" to "S2",
+            "<Error><Item token=\"T1\" note='secret=\"S4\" >'/></Error>" to "S4",
+            "<Item token=\"T1\">body</Item>" to "T1",
+            "<Token a=\"SECRETPART>x\">v</Token>" to "SECRETPART",
+            "<Token password=\"LEFT>RIGHT\">v</Token>" to "LEFT",
+        )) {
+            assertFalse(BundleUploader.scrubForLog(c).contains(secret), c)
+        }
     }
 
     @Test fun `comment terminator search starts after the opener and the exact-case close tag wins`() {

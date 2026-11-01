@@ -173,11 +173,6 @@ internal object BundleUploader {
         return i < 0 || text[i] == '>'
     }
 
-    private fun redactAttrs(tag: String, allSecret: Boolean): String =
-        tag.replace(XML_ATTR) { a ->
-            if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) "${a.groupValues[1]}${a.groupValues[2]}\"<redacted>\"" else a.value
-        }
-
     // End of an unclosed element's text: the next tag, skipping CDATA sections and comments (an unterminated one
     // runs to the end of the text).
     // The strict baseline ([refined] false) searches a terminator from the opener itself, so `<!-->` counts as a
@@ -213,46 +208,49 @@ internal object BundleUploader {
         // Two scans whose redacted spans are unioned: the strict scan (first exact-case close tag, no section
         // skipping) is the baseline behaviour, so nothing it redacts can leak; the refined scan only adds coverage
         // (a close tag quoted in CDATA/comments does not end the element, differently-cased close tags).
-        val spans = mergeSpans(collectSecretSpans(text, refined = false) + collectSecretSpans(text, refined = true))
+        // Credential-named attribute values are found on the whole original text (both tag matchers), so a span that
+        // starts inside a tag's quoted value cannot hide the rest of that value; everything is merged and applied once.
+        val reds = ArrayList<Redaction>()
+        for (sp in collectSecretSpans(text, refined = false) + collectSecretSpans(text, refined = true)) reds.add(Redaction(sp.first, sp.last, true))
+        collectAttrRedactions(text, reds)
+        reds.sortWith(compareBy({ it.start }, { it.end }))
         val out = StringBuilder(text.length)
         var pos = 0
-        for (sp in spans) {
-            out.append(redactTagAttrs(text.substring(pos, sp.first)))
-            out.append("<redacted>")
-            pos = sp.last
+        var i = 0
+        while (i < reds.size) {
+            var start = reds[i].start
+            var end = reds[i].end
+            var span = reds[i].isSpan
+            i++
+            while (i < reds.size && reds[i].start <= end) {
+                if (reds[i].end > end) end = reds[i].end
+                span = span || reds[i].isSpan
+                i++
+            }
+            out.append(text, pos, start).append(if (span) "<redacted>" else "\"<redacted>\"")
+            pos = end
         }
-        out.append(redactTagAttrs(text.substring(pos)))
+        out.append(text, pos, text.length)
         return out.toString()
     }
 
-    // Credential-named attribute values (all attribute values on a credential-named tag), outside redacted spans.
-    // Both tag matchers run: the quote-aware one handles `>` inside a value, the strict one still recognises a tag
-    // whose stray unpaired quote (`<Item note=O'Brien password="x">Don't`) makes the quote-aware one give up.
-    private fun redactTagAttrs(segment: String): String {
-        if (segment.indexOf('<') < 0) return segment
-        val rewrite = { m: MatchResult ->
-            val attrs = m.groupValues[2]
-            if (attrs.isEmpty()) m.value else {
-                val name = m.groupValues[1]
-                redactAttrs(m.value, localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name))
-            }
-        }
-        return XML_OPEN_TAG_STRICT.replace(XML_OPEN_TAG.replace(segment, rewrite), rewrite)
-    }
+    // [start, end) of text to replace: an element's text (span) or a quoted attribute value.
+    private class Redaction(val start: Int, val end: Int, val isSpan: Boolean)
 
-    // Spans are [first, last) with last == first for an empty closed element; overlapping ones are merged.
-    private fun mergeSpans(all: List<IntRange>): List<IntRange> {
-        val sorted = all.sortedWith(compareBy({ it.first }, { it.last }))
-        val merged = ArrayList<IntRange>()
-        for (sp in sorted) {
-            val cur = merged.lastOrNull()
-            if (cur != null && (sp.first <= cur.last)) {
-                if (sp.last > cur.last) merged[merged.size - 1] = cur.first..sp.last
-            } else {
-                merged.add(sp)
+    private fun collectAttrRedactions(text: String, into: MutableList<Redaction>) {
+        for (rx in listOf(XML_OPEN_TAG, XML_OPEN_TAG_STRICT)) {
+            for (m in rx.findAll(text)) {
+                if (m.groupValues[2].isEmpty()) continue
+                val name = m.groupValues[1]
+                val allSecret = localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
+                for (a in XML_ATTR.findAll(m.value)) {
+                    if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) {
+                        val v = a.groups[3]!!.range
+                        into.add(Redaction(m.range.first + v.first, m.range.first + v.last + 1, false))
+                    }
+                }
             }
         }
-        return merged
     }
 
     private fun collectSecretSpans(text: String, refined: Boolean): List<IntRange> {
