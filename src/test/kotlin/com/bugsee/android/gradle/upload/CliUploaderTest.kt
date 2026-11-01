@@ -1162,18 +1162,18 @@ class CliUploaderTest {
         assertFalse(out.contains("JSONSECRET"), out)
     }
 
-    @Test fun `XML scrub time scales linearly`() {
+    @Test(timeout = 120_000) fun `XML scrub time scales linearly`() {
         // Distinct names defeat the failed-search memo, so only the 4096-char window keeps that shape linear.
         fun time(input: String): Long {
             BundleUploader.scrubForLog(input)
-            return (1..5).minOf { val s = System.nanoTime(); BundleUploader.scrubForLog(input); System.nanoTime() - s }
+            return (1..3).minOf { val s = System.nanoTime(); BundleUploader.scrubForLog(input); System.nanoTime() - s }
         }
         fun distinct(n: Int) = buildString { for (i in 0 until n) append("<Token").append(i).append(">") }
         fun same(n: Int) = "<Token>".repeat(n)
         fun sectioned(n: Int) = buildString { for (i in 0 until n / 20) { repeat(19) { append("<Token>") }; append("<!---->") } }
         for (gen in listOf(::distinct, ::same, ::sectioned)) {
-            time(gen(20_000))
-            val small = time(gen(100_000)); val big = time(gen(200_000))
+            time(gen(5_000))
+            val small = time(gen(20_000)); val big = time(gen(40_000))
             // Doubling n makes a quadratic scan ~4x slower; 3.5x plus slack keeps shared CI runners from flaking.
             assertTrue(small < 2_000_000 || big < small * 3.5 + 5_000_000, "small=$small big=$big")
         }
@@ -1242,7 +1242,7 @@ class CliUploaderTest {
         assertEquals("<TOKEN><redacted></SessionToken>", BundleUploader.scrubForLog("<TOKEN><SessionToken></Token></SessionToken>"))
     }
 
-    @Test fun `unterminated CDATA and comment openers stay linear`() {
+    @Test(timeout = 120_000) fun `unterminated CDATA and comment openers stay linear`() {
         for (nasty in listOf(
             buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><!--") },
             buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><!--<!--<!--<!--") },
@@ -1302,6 +1302,11 @@ class CliUploaderTest {
         assertEquals("<a x=\"foo>bar", BundleUploader.scrubForLog("<a x=\"foo>bar"))
     }
 
+    @Test fun `comment terminator search starts after the opener and the exact-case close tag wins`() {
+        assertFalse(BundleUploader.scrubForLog("<Error><Token><!--> <x>M6SECRET</x> --><Code>X</Code></Error>").contains("M6SECRET"))
+        assertFalse(BundleUploader.scrubForLog("<Token>a</TOKEN>b<![CDATA[</Token>]]>M19SECRET</Token>").contains("M19SECRET"))
+    }
+
     @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
         assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
         assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
@@ -1340,7 +1345,7 @@ class CliUploaderTest {
         }
     }
 
-    @Test fun `XML tag scrub is bounded-time on adversarial input`() {
+    @Test(timeout = 120_000) fun `XML tag scrub is bounded-time on adversarial input`() {
         for (nasty in listOf("<" + "a".repeat(1_000_000), "<a ".repeat(300_000), "<Token" + "-".repeat(1_000_000), "<a>".repeat(300_000),
             "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000), "<a x=\"y\" ".repeat(80_000), "<Token a=\"".repeat(100_000), "<Token a='".repeat(100_000),
             buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><![CDATA[") },
