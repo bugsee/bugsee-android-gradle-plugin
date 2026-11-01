@@ -174,8 +174,11 @@ internal class BugseePluginImpl(
                     //    can be assigned after the plugin is applied).
                     if (isBugseeInternalModule(project)) return@withDependencies
                     // A module with no Android plugin (a Kotlin/JVM module, lint-only module, ...) must
-                    // never receive the Android SDK AARs: they cannot resolve on a JVM classpath.
-                    if (!isAndroidModule(project)) {
+                    // never receive the Android SDK AARs: they cannot resolve on a JVM classpath. A
+                    // dynamic-feature or test module only does when the Compose compiler plugin applies
+                    // to it (it emits calls into the SDK); see [isSdkModule].
+                    val resolver = if (dslFinal) settingsResolver() else freshSettingsResolver()
+                    if (!isSdkModule(project, resolver)) {
                         // Bugsee may be applied before the Android plugin and `implementation` read in
                         // between: decide again in afterEvaluate ([reconcileAutoAdd]) instead of
                         // skipping for good. Past the DSL-final point the module type is settled.
@@ -183,7 +186,7 @@ internal class BugseePluginImpl(
                             autoAddRecord = AutoAddRecord(
                                 config,
                                 AutoAddResult(
-                                    readAutoAddInputs(project, freshSettingsResolver()), emptyList(), emptyList(),
+                                    readAutoAddInputs(project, resolver), emptyList(), emptyList(),
                                 ),
                             )
                         }
@@ -195,10 +198,7 @@ internal class BugseePluginImpl(
                     // at apply time), the DSL is not final: the decision is made with what is
                     // known, NOT memoized, and re-checked in afterEvaluate (see
                     // [reconcileAutoAdd]).
-                    val added = computeAutoAdds(
-                        project,
-                        if (dslFinal) settingsResolver() else freshSettingsResolver(),
-                    )
+                    val added = computeAutoAdds(project, resolver)
                     deps.addAll(added.dependencies)
                     // A provisional pass is not announced; [reconcileAutoAdd] logs the final one.
                     if (dslFinal) added.notes.forEach { project.logger.warn(it) } else autoAddRecord = AutoAddRecord(config, added)
@@ -219,8 +219,12 @@ internal class BugseePluginImpl(
             if (!androidWired) {
                 if (project.extensions.findByName("android") == null) {
                     warnNoAndroidModule(project)
+                } else if (isFeatureOrTestModule(project)) {
+                    // Android modules the plugin deliberately does not wire; same opt-out as the library warning.
+                    warnFeatureOrTestModule(project, isDebug)
                 } else if (isDebug) {
-                    // e.g. com.android.test / dynamic-feature: the Android plugin is there but nothing is wired.
+                    // An `android` extension from an AGP plugin that is neither wired nor a feature/test module
+                    // (e.g. a future AGP plugin): the Android plugin is there but nothing is wired.
                     project.logger.warn(
                         "Bugsee: only application modules are configured; nothing wired for ${project.path}"
                     )
@@ -261,6 +265,57 @@ internal class BugseePluginImpl(
         project.extensions.findByName("android") != null ||
             project.extensions.findByName("androidComponents") != null ||
             ANDROID_PLUGIN_IDS.any { project.pluginManager.hasPlugin(it) }
+
+    /**
+     * True for the AGP plugins whose modules are not wired and only get the SDK auto-add when the
+     * Compose compiler plugin needs the SDK: a dynamic-feature module compiles against its base module
+     * (which owns the SDK), and a test module instruments an app that has the SDK itself.
+     */
+    private fun isFeatureOrTestModule(project: Project): Boolean =
+        FEATURE_OR_TEST_PLUGIN_IDS.any { project.pluginManager.hasPlugin(it) }
+
+    /**
+     * True when the SDK auto-add applies to [project]: an Android module (see [isAndroidModule]), except
+     * that a dynamic-feature or test module only qualifies while the Compose compiler plugin applies to
+     * it, because the instrumentation it emits calls into the SDK (and the Compose extension module).
+     * Removing the SDK there would leave those calls unresolved or silently drop the tag/secure wraps.
+     * [composeNeedsSdk] mirrors the gates of [isApplicable] that do not depend on a compilation. It
+     * deliberately omits the Kotlin-version gate: on an unsupported Kotlin the module keeps the SDK it
+     * always had (a superset of "the plugin applies", never a loss).
+     */
+    private fun isSdkModule(project: Project, resolver: SettingsResolver): Boolean =
+        isAndroidModule(project) && (!isFeatureOrTestModule(project) || composeNeedsSdk(project, resolver))
+
+    private fun composeNeedsSdk(project: Project, resolver: SettingsResolver): Boolean {
+        if (!hasComposeDependency(project)) return false
+        // Every compilation of a `com.android.test` module is test code: it needs `composeInTests`.
+        if (project.pluginManager.hasPlugin("com.android.test") &&
+            !isCompilerFeatureEnabled(resolver, INST_COMPOSE_IN_TESTS, default = false)
+        ) return false
+        return isCompilerFeatureEnabled(resolver, INST_COMPOSE) || isCompilerFeatureEnabled(resolver, INST_COMPOSE_SECURE)
+    }
+
+    /**
+     * Default-level warning for a dynamic-feature or test module that applies the plugin: nothing is
+     * wired (no upload tasks, no ASM instrumentation). The SDK is added only when Compose needs it (see
+     * [isSdkModule]), so the warning also fires for such a module. Silenced by `warnLibraryModule=false`;
+     * exempt for Bugsee's own group.
+     * Guarded like [warnNoAndroidModule] so the message can never be a cause of failure.
+     */
+    private fun warnFeatureOrTestModule(project: Project, isDebug: Boolean) {
+        val pluginId = FEATURE_OR_TEST_PLUGIN_IDS.first { project.pluginManager.hasPlugin(it) }
+        if (isDebug) project.logger.warn("Bugsee: only application modules are configured; nothing wired for ${project.path}")
+        val enabled = try {
+            settingsResolver().globalValue(WARN_LIBRARY_MODULE)
+        } catch (e: Exception) {
+            true
+        }
+        if (enabled && !isBugseeSdkGroup(project.group?.toString().orEmpty())) {
+            project.logger.warn(
+                featureOrTestModuleMessage(project.path, project.path == ":", project.name, pluginId)
+            )
+        }
+    }
 
     /**
      * Default-level warning for a module that applies the plugin but has no recognized Android plugin
@@ -340,6 +395,8 @@ internal class BugseePluginImpl(
         // The first AGP hook after the build script body and before ANY `onVariants` callback (which
         // reads the declared dependencies to gate instrumentation) — the earliest point at which
         // the DSL is final and late enough that the auto-add can still be corrected.
+        // (Feature and test modules never reach this hook: nothing is wired for them, so their DSL is
+        // declared final by the plugin's own afterEvaluate, and the early-read reconcile covers them.)
         androidComponents.finalizeDsl { onDslFinal(project) }
 
         androidComponents.onVariants { variant ->
@@ -673,7 +730,28 @@ internal class BugseePluginImpl(
         autoAddRecord = null
         // Recorded while the module was not (yet) an Android module and still is not: nothing to add.
         // The group is assigned late, so the Bugsee-module exemption is evaluated here too.
-        if (!isAndroidModule(project)) return
+        if (!isSdkModule(project, settingsResolver())) {
+            // Settled as a dynamic-feature/test module after a provisional pass added dependencies.
+            if (record.result.dependencies.isNotEmpty()) {
+                val failure = runCatching { record.config.dependencies.removeAll(record.result.dependencies.toSet()) }
+                    .exceptionOrNull()
+                // A Bugsee SDK-group module never needed the auto-add (and main stayed silent here): its group
+                // was assigned after the early read, so the provisional add is not worth a user-facing warning.
+                if (failure != null && isBugseeInternalModule(project)) {
+                    project.logger.debug("Bugsee: could not take back the provisional auto-add", failure)
+                } else if (failure != null) {
+                    project.logger.debug("Bugsee: could not take back the provisional auto-add", failure)
+                    val message = "Bugsee: '${record.config.name}' was read before the bugsee { } block was " +
+                        "evaluated and a configuration extending it has already been resolved, so the " +
+                        "Bugsee SDK added provisionally to ${project.path} could not be taken back. " +
+                        "Bugsee dependencies are not meant to be added to this module: remove them or " +
+                        "apply the Bugsee plugin and its bugsee { } block before whatever reads the configuration."
+                    project.logger.warn(message)
+                    uncorrectableAutoAddHook?.invoke(message)
+                }
+            }
+            return
+        }
         if (isBugseeInternalModule(project)) {
             // Group assigned after the early read: take back what the provisional pass added.
             if (record.result.dependencies.isNotEmpty()) {
@@ -2044,6 +2122,9 @@ internal class BugseePluginImpl(
         /** Library-like AGP plugins with no `android` extension: library-module warning, nothing wired. */
         private val LIBRARY_LIKE_PLUGIN_IDS = listOf(KMP_LIBRARY_PLUGIN_ID, FUSED_LIBRARY_PLUGIN_ID)
 
+        /** Android modules that get a warning and nothing wired; the SDK auto-add only when Compose needs it. */
+        private val FEATURE_OR_TEST_PLUGIN_IDS = listOf("com.android.dynamic-feature", "com.android.test")
+
         /**
          * [BugseePluginExtension.cliPath] with a relative DSL value resolved against [project]'s directory
          * (the module applying the plugin). A relative value from `bugsee.properties` was already made
@@ -2134,6 +2215,27 @@ internal class BugseePluginImpl(
                 "pluginManager.withPlugin(\"com.android.application\")). To silence this on purpose, set " +
                 "bugsee { warnLibraryModule.set(false) } or plugin.warnLibraryModule=false. " +
                 "See the README, \"Library modules\"."
+
+        /** Default-level warning for a dynamic-feature or test module that applies the plugin. */
+        internal fun featureOrTestModuleMessage(
+            projectPath: String,
+            isRoot: Boolean,
+            name: String,
+            pluginId: String,
+        ): String {
+            val test = pluginId == "com.android.test"
+            return "Bugsee: ${if (isRoot) "root project '$name'" else projectPath} is a " +
+                (if (test) "test module" else "dynamic-feature module") +
+                " ($pluginId), so no upload tasks or ASM bytecode instrumentation are wired for it. Bugsee " +
+                "belongs in the application module, which holds the SDK as an implementation dependency" +
+                (if (test) "" else "; the SDK cannot be in a feature alone") +
+                ". Code here that calls the SDK must declare it itself as compileOnly. The SDK (and the " +
+                "Compose compiler plugin) is still added to this module only when it uses Compose" +
+                (if (test) " with instrumentation.composeInTests=true" else "") + ". To " +
+                "silence this on purpose, set bugsee { warnLibraryModule.set(false) } or " +
+                "plugin.warnLibraryModule=false. See the README, \"Library modules\" (Dynamic-feature and " +
+                "test modules)."
+        }
 
         /**
          * Default-level warning for a module with no recognized Android plugin and no `android`

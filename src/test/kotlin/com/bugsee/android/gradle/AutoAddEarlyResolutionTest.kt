@@ -137,4 +137,63 @@ class AutoAddEarlyResolutionTest {
 
         assertEquals(before, p.configurations.getByName("implementation").dependencies.toList())
     }
+
+    @Test
+    fun featureModuleProvisionalAddThatCannotBeTakenBackWarnsAndLeavesTheSetIntact() {
+        // A dynamic-feature module keeps the SDK only while Compose instrumentation applies. A provisional
+        // add made on defaults (Compose declared, early read) is taken back when the final DSL turns
+        // Compose off; if a configuration extending `implementation` was already resolved the refusal
+        // must be reported, not swallowed.
+        val p = ProjectBuilder.builder().build()
+        p.configurations.create("implementation")
+        p.extensions.add("android", Any())
+        p.pluginManager.apply("com.android.dynamic-feature")
+        p.plugins.apply(BugseePlugin::class.java)
+        p.dependencies.add("implementation", "androidx.compose.runtime:runtime:1.7.8")
+        p.earlyRead()
+        assertTrue("bugsee-android" in p.names(), "the provisional pass adds the SDK for a Compose feature: ${p.names()}")
+        val probe = p.configurations.create("probe") {
+            it.extendsFrom(p.configurations.getByName("implementation"))
+            it.isCanBeResolved = true
+        }
+        runCatching { probe.resolve() }
+        val before = p.configurations.getByName("implementation").dependencies.toList()
+
+        p.bugsee { instrumentation { it.compose.set(false); it.composeSecure.set(false) } }
+        val warnings = mutableListOf<String>()
+        p.plugins.getPlugin(BugseePlugin::class.java).implementation()!!.uncorrectableAutoAddHook = { warnings.add(it) }
+        p.evaluateNow() // must not throw
+
+        assertTrue(
+            warnings.singleOrNull()?.contains("could not be taken back") == true,
+            "the refused take-back must be reported, was: $warnings",
+        )
+        assertEquals(before, p.configurations.getByName("implementation").dependencies.toList())
+    }
+
+    @Test
+    fun featureModuleInTheBugseeGroupStaysQuietWhenTheTakeBackIsRefused() {
+        // Same shape as above, but the group (assigned after the early read) is a Bugsee SDK group: those
+        // modules never needed the auto-add and main stayed silent, so no user-facing warning.
+        val p = ProjectBuilder.builder().build()
+        p.configurations.create("implementation")
+        p.extensions.add("android", Any())
+        p.pluginManager.apply("com.android.dynamic-feature")
+        p.plugins.apply(BugseePlugin::class.java)
+        p.dependencies.add("implementation", "androidx.compose.runtime:runtime:1.7.8")
+        p.earlyRead()
+        val probe = p.configurations.create("probe") {
+            it.extendsFrom(p.configurations.getByName("implementation"))
+            it.isCanBeResolved = true
+        }
+        runCatching { probe.resolve() }
+
+        p.group = "com.bugsee.sdk"
+        p.bugsee { instrumentation { it.compose.set(false); it.composeSecure.set(false) } }
+        val warnings = mutableListOf<String>()
+        p.plugins.getPlugin(BugseePlugin::class.java).implementation()!!.uncorrectableAutoAddHook = { warnings.add(it) }
+        p.evaluateNow() // must not throw
+
+        assertTrue(warnings.isEmpty(), "a Bugsee-group module must not get the warning, was: $warnings")
+    }
 }
