@@ -1276,6 +1276,24 @@ class CliUploaderTest {
         assertEquals("a<Policy><redacted></Policy>b<Signature><redacted>", BundleUploader.scrubForLog("a<Policy></Policy>b<Signature>SEC5"))
     }
 
+    @Test fun `comment opener followed by gt is not a complete comment`() {
+        for (c in listOf(
+            "<Error><Token><!--> </Token> SECRET1 --></Token><Code>X</Code></Error>",
+            "<Error><SessionToken><!---> </SessionToken> SECRET2 --></SessionToken></Error>",
+            "<Error><Signature><!--> </Signature> SECRET3 --></Signature></Error>",
+        )) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
+    @Test fun `window edges memo distance and attributes on Policy are pinned`() {
+        assertFalse(BundleUploader.scrubForLog("x<Token>a<![CDATA[<TOKEN>SECRET1</token>]]>").contains("SECRET1"))
+        // "SECRET" + 4090 chars is exactly the 4096-char window: the close tag must still be found at its edge.
+        assertFalse(BundleUploader.scrubForLog("x <Token>SECRET" + "a".repeat(4090) + "</Token>").contains("SECRET"))
+        assertFalse(BundleUploader.scrubForLog("x <Token>" + "a".repeat(93) + "x <Token>SECRET3" + "b".repeat(4040) + "</Token>").contains("SECRET3"))
+        assertFalse(BundleUploader.scrubForLog("x <Token>SECRET4" + "a".repeat(2000) + "</Token>").contains("SECRET4"))
+        assertFalse(BundleUploader.scrubForLog("<Policy version=\"SECRET5\">p</Policy>").contains("SECRET5"))
+        assertEquals("<Error><Token><Code>", BundleUploader.scrubForLog("<Error><Token><Code>"))
+    }
+
     @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
         assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
         assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))

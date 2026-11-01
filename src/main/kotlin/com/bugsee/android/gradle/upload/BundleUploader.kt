@@ -112,7 +112,8 @@ internal object BundleUploader {
                 else -> null
             }
             if (term != null) {
-                var j = i + 1
+                // The terminator search starts after the opener: `<!-->` and `<!--->` do not close a comment.
+                var j = i + (if (term == "-->") 4 else 9)
                 while (j <= limit && !text.startsWith(term, j)) j++
                 if (j > limit) {
                     // A section that does not end in the window: whatever follows may be quoted text, so no later
@@ -137,7 +138,7 @@ internal object BundleUploader {
         return CloseHit(if (r.exact >= 0) r.exact else NOT_FOUND)
     }
 
-    private class CloseHit(val pos: Int, val caseInsensitiveOnly: Boolean = false)
+    private class CloseHit(val pos: Int)
 
     // Refined close-tag choice: the first exact-case close tag outside CDATA/comments, else the first
     // differently-cased one outside them. A close tag quoted inside a section never counts (the strict scan, unioned
@@ -148,7 +149,7 @@ internal object BundleUploader {
         val r = scanForClose(text, closeTag, from, limit, skipSections = true)
         return when {
             r.exact >= 0 -> CloseHit(r.exact)
-            r.caseInsensitive >= 0 -> CloseHit(r.caseInsensitive, caseInsensitiveOnly = true)
+            r.caseInsensitive >= 0 -> CloseHit(r.caseInsensitive)
             else -> CloseHit(if (r.skipped || r.unterminated) NOT_FOUND_SKIPPED else NOT_FOUND)
         }
     }
@@ -173,7 +174,9 @@ internal object BundleUploader {
 
     // End of an unclosed element's text: the next tag, skipping CDATA sections and comments (an unterminated one
     // runs to the end of the text).
-    private fun unclosedEnd(text: String, from: Int): Int {
+    // The strict baseline ([refined] false) searches a terminator from the opener itself, so `<!-->` counts as a
+    // complete comment, exactly as before; the refined scan starts after the opener (XML semantics).
+    private fun unclosedEnd(text: String, from: Int, refined: Boolean): Int {
         var nextLt = text.indexOf('<', from)
         while (nextLt >= 0) {
             val term = when {
@@ -181,7 +184,7 @@ internal object BundleUploader {
                 text.startsWith("<!--", nextLt) -> "-->"
                 else -> break
             }
-            val t = text.indexOf(term, nextLt)
+            val t = text.indexOf(term, if (refined) nextLt + (if (term == "-->") 4 else 9) else nextLt)
             nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
         }
         return if (nextLt < 0) text.length else nextLt
@@ -267,13 +270,11 @@ internal object BundleUploader {
                 val unclosedEligible = local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)
                 if (close >= 0) {
                     end = close
-                    // A differently-cased close tag is only a hint: never redact less than the unclosed rule would.
-                    if (hit.caseInsensitiveOnly && unclosedEligible) end = maxOf(end, unclosedEnd(text, afterOpen))
                     spans.add(afterOpen..end)
                 } else {
                     if (close == NOT_FOUND) searchedTo[closeKey] = limit + 1
                     if (unclosedEligible) {
-                        end = unclosedEnd(text, afterOpen)
+                        end = unclosedEnd(text, afterOpen, refined)
                         if (end > afterOpen) spans.add(afterOpen..end)
                     }
                 }
