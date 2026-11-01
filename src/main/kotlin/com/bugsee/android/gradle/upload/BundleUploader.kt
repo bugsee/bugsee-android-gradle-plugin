@@ -100,12 +100,10 @@ internal object BundleUploader {
     // One bounded window scan (never past [limit]; an unbounded indexOf per opening tag would be quadratic).
     // With [skipSections], a CDATA section or comment that terminates within the window is jumped over, so a close
     // tag quoted inside it does not end the element; an unterminated one is scanned as plain text.
-    private class CloseScan(var exact: Int = -1, var caseInsensitive: Int = -1, var skipped: Boolean = false)
+    private class CloseScan(var exact: Int = -1, var caseInsensitive: Int = -1, var skipped: Boolean = false, var unterminated: Boolean = false)
 
     private fun scanForClose(text: String, closeTag: String, from: Int, limit: Int, skipSections: Boolean): CloseScan {
         val r = CloseScan()
-        var openCdata = false
-        var openComment = false // an unterminated section of a kind cannot be terminated by a later one in the window
         var i = text.indexOf('<', from)
         while (i in 0..limit) {
             val term = if (!skipSections) null else when {
@@ -113,15 +111,18 @@ internal object BundleUploader {
                 text.startsWith("<!--", i) -> "-->"
                 else -> null
             }
-            if (term != null && !(if (term == "]]>") openCdata else openComment)) {
+            if (term != null) {
                 var j = i + 1
                 while (j <= limit && !text.startsWith(term, j)) j++
-                if (j <= limit) {
-                    r.skipped = true
-                    i = text.indexOf('<', j + term.length)
-                    continue
+                if (j > limit) {
+                    // A section that does not end in the window: whatever follows may be quoted text, so no later
+                    // close tag counts (the unclosed-element rule covers the rest).
+                    r.unterminated = true
+                    return r
                 }
-                if (term == "]]>") openCdata = true else openComment = true
+                r.skipped = true
+                i = text.indexOf('<', j + term.length)
+                continue
             }
             if (text.startsWith(closeTag, i)) { r.exact = i; return r }
             if (r.caseInsensitive < 0 && text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) r.caseInsensitive = i
@@ -138,20 +139,17 @@ internal object BundleUploader {
 
     private class CloseHit(val pos: Int, val caseInsensitiveOnly: Boolean = false)
 
-    // Close-tag choice, so that nothing the original exact-case "first close tag" rule redacted can leak:
-    // 1. the first exact-case close tag outside CDATA/comments; 2. else the first exact-case one anywhere (a quoted
-    // close tag then still closes, as before); 3. else the first differently-cased one. Returns [NOT_FOUND] when the
-    // window has none and nothing was skipped (safe to memoise), [NOT_FOUND_SKIPPED] otherwise (the main loop does not
-    // skip sections, so a same-name tag inside one must search for itself).
+    // Refined close-tag choice: the first exact-case close tag outside CDATA/comments, else the first
+    // differently-cased one outside them. A close tag quoted inside a section never counts (the strict scan, unioned
+    // by the caller, still covers the baseline). Returns [NOT_FOUND] when the window has none and nothing was skipped
+    // or cut off (safe to memoise), [NOT_FOUND_SKIPPED] otherwise: the caller's scan loop does not skip sections,
+    // so a same-name tag inside one must search for itself.
     private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
-        val outside = scanForClose(text, closeTag, from, limit, skipSections = true)
-        if (outside.exact >= 0) return CloseHit(outside.exact)
-        val anywhere = if (outside.skipped) scanForClose(text, closeTag, from, limit, skipSections = false) else outside
+        val r = scanForClose(text, closeTag, from, limit, skipSections = true)
         return when {
-            anywhere.exact >= 0 -> CloseHit(anywhere.exact)
-            outside.caseInsensitive >= 0 -> CloseHit(outside.caseInsensitive, caseInsensitiveOnly = true)
-            anywhere.caseInsensitive >= 0 -> CloseHit(anywhere.caseInsensitive, caseInsensitiveOnly = true)
-            else -> CloseHit(if (outside.skipped) NOT_FOUND_SKIPPED else NOT_FOUND)
+            r.exact >= 0 -> CloseHit(r.exact)
+            r.caseInsensitive >= 0 -> CloseHit(r.caseInsensitive, caseInsensitiveOnly = true)
+            else -> CloseHit(if (r.skipped || r.unterminated) NOT_FOUND_SKIPPED else NOT_FOUND)
         }
     }
 

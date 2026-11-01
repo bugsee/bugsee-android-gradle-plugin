@@ -1170,7 +1170,8 @@ class CliUploaderTest {
         }
         fun distinct(n: Int) = buildString { for (i in 0 until n) append("<Token").append(i).append(">") }
         fun same(n: Int) = "<Token>".repeat(n)
-        for (gen in listOf(::distinct, ::same)) {
+        fun sectioned(n: Int) = buildString { for (i in 0 until n / 20) { repeat(19) { append("<Token>") }; append("<!---->") } }
+        for (gen in listOf(::distinct, ::same, ::sectioned)) {
             time(gen(20_000))
             val small = time(gen(100_000)); val big = time(gen(200_000))
             // Doubling n makes a quadratic scan ~4x slower; 3.5x plus slack keeps shared CI runners from flaking.
@@ -1253,6 +1254,28 @@ class CliUploaderTest {
         }
     }
 
+    @Test fun `close tag quoted in an unterminated or unmatched section never ends the element`() {
+        val cases = listOf(
+            "<Token><![CDATA[ </Token> SECRET1",
+            "<Error><SessionToken>a<!-- </SessionToken> SECRET2",
+            "<Error><Signature><![CDATA[ </Signature> SECRET3",
+            "<Error><SessionToken>a<![CDATA[x]]><![CDATA[ </SessionToken> SECRET4",
+            "<Token>a<![CDATA[</Token>]]>SECRET11",
+        )
+        for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+        // A section that starts inside one tag's window and ends after it must not make the memo skip a close tag.
+        val straddle = "<Error><Token>a" + "f".repeat(4040) + "<Token>b<![CDATA[" + "c".repeat(100) + "</Token>]]>SEC</Token></Error>"
+        assertFalse(BundleUploader.scrubForLog(straddle).contains("SEC<"), "straddling section")
+    }
+
+    @Test fun `escaped newline boundary numbered token window size and case-insensitive close are pinned`() {
+        assertFalse(BundleUploader.scrubForLog("body: \"<Error>\\n  <SessionToken>SEC1").contains("SEC1"))
+        assertFalse(BundleUploader.scrubForLog("got <Token-0>SEC2 and more").contains("SEC2"))
+        assertFalse(BundleUploader.scrubForLog("<Token>a<b>SEC3</b>" + "x".repeat(300) + "</Token>").contains("SEC3"))
+        assertFalse(BundleUploader.scrubForLog("x <SessionToken>SEC4</sessiontoken> y").contains("SEC4"))
+        assertEquals("a<Policy><redacted></Policy>b<Signature><redacted>", BundleUploader.scrubForLog("a<Policy></Policy>b<Signature>SEC5"))
+    }
+
     @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
         assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
         assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
@@ -1271,21 +1294,32 @@ class CliUploaderTest {
     @Test fun `no input redacted by the old fixed-tag regex leaks now`() {
         val old = Regex("<(StringToSign|StringToSignBytes|SignatureProvided|AWSAccessKeyId|CanonicalRequest|CanonicalRequestBytes|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
         val frags = listOf("<Signature>", "</Signature>", "<Policy>", "</Policy>", "<StringToSign>", "</StringToSign>", "<Credential>", "<AWSAccessKeyId>",
-            "<CanonicalRequest>", "</CanonicalRequest>", "<![CDATA[", "]]>", "<!--", "-->", "<Code>", "</Code>", "SECRET", "SECRET", "\n", " ", "x", "<", ">", "<Token>", "</Token>")
+            "<CanonicalRequest>", "</CanonicalRequest>", "<![CDATA[", "]]>", "<!--", "-->", "<Code>", "</Code>", "\n", " ", "x", "<", ">", "<Token>", "</Token>",
+            "<SIGNATURE>", "</signature>", "<TOKEN>", "</token>", "<b/>")
         val rnd = java.util.Random(131)
         repeat(4000) {
-            val input = buildString { repeat(1 + rnd.nextInt(14)) { append(frags[rnd.nextInt(frags.size)]) } }
+            var k = 0
+            val input = buildString {
+                repeat(1 + rnd.nextInt(14)) {
+                    when (val r = rnd.nextInt(frags.size + 2)) {
+                        frags.size -> append("SECRET").append(k++)
+                        frags.size + 1 -> append("f".repeat(1500 + rnd.nextInt(3000)))
+                        else -> append(frags[r])
+                    }
+                }
+            }
             val before = old.replace(input, "<\$1><redacted></\$1>")
-            if (!before.contains("SECRET")) assertFalse(BundleUploader.scrubForLog(input).contains("SECRET"), "leaks: $input")
+            val after = BundleUploader.scrubForLog(input)
+            for (n in 0 until k) if (!before.contains("SECRET$n")) assertFalse(after.contains("SECRET$n"), "SECRET$n leaks: ${input.take(300)}")
         }
     }
 
     @Test fun `XML tag scrub is bounded-time on adversarial input`() {
         for (nasty in listOf("<" + "a".repeat(1_000_000), "<a ".repeat(300_000), "<Token" + "-".repeat(1_000_000), "<a>".repeat(300_000),
             "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000),
-            buildString { for (i in 0 until 40_000) append("<Tok").append(i).append("><![CDATA[") },
-            buildString { for (i in 0 until 40_000) append("<Tok").append(i).append("><!--") },
-            buildString { for (i in 0 until 15_000) append("<Tok").append(i).append(">").append("<".repeat(50)) },
+            buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><![CDATA[") },
+            buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><!--") },
+            buildString { for (i in 0 until 15_000) append("<Token").append(i).append(">").append("<".repeat(50)) },
             "<a " + "key_".repeat(125) + ">", ("<a " + "key_".repeat(125) + ">").repeat(2000), ("<a " + "b".repeat(500) + ">").repeat(2000),
             ("<token " + "b".repeat(500) + ">").repeat(2000), ("<_key>" + "<".repeat(1000)).repeat(1000))) {
             val start = System.nanoTime()
