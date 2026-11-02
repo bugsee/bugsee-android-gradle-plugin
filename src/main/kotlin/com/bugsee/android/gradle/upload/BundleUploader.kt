@@ -69,7 +69,230 @@ internal object BundleUploader {
     private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
-    private val SECRET_XML_TAG = Regex("<(StringToSign|StringToSignBytes|SignatureProvided|AWSAccessKeyId|CanonicalRequest|CanonicalRequestBytes|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
+    // Opening (or self-closing) tag candidates. Quote-aware: a `>` inside a quoted attribute value does not end the tag.
+    // Every alternative is possessive and none can cross a `<`, so a start position scans at most up to the next `<`
+    // (linear overall); an unmatched quote is taken literally.
+    private val XML_OPEN_TAG = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s(?:[^<>\"']++|\"[^\"<]*+\"|'[^'<]*+'|[\"'])*+)?>")
+
+    // Tag matcher of the strict baseline scan (not quote-aware, attributes bounded): kept as it was so the baseline
+    // keeps redacting everything it ever redacted.
+    private val XML_OPEN_TAG_STRICT = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s[^<>]{0,512})?>")
+    // Deliberately narrower than SENSITIVE_KEY_PATTERN (JSON keys): no bare `key`, `x-amz` or `policy` (exact-name
+    // only, see isSecretXmlTag), because element names like <Key>, <KeyCount> or <PolicyName> are benign S3 fields.
+    private val SECRET_NAME_PATTERN =
+        "token|secret|credential|signature|password|passwd|authoriz|stringtosign|canonicalrequest|argumentvalue" +
+            "|passphrase|cookie|accesskey|accountkey|sharedkey|masterkey|storagekey|apikey|privatekey|signingkey|sessionkey|encryptionkey|authkey|[_.\\-]key|key[_.\\-]?id"
+    private val SECRET_XML_TAG_NAME = Regex(SECRET_NAME_PATTERN, RegexOption.IGNORE_CASE)
+
+    // Element names the scrubber has always redacted (S3 error bodies); these keep the original "to the next
+    // tag" behaviour wherever they appear. Other credential-named elements need an XML-looking position.
+    private val LEGACY_SECRET_XML_NAMES = setOf(
+        "stringtosign", "stringtosignbytes", "signatureprovided", "awsaccesskeyid", "canonicalrequest",
+        "canonicalrequestbytes", "signature", "credential", "policy",
+    )
+
+    // S3's session-token echo (`<Token-0>`): the numbered form is specific enough to redact wherever it appears.
+    private val NUMBERED_TOKEN_TAG = Regex("(?i)token-\\d{1,3}")
+
+    // Possessive, anchored name so each attribute is tried once per tag (no O(L^2) rescans).
+    private val XML_ATTR = Regex("(?<![\\w.:\\-])([\\w.:\\-]{1,80}+)(\\s*=\\s*)(\\\\?\"[^\"]*\"|'[^']*')")
+    private const val MAX_XML_ELEMENT_TEXT = 4096
+
+    private fun localName(name: String) = name.substringAfterLast(':').lowercase()
+
+    private const val NOT_FOUND = -1
+    private const val NOT_FOUND_SKIPPED = -2
+
+    // One bounded window scan (never past [limit]; an unbounded indexOf per opening tag would be quadratic).
+    // With [skipSections], a CDATA section or comment that terminates within the window is jumped over, so a close
+    // tag quoted inside it does not end the element; an unterminated one is scanned as plain text.
+    private class CloseScan(var exact: Int = -1, var caseInsensitive: Int = -1, var skipped: Boolean = false, var unterminated: Boolean = false)
+
+    private fun scanForClose(text: String, closeTag: String, from: Int, limit: Int, skipSections: Boolean): CloseScan {
+        val r = CloseScan()
+        var i = text.indexOf('<', from)
+        while (i in 0..limit) {
+            val term = if (!skipSections) null else when {
+                text.startsWith("<![CDATA[", i) -> "]]>"
+                text.startsWith("<!--", i) -> "-->"
+                else -> null
+            }
+            if (term != null) {
+                // The terminator search starts after the opener: `<!-->` and `<!--->` do not close a comment.
+                var j = i + (if (term == "-->") 4 else 9)
+                while (j <= limit && !text.startsWith(term, j)) j++
+                if (j > limit) {
+                    // A section that does not end in the window: whatever follows may be quoted text, so no later
+                    // close tag counts (the unclosed-element rule covers the rest).
+                    r.unterminated = true
+                    return r
+                }
+                r.skipped = true
+                i = text.indexOf('<', j + term.length)
+                continue
+            }
+            if (text.startsWith(closeTag, i)) { r.exact = i; return r }
+            if (r.caseInsensitive < 0 && text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) r.caseInsensitive = i
+            i = text.indexOf('<', i + 1)
+        }
+        return r
+    }
+
+    // The strict baseline: first exact-case close tag in the window, sections not skipped.
+    private fun findStrictClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
+        val r = scanForClose(text, closeTag, from, limit, skipSections = false)
+        return CloseHit(if (r.exact >= 0) r.exact else NOT_FOUND)
+    }
+
+    private class CloseHit(val pos: Int)
+
+    // Refined close-tag choice: the first exact-case close tag outside CDATA/comments, else the first
+    // differently-cased one outside them. A close tag quoted inside a section never counts (the strict scan, unioned
+    // by the caller, still covers the baseline). Returns [NOT_FOUND] when the window has none and nothing was skipped
+    // or cut off (safe to memoise), [NOT_FOUND_SKIPPED] otherwise: the caller's scan loop does not skip sections,
+    // so a same-name tag inside one must search for itself.
+    private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
+        val r = scanForClose(text, closeTag, from, limit, skipSections = true)
+        return when {
+            r.exact >= 0 -> CloseHit(r.exact)
+            r.caseInsensitive >= 0 -> CloseHit(r.caseInsensitive)
+            else -> CloseHit(if (r.skipped || r.unterminated) NOT_FOUND_SKIPPED else NOT_FOUND)
+        }
+    }
+
+    // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped,
+    // including the escaped `\n`/`\r`/`\t` of a Debug- or JSON-rendered body).
+    private fun atXmlBoundary(text: String, tagStart: Int): Boolean {
+        var i = tagStart - 1
+        while (i >= 0) {
+            val c = text[i]
+            if (c.isWhitespace()) i--
+            else if (i >= 1 && text[i - 1] == '\\' && (c == 'n' || c == 'r' || c == 't')) i -= 2
+            else break
+        }
+        return i < 0 || text[i] == '>'
+    }
+
+    // End of an unclosed element's text: the next tag, skipping CDATA sections and comments (an unterminated one
+    // runs to the end of the text).
+    // The strict baseline ([refined] false) searches a terminator from the opener itself, so `<!-->` counts as a
+    // complete comment, exactly as before; the refined scan starts after the opener (XML semantics).
+    private fun unclosedEnd(text: String, from: Int, refined: Boolean): Int {
+        var nextLt = text.indexOf('<', from)
+        while (nextLt >= 0) {
+            val term = when {
+                text.startsWith("<![CDATA[", nextLt) -> "]]>"
+                text.startsWith("<!--", nextLt) -> "-->"
+                else -> break
+            }
+            val t = text.indexOf(term, if (refined) nextLt + (if (term == "-->") 4 else 9) else nextLt)
+            nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
+        }
+        return if (nextLt < 0) text.length else nextLt
+    }
+
+    /**
+     * Redact the text of credential-named XML elements (`<Token-0>`, `<x:SessionToken>`, `<ClientSecret>`, ...)
+     * and the values of credential-named attributes. An element is redacted up to its closing tag when that
+     * tag is within [MAX_XML_ELEMENT_TEXT] chars. Otherwise (truncated body, odd closing tag, huge element)
+     * the text up to the next tag is redacted, but for names outside the legacy S3 list only when the tag sits
+     * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
+     * `List<AccessToken> but` or `=<your-token>.` is left alone.
+     *
+     * Two scans are unioned: a strict one (first exact-case close tag, sections not skipped) and a refined one
+     * (skips terminated CDATA/comments, differently-cased close tags), so nothing the strict one redacts can leak.
+     * Not idempotent: the inserted `<redacted>` ends in `>`, so a second pass can only redact more.
+     */
+    internal fun redactSecretXml(text: String): String {
+        if (text.indexOf('<') < 0) return text
+        // Two scans whose redacted spans are unioned: the strict scan (first exact-case close tag, no section
+        // skipping) is the baseline behaviour, so nothing it redacts can leak; the refined scan only adds coverage
+        // (a close tag quoted in CDATA/comments does not end the element, differently-cased close tags).
+        // Credential-named attribute values are found on the whole original text (both tag matchers), so a span that
+        // starts inside a tag's quoted value cannot hide the rest of that value; everything is merged and applied once.
+        val reds = ArrayList<Redaction>()
+        for (sp in collectSecretSpans(text, refined = false) + collectSecretSpans(text, refined = true)) reds.add(Redaction(sp.first, sp.last, true))
+        collectAttrRedactions(text, reds)
+        reds.sortWith(compareBy({ it.start }, { it.end }))
+        val out = StringBuilder(text.length)
+        var pos = 0
+        var i = 0
+        while (i < reds.size) {
+            var start = reds[i].start
+            var end = reds[i].end
+            var span = reds[i].isSpan
+            i++
+            while (i < reds.size && reds[i].start <= end) {
+                if (reds[i].end > end) end = reds[i].end
+                span = span || reds[i].isSpan
+                i++
+            }
+            out.append(text, pos, start).append(if (span) "<redacted>" else "\"<redacted>\"")
+            pos = end
+        }
+        out.append(text, pos, text.length)
+        return out.toString()
+    }
+
+    // [start, end) of text to replace: an element's text (span) or a quoted attribute value.
+    private class Redaction(val start: Int, val end: Int, val isSpan: Boolean)
+
+    private fun collectAttrRedactions(text: String, into: MutableList<Redaction>) {
+        for (rx in listOf(XML_OPEN_TAG, XML_OPEN_TAG_STRICT)) {
+            for (m in rx.findAll(text)) {
+                if (m.groupValues[2].isEmpty()) continue
+                val name = m.groupValues[1]
+                val allSecret = localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
+                for (a in XML_ATTR.findAll(m.value)) {
+                    if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) {
+                        val v = a.groups[3]!!.range
+                        into.add(Redaction(m.range.first + v.first, m.range.first + v.last + 1, false))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun collectSecretSpans(text: String, refined: Boolean): List<IntRange> {
+        val spans = ArrayList<IntRange>()
+        var pos = 0
+        // Per close tag: scanned-through position of a failed search, so dense unclosed tags do not rescan the same window.
+        val searchedTo = HashMap<String, Int>()
+        val tagRegex = if (refined) XML_OPEN_TAG else XML_OPEN_TAG_STRICT
+        var m = tagRegex.find(text, pos)
+        while (m != null) {
+            val start = m.range.first
+            val afterOpen = m.range.last + 1
+            var end = afterOpen
+            val name = m.groupValues[1]
+            val attrs = m.groupValues[2]
+            val local = localName(name)
+            val secretTag = local == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
+            if (secretTag && !attrs.endsWith("/")) {
+                // The strict scan matches exact case, so its memo key must too; the refined scan ignores case.
+                val closeKey = if (refined) "</${name.lowercase()}>" else "</$name>"
+                val limit = minOf(text.length, afterOpen + MAX_XML_ELEMENT_TEXT)
+                val from = maxOf(afterOpen, searchedTo[closeKey] ?: 0)
+                val hit = if (refined) findClosingTag(text, "</$name>", from, limit) else findStrictClosingTag(text, "</$name>", from, limit)
+                val close = hit.pos
+                val unclosedEligible = local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)
+                if (close >= 0) {
+                    end = close
+                    spans.add(afterOpen..end)
+                } else {
+                    if (close == NOT_FOUND) searchedTo[closeKey] = limit + 1
+                    if (unclosedEligible) {
+                        end = unclosedEnd(text, afterOpen, refined)
+                        if (end > afterOpen) spans.add(afterOpen..end)
+                    }
+                }
+            }
+            pos = end
+            m = tagRegex.find(text, pos)
+        }
+        return spans
+    }
+
     private val XML_ERROR_CODE = Regex("<Code>([A-Za-z0-9_.\\-]{1,64})</Code>")
     private val HTML_TITLE = Regex("<title>([^<]{1,100})</title>", RegexOption.IGNORE_CASE)
 
@@ -77,12 +300,12 @@ internal object BundleUploader {
      * Mask [appToken] and drop credentials from free text such as an exception message or a JSON string
      * value: `?name=value` query strings (a presigned URL's query is a write credential), SigV4-style
      * `Signature=`/`Credential=` pairs, `Bearer`/`Basic` tokens, `Authorization`/`Cookie`/`X-Amz-*` header
-     * lines and S3 secret XML elements (StringToSign, ...). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
+     * lines and the text of credential-named XML elements (`<Token-0>`, `<StringToSign>`, ...; see [redactSecretXml]). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
      */
     internal fun scrubForLog(text: String, appToken: String? = null): String {
         // Mask first: truncating first could cut the token in half so the exact match no longer fires.
         val masked = if (!appToken.isNullOrEmpty()) text.replace(appToken, maskAppToken(appToken)) else text
-        val unxml = masked.replace(SECRET_XML_TAG, "<$1><redacted></$1>")
+        val unxml = redactSecretXml(masked)
         val bounded = if (unxml.length > MAX_SCRUBBED_TEXT_CHARS) unxml.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else unxml
         return bounded
             .replace(QUERY_WITH_PARAMS, "?<redacted>")
