@@ -1,0 +1,34 @@
+name: Set up the build
+description: >
+  The toolchain every Linux build job of the PR workflow needs, in one place so the parallel jobs cannot
+  drift apart: both JDKs, the Gradle dependency cache, and the Android user cache directory.
+  Run it after checkout.
+
+runs:
+  using: composite
+  steps:
+    # Both JDKs are required and neither is auto-provisioned (no toolchain resolver is configured): 11 for
+    # `jvmToolchain(11)`, 17 for the TestKit launcher. The last one listed becomes JAVA_HOME; setup-java also
+    # exports JAVA_HOME_11_X64 for the other. Nothing here points Gradle at that variable (no
+    # `org.gradle.java.installations.fromEnv`); JDK 11 is simply installed on the runner, where Gradle's own
+    # installation detection finds it.
+    - uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: |
+          11
+          17
+
+    # `basic` is the open-source provider over the GitHub Actions cache. The default (`enhanced`) is a
+    # commercial service, only in free preview for private repositories. The action also validates the wrapper
+    # jar against Gradle's published checksums, and fails the run if it does not match.
+    - uses: gradle/actions/setup-gradle@v6
+      with:
+        cache-provider: basic
+
+    # AGP creates ~/.android/cache during the first fixture build. On a fresh VM that directory does not exist
+    # yet, so Gradle sees a changed input and refuses to reuse the configuration cache on the second build,
+    # failing AppStartupTracingConfigCacheTest. Developer machines already have it.
+    - name: Pre-create the Android user cache
+      shell: bash
+      run: mkdir -p ~/.android/cache

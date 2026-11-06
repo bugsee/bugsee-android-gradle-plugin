@@ -2,8 +2,10 @@ name: PR
 
 # Runs the full build on every pull request: unit tests, the TestKit
 # integration tests (real AGP builds of fixture apps) and the Compose
-# compiler-plugin variant matrix. `build.sh --full` is the lane the script
-# itself names for CI.
+# compiler-plugin variant matrix. That is `scripts/build.sh --full`, which takes
+# ~35 minutes on one hosted runner, so it runs here as parallel jobs, one piece
+# each (`unit`, `compose`, and the TestKit suite in `integration` shards), and the
+# `build.sh --full` job at the end is their aggregate, so the check keeps its name.
 on:
   pull_request:
     branches: [main, release]
@@ -18,12 +20,14 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: build.sh --full
-    # GitHub-hosted. The image ships the Android SDK (ANDROID_SDK_ROOT is set)
-    # with its licenses accepted, which the integration tests' fixture apps need.
+  # ── The pieces of `build.sh --full`, in parallel ──────────────────────────
+  # GitHub-hosted. The image ships the Android SDK (ANDROID_SDK_ROOT is set) with its licenses accepted, which
+  # the integration tests' fixture apps need.
+
+  unit:
+    name: unit tests + buildSrc + CLI contract
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     env:
       RELEASE: "false"
@@ -32,36 +36,10 @@ jobs:
       - name: Checkout PR merge commit
         uses: actions/checkout@v7
 
-      # Both JDKs are required and neither is auto-provisioned (no toolchain
-      # resolver is configured): 11 for `jvmToolchain(11)`, 17 for the TestKit
-      # launcher. The last one listed becomes JAVA_HOME; setup-java also exports
-      # JAVA_HOME_11_X64 for the other. Nothing here points Gradle at that variable
-      # (no `org.gradle.java.installations.fromEnv`); JDK 11 is simply installed on
-      # the runner, where Gradle's own installation detection finds it.
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: |
-            11
-            17
-
-      # `basic` is the open-source provider over the GitHub Actions cache. The
-      # default (`enhanced`) is a commercial service, only in free preview for
-      # private repositories. The action also validates the wrapper jar against
-      # Gradle's published checksums, and fails the run if it does not match.
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-provider: basic
-
-      # AGP creates ~/.android/cache during the first fixture build. On a fresh
-      # VM that directory does not exist yet, so Gradle sees a changed input and
-      # refuses to reuse the configuration cache on the second build, failing
-      # AppStartupTracingConfigCacheTest. Developer machines already have it.
-      - name: Pre-create the Android user cache
-        run: mkdir -p ~/.android/cache
+      - uses: ./.github/actions/setup-build
 
       - name: Build and test
-        run: bash -xe ./scripts/build.sh --full
+        run: bash -xe ./scripts/build.sh --unit
 
       # The real-binary CLI contract test (CliUploaderRealBinaryTest) only runs
       # when BUGSEE_CLI_BIN is set, so without this it is skipped everywhere and
@@ -93,18 +71,118 @@ jobs:
             fi
           done
 
-      # Only on failure, and kept briefly: the org's Actions artifact storage is
-      # shared across every repo and capped, and a green run needs no reports.
+      # Only on failure, and kept briefly: the org's Actions artifact storage
+      # is shared across every repo and capped, and a green run needs no reports.
       - name: Upload test reports
         if: failure()
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-pr${{ github.event.pull_request.number }}
+          name: test-reports-unit-pr${{ github.event.pull_request.number }}
           path: |
             **/build/reports/tests/
             **/build/test-results/
           retention-days: 3
+
+  compose:
+    name: compose-compiler-plugin variants
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      RELEASE: "false"
+
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-build
+
+      - name: Build the Compose compiler plugin and its variant matrix
+        run: bash -xe ./scripts/build.sh --compose
+
+      - name: Upload test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-compose-pr${{ github.event.pull_request.number }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 3
+
+  # The TestKit suite (real AGP builds of fixture apps) on the declared minimums (Gradle 8.7, AGP 8.6.0,
+  # Kotlin 2.1.0), split into shards that run in parallel. The tests of each shard are listed in
+  # `integrationShards` in build.gradle.kts; the last shard runs everything not listed, so a new test class
+  # cannot fall out of CI. The matrix below MUST list every shard 1..N (N = the lists there + 1): the build
+  # fails a job whose matrix size differs from its own shard count, so a missing shard cannot hide.
+  integration:
+    name: integration shard ${{ matrix.shard }}/${{ strategy.job-total }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # One failing shard must not hide the results of the others.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    env:
+      RELEASE: "false"
+
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-build
+
+      - name: TestKit shard
+        run: bash -xe ./scripts/build.sh --integration ${{ matrix.shard }} ${{ strategy.job-total }}
+
+      # Where the time went in this shard, to rebalance `integrationShards` from real numbers.
+      - name: Test timings
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          rows = []
+          for f in glob.glob("build/test-results/integrationTest/TEST-*.xml"):
+              r = ET.parse(f).getroot()
+              rows.append((float(r.get("time")), r.get("name").split(".")[-1], int(r.get("tests"))))
+          rows.sort(reverse=True)
+          print(f"shard ${{ matrix.shard }}: {len(rows)} classes, {sum(r[2] for r in rows)} tests, {sum(r[0] for r in rows)/60:.1f} min of test time")
+          for t, n, c in rows[:25]:
+              print(f"  {t:7.1f}s  {n}  ({c} tests)")
+          PY
+
+      - name: Upload test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-integration-${{ matrix.shard }}-pr${{ github.event.pull_request.number }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 3
+
+  # The aggregate of the pieces above: the check that used to be one 35-minute job, kept under its old
+  # name. It fails unless every piece succeeded (a cancelled or skipped piece counts as a failure).
+  full:
+    name: build.sh --full
+    needs: [unit, compose, integration]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every piece must have succeeded
+        env:
+          UNIT: ${{ needs.unit.result }}
+          COMPOSE: ${{ needs.compose.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+        run: |
+          echo "unit=$UNIT compose=$COMPOSE integration=$INTEGRATION"
+          [ "$UNIT" = success ] && [ "$COMPOSE" = success ] && [ "$INTEGRATION" = success ]
 
   # Newer Gradle / AGP / Kotlin than the declared minimums that `build.sh --full` runs on (Gradle 8.7,
   # AGP 8.6.0, Kotlin 2.1.0). Runs the same TestKit suite against each entry, so a regression that
@@ -150,7 +228,7 @@ jobs:
         run: mkdir -p ~/.android/cache
 
       # NativeMergedLibsE2ETest (the NDK symbol path through AGP) Assume-skips without a real
-      # bugsee-cli, and a skip is green; so the legs get the same pinned CLI as the `test` job.
+      # bugsee-cli, and a skip is green; so the legs get the same pinned CLI as the `unit` job.
       - name: Fetch bugsee-cli
         id: cli
         uses: ./.github/actions/fetch-bugsee-cli
