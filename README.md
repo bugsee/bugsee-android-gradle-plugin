@@ -31,7 +31,7 @@ project reflectively (commit `2066da5`).
 
 ### Plugin order
 
-The order of plugins in `plugins {}` doesn't matter from 4.0.9; earlier versions silently
+The order of plugins in `plugins {}` doesn't matter from 4.1.0; earlier versions silently
 did nothing when Bugsee was listed before the Android plugin (#46).
 
 ### Flutter
