@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.integration
 import com.bugsee.android.gradle.integration.harness.FixtureProject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.Rule
 import org.junit.Test
@@ -26,6 +27,11 @@ class BugseeJavaOnlyAppTest {
 
     @Test
     fun without_the_kotlin_plugin_on_the_classpath_apply_fails_naming_the_missing_class() {
+        // AGP 9 bundles the Kotlin Gradle plugin on the build classpath, so the limitation only exists below it.
+        assumeTrue(
+            "AGP 9+ brings the Kotlin Gradle plugin along",
+            (FixtureProject.agpVersion?.substringBefore('.')?.toIntOrNull() ?: 0) < 9,
+        )
         val fixture = FixtureProject.materialize("plugin-order-reversed", temp.newFolder("java-only"))
         val root = fixture.projectDir.resolve("build.gradle.kts")
         val original = root.readText()
