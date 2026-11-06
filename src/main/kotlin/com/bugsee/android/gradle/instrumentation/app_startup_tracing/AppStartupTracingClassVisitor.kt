@@ -2,6 +2,7 @@ package com.bugsee.android.gradle.instrumentation.app_startup_tracing
 
 import com.bugsee.android.gradle.StartupTier
 import com.bugsee.android.gradle.instrumentation.util.CatchingMethodVisitor
+import com.bugsee.android.gradle.instrumentation.util.FrameFallbackContext
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.Attribute
 import org.objectweb.asm.ClassVisitor
@@ -66,6 +67,18 @@ internal class AppStartupTracingClassVisitor(
 ) : ClassVisitor(apiVersion, nextClassVisitor) {
 
     private var ownerInternalName: String = ""
+
+    private var fallbackContextResolved = false
+    private var fallbackContextValue: FrameFallbackContext? = null
+
+    /** Lazily resolved once per class; null (no fallback) if the writer cannot be located. */
+    private fun fallbackContext(): FrameFallbackContext? {
+        if (!fallbackContextResolved) {
+            fallbackContextValue = FrameFallbackContext.from(this.cv, ownerInternalName)
+            fallbackContextResolved = true
+        }
+        return fallbackContextValue
+    }
 
     override fun visit(
         version: Int,
@@ -147,23 +160,40 @@ internal class AppStartupTracingClassVisitor(
             // and re-thrown, never swallowed into corrupt bytecode. See
             // CatchingMethodVisitor. The pass-through returns above
             // (`return downstream`) are deliberately left unwrapped.
+            //
+            // The buffered method is additionally proven writable BEFORE it reaches the real
+            // writer; if it is not, the original is emitted instead (see FrameFallbackContext).
+            // The annotation-peek path below stays streaming and keeps the re-throw.
             return CatchingMethodVisitor(
                 apiVersion,
-                buildKindCandidateBufferingVisitor(
-                    downstream = downstream,
-                    apiVersion = apiVersion,
+                FrameFallbackContext.wrapMethod(
+                    context = fallbackContext(),
+                    api = apiVersion,
+                    className = ownerInternalName,
                     access = access,
-                    methodName = name,
+                    name = name,
                     descriptor = descriptor,
                     signature = signature,
                     exceptions = exceptions,
-                    siteId = siteId,
-                    dispatcher = dispatcher,
-                    ownerNameForLoops = ownerNameForLoops,
-                    currentTier = currentTier,
-                    startMethodName = startName,
-                    endMethodName = endName,
-                ),
+                    target = { downstream },
+                    build = { sink ->
+                        buildKindCandidateBufferingVisitor(
+                            downstream = sink,
+                            apiVersion = apiVersion,
+                            access = access,
+                            methodName = name,
+                            descriptor = descriptor,
+                            signature = signature,
+                            exceptions = exceptions,
+                            siteId = siteId,
+                            dispatcher = dispatcher,
+                            ownerNameForLoops = ownerNameForLoops,
+                            currentTier = currentTier,
+                            startMethodName = startName,
+                            endMethodName = endName,
+                        )
+                    },
+                )!!,
                 className,
                 name,
                 descriptor,

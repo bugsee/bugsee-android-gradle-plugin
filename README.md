@@ -29,6 +29,60 @@ A problem occurred configuring project ':app'.
 `ProjectDependencyCompat` fixes this in 4.0.3 by resolving the dependency's
 project reflectively (commit `2066da5`).
 
+### Plugin order
+
+The order of plugins in `plugins {}` doesn't matter from 4.1.0; earlier versions silently
+did nothing when Bugsee was listed before the Android plugin (#46).
+
+### Flutter
+
+Flutter apps need no workaround. Flutter's Gradle plugin writes into AGP's
+merged-assets directory from `copyFlutterAssets<Variant>`; when that task exists
+the plugin makes `injectBugsee<Variant>BuildId` depend on it, so Gradle task
+validation passes. Apps without Flutter are unaffected.
+
+If a Flutter release renames that task, the build fails with "uses this output of
+task ... without declaring an explicit or implicit dependency". The plugin warns
+when Flutter is applied but finds no `copyFlutterAssets<Variant>` task for any
+variant. Until the plugin catches up, name the task yourself. `<Variant>` is
+replaced by the capitalized variant name; the same setting orders the injection
+after any other plugin that writes the merged assets:
+
+```kotlin
+bugsee {
+    assetsDependsOn("flutterCopyAssets<Variant>")
+}
+```
+
+A name that matches no task is reported with a warning and ignored. The setting
+is DSL-only (not available in `bugsee.properties`).
+
+### Isolated Projects
+
+The plugin does not read other projects' models, so it is not itself a source of
+Isolated Projects violations (`org.gradle.unsafe.isolated-projects=true`).
+Cross-module state (once-only warnings, variant names) lives in a shared build
+service, `bugsee.properties` is located through the build's root directory, and
+the `bugsee.instrumentation.*` Gradle properties are read from the module's own
+properties (`-P`, `gradle.properties`, the module's `ext`).
+
+Two behaviours differ when the mode is on; with it off nothing changes:
+
+- **Gradle properties are not inherited from a parent project's `ext`.** A root
+  build script's `extra["bugsee.instrumentation.log"] = false` stops reaching the
+  modules; put it in `gradle.properties`, pass `-P`, or use `bugsee { ... }` /
+  `bugsee.properties`.
+- **Project dependencies are not inspected.** Without Isolated Projects the plugin
+  follows `project(":lib")` dependencies to find the Bugsee SDK declared there.
+  With it, only the module's own dependencies are seen. If `com.bugsee:bugsee-android`
+  is declared only in a library module (or the SDK itself is a source project
+  dependency), the application module does not see it: instrumentations that need
+  the SDK are skipped when `sdkAutoLoad` is off, and with `sdkAutoLoad` on the SDK
+  may be auto-added a second time (Gradle's conflict resolution picks one version).
+  With `sdkAutoLoad` off the plugin logs a warning once per module when the SDK is
+  not found in the module itself. Declare `com.bugsee:bugsee-android` directly in
+  the application module.
+
 ### Verified combinations
 
 Each combination below was built with plugin **4.0.7** as a minified release
@@ -69,6 +123,10 @@ Gradle's `Property.convention(…)` semantics — the properties layer is
 applied as a convention before your DSL block runs, and your `.set(…)`
 calls in the DSL supersede it.
 
+Per-variant values (`variant.<name>.*` keys and `variant("<name>") { }` blocks)
+follow the same precedence, and `bugsee { preferSettingsFile.set(true) }` flips
+it for the whole build. See [Per-variant settings](#per-variant-settings).
+
 ## `bugsee.properties`
 
 A single `bugsee.properties` file at the **root project** directory
@@ -80,6 +138,7 @@ distinct namespaces:
 |---|---|---|
 | (unprefixed) | App-token resolution | `app_token=YOUR_APP_TOKEN` |
 | `plugin.*` | Gradle plugin behavior | `plugin.debug=true` |
+| `variant.<name>.*` | Per-variant `app_token` / `plugin.*` | `variant.staging.app_token=STAGING_TOKEN` |
 
 The file is **optional**. Keys not present in the file fall through
 to the next source (DSL, then defaults).
@@ -119,14 +178,28 @@ dotted-path form as the DSL field names.
 |---|---|---|---|
 | `plugin.endpoint` | String | `https://api.bugsee.com` | `bugsee { endpoint.set(…) }` |
 | `plugin.debug` | Boolean | `false` | `bugsee { debug.set(…) }` |
+| `plugin.failOnUploadError` | Boolean | `false` | `bugsee { failOnUploadError.set(…) }` |
 | `plugin.feedback` | Boolean | `false` | `bugsee { feedback.set(…) }` |
+| `plugin.sdkAutoLoad` | Boolean | `true` | `bugsee { sdkAutoLoad.set(…) }` |
+| `plugin.warnDebugOnlySdk` | Boolean | `true` | `bugsee { warnDebugOnlySdk.set(…) }` |
+| `plugin.warnLibraryModule` | Boolean | `true` | `bugsee { warnLibraryModule.set(…) }` |
 | `plugin.optimizeExtensionsLoading` | Boolean | `true` | `bugsee { optimizeExtensionsLoading.set(…) }` |
+
+`failOnUploadError` makes an upload that does not complete (mapping, native symbols or build
+registration or artifact upload: a network error, an HTTP error that persists after the plugin's bounded retry, or a
+rejection such as an invalid app token) fail the build. By default it only logs a warning and the build
+stays green. Skipped uploads (no app token, nothing to upload) and symbols the server already has never
+fail the build. A failed auxiliary build-info blob (dependencies, timings) stays a warning with the plugin's
+built-in uploader and for the build-info-only upload; when size analysis uploads the artifact through
+`bugsee-cli upload build` (the default), any failure that command reports, including those blobs, fails
+the build. It can be set per variant.
 
 ### NDK integration
 
 | Key | Type | Default |
 |---|---|---|
 | `plugin.ndk.enabled` | Boolean | `false` |
+| `plugin.ndk.allBuildTypes` | Boolean | `false` |
 | `plugin.ndk.forceDebugSymbolsUpload` | Boolean | `false` |
 | `plugin.ndk.useMergedNativeLibs` | Boolean | `true` |
 
@@ -140,12 +213,28 @@ A library that an earlier release uploaded only as SYMBOL_TABLE (function names)
 is upgraded to the unstripped copy automatically (bugsee-cli 0.8.1+); the server
 never replaces debug info with a poorer file, so no `forceDebugSymbolsUpload` is needed.
 
+The upload task is registered only for non-debuggable variants, like `buildInfo`: build types
+with `isDebuggable = true` are skipped, including `initWith(debug)` ones such as `staging` and
+a release-derived type that sets `isDebuggable = true`. Crashes from those builds are not
+native-symbolicated unless you set `plugin.ndk.allBuildTypes=true` (the runtime native-crash
+module is still added for every variant). A one-line lifecycle message names the skip. After a successful upload of the
+unstripped-libraries directory the plugin records a digest of the library names, sizes and
+contents in `<root>/.gradle/bugsee/native-symbol-cache.json` (keyed by token, variant and
+endpoint); a later build with identical libraries skips the CLI run. Failed uploads are not
+recorded and are retried; `forceDebugSymbolsUpload` bypasses the check, and deleting
+`<root>/.gradle/bugsee` clears it. The key also covers `cliVersion` and `cliPath`. CI without a
+persisted `.gradle` uploads every time (the server deduplicates); a server-side wipe, or an app
+re-created with the same token and endpoint, cannot be detected locally, so use
+`forceDebugSymbolsUpload` once in those cases.
+
 ### Leak detection
 
 When `enabled`, the plugin automatically adds the `bugsee-android-leak`
 module dependency (memory/thread leak detection). If the app already
 declares the leak module explicitly, this is a no-op — mirroring the
-`ndk.enabled` behaviour.
+`ndk.enabled` behaviour. With `sdkAutoLoad=false` nothing is added, so
+`leak.enabled` (like `feedback` and the `ndk.enabled` runtime) only works if you
+declare the module yourself; the plugin warns otherwise.
 
 | Key | Type | Default |
 |---|---|---|
@@ -205,6 +294,7 @@ declares the leak module explicitly, this is a no-op — mirroring the
 | `plugin.instrumentation.compose` | Boolean | `true` | Compose tag injection |
 | `plugin.instrumentation.composeSecure` | Boolean | `true` | Compose secure-field auto-detect |
 | `plugin.instrumentation.composeInput` | Boolean | `true` | |
+| `plugin.instrumentation.composeInTests` | Boolean | `false` | Also apply Compose tag/secure wrapping to test compilations (unit, instrumented, fixtures, `com.android.test`, KMP tests); off by default because the wraps can change test matchers |
 | `plugin.instrumentation.ktor` | Boolean | `true` | |
 | `plugin.instrumentation.cronet` | Boolean | `true` | |
 | `plugin.instrumentation.startupTier` | Enum (`OFF`, `MINIMAL`, `STANDARD`, `DETAILED`, `FULL`) | `STANDARD`¹ | Case-insensitive |
@@ -226,7 +316,7 @@ note immediately below.
 > 2. `plugin.instrumentation.X` in `bugsee.properties`
 > 3. Legacy Gradle property `bugsee.instrumentation.X`
 > 4. Manifest `<meta-data android:name="com.bugsee.android.instrumentation.X" />`
-> 5. Built-in default (`true` for booleans; `STANDARD` for startupTier)
+> 5. Built-in default (`true` for booleans, except `composeInTests`, which is `false` and never consults steps 3-4; `STANDARD` for startupTier)
 >
 > Setting an instrumentation flag in `bugsee.properties` makes the
 > underlying DSL `Property` "present" (`isPresent == true`), and
@@ -254,9 +344,317 @@ note immediately below.
 >   so the CLI value flows through the highest-priority DSL slot.
 
 > **App token** — set via the unprefixed key `app_token=…`, not
-> `plugin.appToken`. The DSL provides additional richer forms
-> (closure, provider, per-variant resolver) that have no
+> `plugin.appToken`, or per variant via `variant.<name>.app_token=…`. The DSL
+> provides additional richer forms (closure, provider) that have no
 > properties-file equivalent.
+
+## Per-variant settings
+
+Most settings can differ per build variant, from `bugsee.properties` or from
+the DSL, with the same lookup order in both. The typical case is a `staging`
+flavor that uploads to its own Bugsee application.
+
+### Key syntax
+
+Prefix an existing key with `variant.<name>.`. Existing `app_token` and
+`plugin.*` keys are unchanged.
+
+```properties
+app_token=PROD_TOKEN
+plugin.endpoint=https://api.bugsee.com
+
+variant.staging.app_token=STAGING_TOKEN
+variant.staging.plugin.endpoint=https://staging.example.com
+variant.release.plugin.buildInfo.sizeCheck.enabled=true
+```
+
+`<name>` is a variant name, a product flavor name or a build type name,
+case-sensitive, exactly as AGP spells it (`stagingRelease`, `staging`,
+`release`). A name that matches no variant is ignored.
+
+### Lookup order
+
+For a variant, inside each source (file or DSL) the **first match wins**, with
+no merging:
+
+1. the variant name (`stagingRelease`)
+2. each product flavor, in AGP flavor-dimension order
+3. the build type
+4. the root / global value (`plugin.<key>` / `app_token`, or the DSL value
+   outside any `variant` block)
+
+This is the contract that wrappers (for example React Native) mirror for
+settings-file tokens. It describes only the file lookup, not the plugin's overall
+token precedence: when the DSL also supplies a token (and `preferSettingsFile`
+is off) the plugin uses the DSL token, so a wrapper that must target the same
+Bugsee application as the uploads has to use the effective token, or set
+`preferSettingsFile` so the file wins. To read the file token a wrapper looks up `variant.<variant>.app_token`, then
+`variant.<flavor>.app_token` for each flavor, then
+`variant.<buildType>.app_token`, then `app_token` in
+`<rootProject>/bugsee.properties`.
+
+### DSL form
+
+```kotlin
+bugsee {
+    endpoint.set("https://api.bugsee.com")   // global value and fallback
+    appToken("PROD_TOKEN")
+
+    variant("staging") {                      // variant, flavor or build type name
+        appToken("STAGING_TOKEN")
+        endpoint.set("https://staging.example.com")
+        ndk { enabled.set(true) }
+        buildInfo { sizeCheck { enabled.set(true) } }
+    }
+    variant("release") {
+        instrumentation { enabled.set(false) }
+    }
+}
+```
+
+Calling `variant("x")` twice merges into one block. A block exposes only the
+per-variant settings: `endpoint`, `debug`, `optimizeExtensionsLoading`, `ndk`,
+`buildInfo`, `instrumentation` and `appToken(String)`. In the Kotlin DSL, naming
+a global-only setting inside a block is a compile error. In Groovy there is no
+such check, and the setting does **not** reach the global value either: Gradle
+runs the closure against the block itself, which carries its own copy of every
+setting, so `variant("x") { feedback true }`, `leak { … }`, `appToken { … }`
+(closure form) or a nested `variant(…)` inside a block write that copy and are
+**silently ignored**. Set global-only settings outside any `variant` block.
+`instrumentation.excludes` is likewise ignored inside a variant block.
+
+### Per-variant vs global-only
+
+| Scope | Settings |
+|---|---|
+| Per variant | `app_token`; `endpoint`, `debug`, `optimizeExtensionsLoading`; `ndk.*`; `buildInfo.*`; `instrumentation.*` (every toggle and `startupTier`) |
+| Global only | `feedback`, `leak.enabled`, `sdkAutoLoad`, `warnDebugOnlySdk`, `warnLibraryModule`, `cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader` |
+| Global, DSL only | `instrumentation.excludes` (no `plugin.*` file key) |
+
+`cliPath` may be relative. In the DSL (`cliPath.set("../tools/bugsee-cli")`) it is relative
+to the module applying the plugin; in `bugsee.properties` (`plugin.cliPath=tools/bugsee-cli`) it
+is relative to the directory of that file (the root project). It never depends on the Gradle
+daemon's working directory. Absolute paths are used as written; `~` and environment variables are
+not expanded. A path that is not an executable file logs a warning and falls back to the Kotlin uploader.
+
+A `variant.<name>.plugin.<key>` file key for a global-only setting is ignored
+with a warning. `instrumentation.excludes` is not a file key at all: a
+`plugin.instrumentation.excludes` or `variant.<name>.plugin.instrumentation.excludes`
+key is reported as unknown (at `--info`) and ignored.
+
+### Precedence
+
+A source is consulted as a whole (variant lookup, then its root/global value).
+By default:
+
+```text
+DSL (variant lookup, then global)  >  bugsee.properties (variant lookup, then root)  >  built-in default
+```
+
+So a DSL value for a setting, global or per variant, beats a
+`variant.*` file key for it. To use per-variant file values, leave that setting
+out of the DSL. With the DSL-only switch
+
+```kotlin
+bugsee { preferSettingsFile.set(true) }
+```
+
+the order for the whole build (root keys included) becomes
+`bugsee.properties (variant lookup, then root) > DSL (variant lookup, then global) > built-in default`.
+The default is `false`.
+
+When a `variant.<name>.*` file key is ignored because the DSL already set the
+value, the plugin warns once per key (default mode only):
+
+```text
+Bugsee: variant.staging.plugin.endpoint ignored: endpoint is set in the DSL (set preferSettingsFile to let the settings file win).
+```
+
+A root key (`plugin.<key>`, `app_token`) shadowed by the DSL is the long-standing
+precedence and does not warn.
+
+### App token chain
+
+Default order, first non-empty value wins:
+
+1. `appTokenByVariant { variantName -> … }` closure (`null`/empty falls through)
+2. `AppTokenProvider`
+3. DSL `variant { appToken(…) }` per the lookup order, then the global `defaultAppToken`
+4. `bugsee.properties`: `variant.*.app_token` per the lookup order, then root `app_token`
+5. manifest `com.bugsee.android.APP_TOKEN` meta-data (read at execution time)
+
+With `preferSettingsFile`, step 4 moves to the front.
+
+The placeholder token `00000000-0000-4000-8000-000000000000` (shipped by templates and CI
+projects without a real token) is treated like a missing one at every step: the chain skips it
+(info message, once per source) and falls through to the next source. When no real token remains,
+the upload tasks skip with a single info-level message instead of failing or warning.
+
+### Notes and limitations
+
+- **`sdkAutoLoad=false` disables ALL dependency auto-add.** With the default
+  (`true`) the plugin adds the core SDK and the extension modules it detects
+  (okhttp, compose, ktor, cronet, ndk, leak, feedback). With `false`
+  (`bugsee { sdkAutoLoad.set(false) }` or `plugin.sdkAutoLoad=false`) it adds
+  none of them; declare every Bugsee module yourself. Modules you declared are
+  never removed, and instrumentation of them is unaffected. Global-only setting.
+  `leak.enabled` and `feedback` only auto-add their module, so they are inert for
+  undeclared modules; `ndk.enabled` still runs the NDK symbol upload but the NDK
+  runtime is not added. A warning names each such opt-in (once per module that
+  applies the plugin). The Compose compiler plugin
+  (`bugsee-compose-compiler-plugin`) is still resolved when Compose is present
+  and must stay resolvable from a repository (offline / local-artifact setups
+  included). The decision is made when `implementation` is first resolved or
+  read, so a script that reads `implementation.incoming.dependencies` before
+  the `bugsee { }` block does not see the DSL value (tracked in #50).
+- **Dependency auto-add is decided before variants exist.** The NDK runtime and
+  the okhttp / compose / ktor / cronet modules are added when the feature is
+  enabled globally or in any variant scope (DSL block or `variant.*` key). A
+  variant that disabled the feature may carry an unused runtime module; its
+  upload task and bytecode transform stay exact.
+- **Core / extension presence is judged from production configurations and `compileOnly`.**
+  A `com.bugsee:bugsee-android` pin (an extension pin likewise suppresses only that extension's auto-add) on `implementation`, `api`,
+  `runtimeOnly`, `debug*` and their flavor equivalents, or on `compileOnly` (the app
+  supplies the SDK itself at runtime), suppresses the auto-add and sets the version used
+  for auto-added extensions; so does one on a custom
+  configuration those extend. A `debugImplementation`-only pin counts for every variant (the auto-add runs before
+  variants exist), as does a pin only on a flavor or custom build type, so variants outside the pinned
+  configuration may ship without the SDK (unless an extension pulls it in); for a debug-only pin that is the
+  intended choice for debug-only setups. The plugin logs a warning when the core is declared only on `debug*` (set
+  `warnDebugOnlySdk=false` to silence it when that is deliberate; the auto-add itself is unchanged); it
+  stays silent when an extension is added or declared outside `debug*`, when a dependency project declares an SDK
+  module through a non-debug edge (with Isolated Projects on: on any non-debug project dependency), and with
+  `sdkAutoLoad=false` (which also disables every other auto-add). A `debug*` edge to an intermediate dependency
+  project does not suppress the auto-add, but a direct `debug*` dependency on the SDK's own `:library` / `:stub`
+  project does. Declare the core with `implementation` (or also `releaseImplementation`) to include it in release.
+  A `compileOnly` core pin (not an extension one; `debugCompileOnly` and `compileOnlyApi` too, applying to every variant like `debugImplementation`) also sets that version, but only when no production core, dependency-project core or extension declaration does, so auto-added extensions follow the version the app compiles against instead of pulling a newer core; a pin below the floor is used as-is, like a production one. Test / androidTest-only pins neither suppress the auto-add nor set the version, so the release still gets the SDK; the unit-test
+  classpath then also sees the auto-added dependency and Gradle's conflict resolution
+  picks the version. Not detected: custom configurations wired only into a resolvable
+  classpath (`releaseRuntimeClasspath.extendsFrom(...)`) and test-named KMP source sets, and a core pinned by a library that the app adds through a custom configuration.
+- **Library detection reads production configurations of the app module only.**
+  The OkHttp / Compose / Ktor / Cronet detectors (including the Compose
+  compiler-plugin and Compose input-capture gates) look at `implementation`,
+  `api`, `runtimeOnly` and their build-type / flavor / source-set equivalents
+  declared directly in the app module. Test, androidTest, testFixtures and
+  compileOnly configurations are ignored, custom configurations that do not end
+  in `Implementation` / `Api` / `RuntimeOnly` are not scanned, and libraries
+  declared in other project modules are not followed. A configuration whose
+  name contains a capitalised `Test` word is treated as a test configuration,
+  except when the build types and flavors declared in the `android { }` DSL
+  explain it (a flavor `latestTest` keeps `latestTestImplementation` and
+  `latestTestReleaseApi` production, while `testLatestTestImplementation`, AGP's
+  unit-test configuration of that flavor, stays test). A custom source set that
+  is not an Android build type or flavor, such as a KMP `uiTest`, stays a test
+  configuration and its libraries are not detected; Kotlin Multiplatform
+  per-flavor source sets (`androidLatestTestImplementation`) are likewise not
+  detected. A dependency only in `debugImplementation` is detected and its
+  extension module is added project-wide. In the undetected cases declare the
+  library directly in an app-module production configuration, or declare the
+  Bugsee extension module (for example `bugsee-android-okhttp`) explicitly. For
+  Compose, the compiler
+  plugin additionally needs a direct Compose dependency in such a configuration:
+  declaring `bugsee-android-compose` alone does not enable it.
+
+- **Another plugin reading `implementation` before the `bugsee { }` block.** Gradle fires the
+  auto-add the first time the `implementation` dependency set is read through `incoming.dependencies`
+  or a resolution (`allDependencies`, `dependencies.all { }` and `configureEach { }` do not trigger
+  it). If a plugin or the build script does that before the `bugsee { }` block, the auto-add is
+  first decided on defaults and then re-checked when AGP finalizes the DSL (`finalizeDsl`, before
+  any variant callback). Only the difference is applied: auto-added modules the final DSL no longer
+  wants (for example after `sdkAutoLoad.set(false)`) are removed, newly wanted ones are added.
+  Limits: the early reader itself sees the provisional dependency set, and a copy or snapshot it
+  took (`implementation.copy()`) keeps it. If a configuration extending `implementation` was
+  already resolved by then, Gradle forbids the change; the plugin then leaves the set untouched and
+  logs a warning that names the differing settings. Values set after AGP finalizes the DSL (for
+  example in a later `afterEvaluate { }`) are not seen by the auto-add. An explicit
+  `com.bugsee:bugsee-android` declaration with exactly the auto-add version range, made after the
+  early read, cannot be told apart from the auto-added one: use a different version or declare it
+  before the early read.
+- **Compose limitation.** The Compose Kotlin compiler-plugin gate is
+  project-level and uses the same any-scope rule: if one variant enables
+  `instrumentation.compose`, every Kotlin compilation gets the compiler plugin,
+  including variants that disabled it.
+- **Compose tags only `@Composable` callees.** `bugseeTag` is added only to calls whose callee is itself
+  `@Composable` (declared in your module or a dependency). A plain helper that merely takes a
+  `Modifier` (`fun describe(m: Modifier)`) is left alone, including its default when the argument is
+  omitted. (Invoking a `@Composable` function-type value, `content(Modifier)`, was never tagged.)
+  The `bugseeSecure` pass targets a fixed list of androidx text-field callees and is unaffected.
+- **Omitted `modifier` keeps the callee's own default (all Kotlin lines).** When a call omits `modifier`
+  and Bugsee's transform runs before Compose's default-argument lowering, an injected
+  `Modifier.bugseeTag(..)` would turn the omitted slot into a supplied argument, so a callee declared
+  `modifier: Modifier = Modifier.fillMaxWidth()` would silently lose that default. An omitted `modifier`
+  is therefore tagged only when the callee's default is visible to the compiler invocation and is the
+  bare `Modifier` (`modifier: Modifier = Modifier`). **Trade-off:** an omitted-`modifier` call to a
+  composable from ANOTHER module (a library or a UI kit, whose default is not visible to the compiler
+  plugin), from another file of an incremental compile (so an incremental build can leave untagged a
+  site that a clean build tagged: safe, but nondeterministic across builds), resolving to an
+  overriding member or fake override, or with any other default is left untagged on Kotlin 2.x too;
+  calls that pass a `modifier` explicitly are tagged as before. An untagged site only affects the view-hierarchy naming,
+  a dropped default would change the layout. The `bugseeSecure` pass is exempt for its fixed list of
+  androidx text fields, whose default is the bare `Modifier`, so an omitted `modifier` on a password
+  field is still marked. Chaining the tag onto the callee's own default instead was evaluated and
+  rejected: a library callee's default expression is not available to the compiler plugin, and a
+  same-module one can read the callee's other parameters. Pinned on Kotlin 2.1, 2.2 and 2.4 by
+  real-Compose-compiler tests that execute the compiled call paths, and in a real AGP consumer.
+- **State-based text fields are not in the compile-time secure pass.** `bugseeSecure` is injected only for text
+  fields that take a `VisualTransformation` (the `String` / `TextFieldValue` overloads of `BasicTextField`, Material
+  and Material 3 `TextField` / `OutlinedTextField`). `BasicTextField(TextFieldState, ...)` and `BasicSecureTextField`
+  (foundation 1.7+) and the `TextFieldState` overloads of Material 3 `TextField` / `OutlinedTextField` and
+  `SecureTextField` / `OutlinedSecureTextField` (Material 3 1.4, checked with `javap`) have no such parameter and are
+  never secured by this pass, even though the Material 3 names are in the allowlist. The secure variants are still
+  protected at runtime, because they set `SemanticsProperties.Password`, which the SDK scanner masks. A state-based
+  `BasicTextField` or Material 3 `TextField` / `OutlinedTextField` does not set it, even when its `outputTransformation` masks the text, so a field that shows or
+  masks sensitive text this way must opt in with `Modifier.bugseeSecure()` (or `Modifier.semantics { contentType = ContentType.Password }`
+  on Compose 1.8+). The compile-time behavior is pinned on foundation 1.7.8 by the `compose-pipeline` fixture; the
+  runtime semantics were checked on 1.7.8 and 1.12.1 with `ComposeTestRule` (issue #158).
+- **Compose on Kotlin 1.9.** Composable calls that omit `modifier` are tagged as well as the explicit
+  ones, when the callee is declared in the same module with the plain `Modifier` default
+  (`modifier: Modifier = Modifier`). A Compose compiler release that registers through the legacy
+  `ComponentRegistrar` API (verified: 1.5.15, the release for Kotlin 1.9.25) is run by the 1.9 compiler
+  ahead of every modern plugin, so Bugsee's plugin registers through that API too and runs in plugin
+  classpath order. The Kotlin Gradle plugin puts it ahead of the Compose compiler that AGP's
+  `composeOptions` supplies (verified with AGP 8.6), so Bugsee sees the call sites before Compose's
+  default-argument lowering rewrites the omitted `modifier`. Two cases are left untagged on purpose: an
+  omitted `modifier` whose callee declares a different default (`= Modifier.fillMaxWidth()`) or comes
+  from another module or another file of an incremental compile (the default is not visible there,
+  so a later incremental build can leave a site untagged that a clean build tagged), or a call that
+  resolves to an overriding member composable, because the tag would replace that default (a Compose
+  compiler that registers the modern way, such as 1.5.0, therefore now tags only same-module omitted
+  `modifier` sites on 1.9, where it used to tag library ones too and silently drop their defaults);
+  and any site where Bugsee's plugin ends up BEHIND a legacy-registered Compose compiler (for example a
+  hand-written `-Xplugin=` for it in `freeCompilerArgs`, or the Compose Multiplatform Gradle plugin
+  applied before Bugsee, where the order follows plugin application order). The skip does not apply to
+  `bugseeSecure` on a password field that omits `modifier` (see the previous item). None of these affect
+  the build. With the Compose compiler bundled with Kotlin 2.x (modern registration) whether Bugsee's
+  plugin runs ahead of Compose's decides whether omitted-`modifier` sites are seen at all, and the same
+  default-preserving rule applies (see the previous item). Pinned by real-compiler, real-Compose tests that also execute the compiled call
+  paths. The `k21` artifact now also requires the embeddable Kotlin compiler (the one Gradle uses) on
+  Kotlin 1.9 to 2.1: a compiler with unshaded IntelliJ classes (the standalone `kotlinc`, some Bazel or
+  Maven setups) fails with `AbstractMethodError`.
+- **Compose and test code.** Unless `instrumentation.composeInTests` is enabled
+  (default `false`; same any-scope rule: enabling it in any scope applies the
+  compiler plugin to every test compilation of the module, and it is read only
+  from the DSL / `bugsee.properties`, not from Gradle properties or manifest
+  meta-data), the Compose compiler plugin is not applied to test
+  compilations (`*UnitTest`, `*AndroidTest`, `*ScreenshotTest`, `testFixtures`,
+  KMP `*Test` compilations associated with a main one, and every compilation of a
+  `com.android.test` module), so tag wraps never add semantics nodes to the
+  composables in your tests. To check: `kotlinCompilerPluginClasspath<Compilation>`
+  (e.g. `kotlinCompilerPluginClasspathDebugUnitTest`) has no
+  `bugsee-compose-compiler-plugin` dependency. A build type or flavor that merely
+  contains "Test" in its name (`smokeTest`) is production and stays instrumented.
+- **When values are fixed.** Values from `variant.*` file keys (and file root
+  values when `preferSettingsFile` ranks them above the DSL) are fixed when
+  variants are configured. Values resolved from the DSL stay live, so a late
+  `afterEvaluate { bugsee { endpoint.set(…) } }` still reaches the tasks when no
+  `variant.*` input outranks it.
+- `plugin.debug` per variant only affects that variant's logging; apply-time
+  reads use the global value.
+- With no `variant.*` key and no `variant { }` block, nothing changes, except
+  the new debug-only log line `Bugsee: variant <name> resolved: …` printed when
+  `plugin.debug` is true. In that case (and without `preferSettingsFile`) the
+  plugin reads the `bugsee { }` properties exactly as before: it does not
+  inspect or read them early.
 
 ## Type coercion
 
@@ -267,6 +665,101 @@ note immediately below.
 | Double | Standard decimal literal |
 | String | Trimmed; empty string is rejected (warn — see below) |
 | Enum | Case-insensitive match against the enum's constant names |
+
+## Troubleshooting: "was left UNINSTRUMENTED"
+
+```
+Bugsee: a.b.e.a(Ljava/net/URL;)V was left UNINSTRUMENTED: its instrumented bytecode could not be written (...)
+```
+
+A method (typically a very large one in an obfuscated third-party library) that cannot be
+written once instrumented is emitted unmodified instead of failing your build; Bugsee simply
+captures nothing in that method. The build is fine and nothing needs doing. To stop instrumenting
+the class on purpose, exclude it, or its whole package for obfuscated libraries whose class names
+are short (an exclude disables **all** Bugsee instrumentation for what it matches):
+
+```kotlin
+bugsee { instrumentation { excludes.add("a.b") } }
+```
+
+A whole class can be skipped too, with `Bugsee: a.b.big was left UNINSTRUMENTED: its constant pool
+has N of 65535 entries ...`: its constant pool is already within 4096 entries of the class-file
+limit, so adding instrumentation could fail the build with `ClassTooLargeException`. Again nothing
+needs doing; Bugsee captures nothing in that class.
+
+The other instrumentations still fail the build with an attributed `InstrumentationException`
+that names the class and suggests the same `excludes.add(...)`.
+
+## Library modules
+
+Apply the plugin to the application module only; a library module logs a warning and gets no
+Bugsee upload tasks. In a convention plugin shared by all Android modules, apply it under
+`pluginManager.withPlugin("com.android.application")`.
+
+The warning is emitted once per library module. A convention plugin that applies Bugsee to every module on
+purpose can silence it with `bugsee { warnLibraryModule.set(false) }` or `plugin.warnLibraryModule=false`
+in `bugsee.properties` (global-only; only this message is affected, the wiring is unchanged and no value
+turns it into a failure, so it is safe under warnings-as-errors).
+
+AGP's Kotlin Multiplatform library plugin (`com.android.kotlin.multiplatform.library`) and fused library
+plugin (`com.android.fused-library`) are treated the same way: they are library modules with no application
+variants (and no `android` extension), so they get the same warning (and the same `warnLibraryModule`
+opt-out) and nothing is wired, including the Compose compiler plugin.
+
+### Dynamic-feature and test modules
+
+`com.android.dynamic-feature` and `com.android.test` modules are not wired either (no upload tasks, no
+bytecode instrumentation), so applying Bugsee to them, for example from a convention plugin shared by every
+module, logs one default-level warning per module. `warnLibraryModule=false` silences it.
+
+The SDK belongs in the base application module, declared there as an `implementation` dependency (the plugin
+adds it for you). It cannot be in a feature alone: a build where only a dynamic-feature module has the SDK
+fails in the base app's resource linking (`resource string/bugsee_foreground_service_description not found`).
+An SDK dependency in the base app is also not on a feature's or a test module's compile classpath, so
+**a feature or test module that calls the SDK has to declare it itself as `compileOnly`** (the base app holds
+the implementation; AGP does not package a `compileOnly` dependency into the feature):
+
+```kotlin
+// feature/build.gradle.kts
+dependencies {
+    implementation(project(":app"))
+    compileOnly("com.bugsee:bugsee-android:<version of the base app's SDK>")
+}
+```
+
+The base application module has to apply Bugsee (or declare the SDK itself) for any of this to work: a
+feature's or test module's `compileOnly` SDK, and the Compose carve-out below, assume the base app holds the
+SDK at runtime.
+
+**Upgrading:** earlier versions added the SDK (`implementation`) and the matching extension modules (OkHttp,
+Ktor, ...) to these modules automatically whenever Bugsee was applied to them. They no longer do, except that
+a module that uses Compose keeps all of it as before (the SDK, the extension modules and the Compose compiler
+plugin): a dynamic-feature module with a Compose dependency (and `instrumentation.compose` or `composeSecure`
+on, the defaults), and a `com.android.test` module with `instrumentation.composeInTests=true`. If a feature or
+test module relied on the automatic SDK to compile calls into the SDK, declare it `compileOnly` as above (or
+accept the warning and remove the Bugsee plugin from that module).
+
+Applying the plugin to any other module that has no Android application or library plugin (for example
+`com.android.asset-pack`, `com.android.ai-pack`, `com.android.lint`, a non-Android JVM module in a
+multi-module build that also contains Android modules, or a plugin a future AGP adds) never fails the build either: it logs one warning naming
+the module, says nothing is wired (no tasks, no auto-added SDK dependency, no Compose compiler plugin), and continues. `warnLibraryModule=false` silences that warning too.
+Earlier versions failed such a module at configuration time with "Bugsee requires 'com.android.application'
+or 'com.android.library'".
+
+A module where the Android Gradle Plugin (AGP) is not on the plugin classpath visible to Bugsee (for example a
+plain `kotlin("jvm")` or `java-library` project with no AGP in its own or a parent project's `plugins {}`)
+gets one warning, "Bugsee: the Android Gradle Plugin is not on the plugin classpath of project ...", and the
+plugin does nothing there. Earlier versions failed such a module with a raw `NoClassDefFoundError`. This
+warning cannot be silenced with `warnLibraryModule` (the setting lives in the plugin's AGP-aware half, which
+is not loaded without AGP): do not apply the plugin to such modules. A `java-library` module without the
+Kotlin plugin still fails earlier, because the plugin also serves as a Kotlin compiler plugin and needs the
+Kotlin Gradle plugin on the classpath.
+
+If `com.android.application` IS applied in the module but AGP is not visible to Bugsee (Bugsee declared in
+the root project's `plugins {}` with `apply false` while AGP is declared only in the app module), the build
+fails with a message saying so, rather than building an app with nothing wired. Declare AGP in the root
+`plugins {}` block too (`apply false`), or both plugins in the app module's own block. (Only `com.android.application` fails this way; a library
+module in the same situation just gets the warning above, since the plugin wires nothing there anyway.)
 
 ## Diagnostics
 
@@ -282,6 +775,55 @@ Gradle log level:
 | Empty string value (`plugin.endpoint=`) | `warn` | Likely a half-edited line; default holds. |
 | Unknown `plugin.*` key | `info` | Forward-compat — `--info` to surface typos. |
 | Successful apply | `warn`, only if `plugin.debug=true` | Echoes each applied key/value when verbose mode is on. |
+| Unknown `variant.*` key | `info` | Same as unknown `plugin.*` keys. |
+| `variant.<name>.*` key or `variant("<name>")` block matching no variant, flavor or build type | `warn` | Otherwise silently ignored, so a typo or wrong case falls back to the root/DSL token. |
+| `variant.<name>.plugin.<key>` for a global-only setting | `warn` | Ignored; use the root `plugin.<key>`. |
+| `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
+| Resolved `com.bugsee:*` modules on different versions (checked when the variant's runtime classpath resolves, so not on a configuration-cache hit; Maven modules only, project dependencies are not compared) | `warn`, once per variant | Mixed SDK releases can fail at runtime; the message lists each `group:name:version`. Never fails the build. |
+| Declared Bugsee SDK version (the core on a production configuration, else an extension, else a `compileOnly` core pin) older than the `initializeExtensions` floor while `optimizeExtensionsLoading` is on | `warn`, once per module | Extension providers are then left in the manifest (no strip); upgrade the SDK or turn the option off. |
+| Auto-added extension module (`ndk`, `leak`, `feedback`, `compose`, `okhttp`, `ktor-2`, `ktor-3`, `cronet`) skipped because the SDK version auto-added modules use (the declared core pin, else a declared extension or `compileOnly` pin) is older than the module's first release (ndk `7.0.0-beta6`, leak `7.0.0-beta13`, the rest `7.0.0-beta1`) | `warn`, once per module | The coordinate would not resolve and fail the build; the module is not added. Names the module, the declared version and the first release. Ranges and unparsable versions are not checked; a module you declare yourself is never touched or warned about. |
+| Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |
+
+An empty root `app_token=` warns once, when the root token is actually consulted
+(not when a DSL token already won). An empty `variant.<name>.app_token=` warns
+when the file is parsed.
+
+Symbol (mapping and native) upload failures never fail the build: with the Kotlin uploader an
+unreachable endpoint, a timeout or a server error is a `warn` naming the variant, after up to 3
+attempts for transient errors (I/O errors, 429, 5xx; a read timeout is not retried).
+
+## Behind a proxy
+
+The uploads honour the standard JVM proxy system properties. Set them in
+`gradle.properties`:
+
+```properties
+systemProp.https.proxyHost=proxy.corp.example
+systemProp.https.proxyPort=3128
+systemProp.http.proxyHost=proxy.corp.example
+systemProp.http.proxyPort=3128
+systemProp.http.nonProxyHosts=localhost|*.corp.example
+```
+
+The JDK reads only `http.nonProxyHosts` for both schemes;
+`systemProp.https.nonProxyHosts` has no effect.
+
+The `bugsee-cli` path reads proxies from the environment only, so the plugin
+derives `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` from the properties above.
+Proxy credentials (`proxyUser`/`proxyPassword`) are percent-encoded into the URL.
+`nonProxyHosts` globs are translated to `NO_PROXY` syntax: `*.b` becomes `.b`,
+`10.*` becomes `10.0.0.0/8`, and patterns that cannot be expressed are dropped.
+The JDK's built-in loopback bypass is always appended (`localhost,127.0.0.0/8,::1,0.0.0.0,::`),
+except when `http.nonProxyHosts` is explicitly empty. Variables you already set in the environment are never overridden.
+Known divergence (verified against the pinned `bugsee-cli`): its `NO_PROXY` entries `b` and `.b`
+match `b` and all its subdomains, so the JDK's `*.b` (subdomains only) also bypasses the apex `b`, and
+a plain host pattern `b` (exact only in the JDK) also bypasses its subdomains. Entries are matched
+case-insensitively; globs other than a lone `*` and `host:port` entries are not supported, and
+a bracketed IPv6 entry (`[::1]`) never matches, so the translation strips the brackets;
+a `*x` pattern becomes `x`, which is narrower than the JDK's. Patterns containing a
+comma or space (including a leading or trailing one) match no host in the JDK and are dropped.
+Conversely a literal `.b` or `10.0.0.0/8` entry matches nothing in the JDK but is honoured by the CLI. The environment is also not reconciled
+with the JVM properties: if you set `HTTPS_PROXY` yourself, the CLI uses it while the Kotlin uploader uses the JVM properties.
 
 ## Example
 
@@ -334,3 +876,7 @@ bugsee {
 For the full set of DSL options, see KDocs on `BugseePluginExtension`
 and the sub-extension classes (`BugseeNdkExtension`,
 `BugseeBuildInfoExtension`, `BugseeInstrumentationExtension`, etc.).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

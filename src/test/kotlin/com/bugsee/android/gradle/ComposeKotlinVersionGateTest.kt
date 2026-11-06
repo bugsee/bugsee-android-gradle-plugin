@@ -88,6 +88,10 @@ class ComposeKotlinVersionGateTest {
     fun `older majors are supported`() {
         assertTrue(supported("1.9.22"))
         assertEquals(base, artifact("1.9.22"))
+        // Issue #119: the artifact is selected on 1.9.25 too, so a missing tag there is not a
+        // selection or gating problem.
+        assertTrue(supported("1.9.25"))
+        assertEquals(base, artifact("1.9.25"))
     }
 
     /**

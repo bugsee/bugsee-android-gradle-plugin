@@ -3,6 +3,7 @@ package com.bugsee.android.gradle
 import com.bugsee.android.gradle.upload.UploaderStrategy
 import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import javax.inject.Inject
 
@@ -36,7 +37,8 @@ import javax.inject.Inject
  * for the full key reference and precedence rules.
  */
 
-abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory) {
+@BugseeDsl
+abstract class BugseePluginExtension @Inject constructor(private val objects: ObjectFactory) : BugseeVariantSettings {
 
     /**
      * Bugsee API endpoint URL.
@@ -45,7 +47,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * Default: `https://api.bugsee.com`
      */
-    val endpoint: Property<String> = objects.property(String::class.java).convention("https://api.bugsee.com")
+    override val endpoint: Property<String> = objects.property(String::class.java).convention("https://api.bugsee.com")
 
     /**
      * Path to the `bugsee-cli` binary — optional override. When set and the
@@ -59,6 +61,12 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * Override use cases: locally-built CLI (`cargo build --release` in
      * `~/Projects/Bugsee/bugsee-cli`); air-gapped CI environments; testing
      * a CLI version the plugin doesn't yet pin.
+     *
+     * A relative path never depends on the Gradle daemon's working directory. Set in the DSL it is
+     * relative to the module applying the plugin; set as `plugin.cliPath` in `bugsee.properties` it is
+     * relative to that file's directory (the root project), so every module sees the same binary.
+     * Absolute paths are used as written; `~` and environment variables are not expanded. If the path
+     * does not resolve to an executable file a warning is logged and the Kotlin uploader is used.
      *
      * Default: unset (auto-download kicks in).
      */
@@ -116,7 +124,8 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * - [UploaderStrategy.CLI] (default): exec the `bugsee-cli` binary at
      *   [cliPath] (or the auto-downloaded pinned version); on a structural
-     *   failure (exit codes 1 or 2 per the CLI's contract, or an unresolvable
+     *   failure (exit codes 1 or 2 per the CLI's contract, a binary that did not
+     *   run or was killed: exit < 0, 126, 127 or >= 128, or an unresolvable
      *   binary), fall back to the in-process Kotlin uploader.
      * - [UploaderStrategy.KOTLIN]: force the in-process Kotlin uploader.
      *
@@ -140,7 +149,23 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * Default: `false`
      */
-    val debug: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+    override val debug: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
+
+    /**
+     * Fail the build when an upload to Bugsee does not complete (mapping, native symbols, build
+     * registration and artifact upload): a transport error (connection refused, DNS, timeout, TLS), an HTTP error status that
+     * persists after the bounded retry, or a server rejection such as an invalid app token.
+     *
+     * By default (`false`) the plugin only logs a warning and the build stays green. Turn this on in CI
+     * when a missing symbol or build upload must not go unnoticed. An upload that is skipped (no app token,
+     * nothing to upload) or whose symbols the server already has is not a failure. A failed auxiliary
+     * build-info blob (dependencies, timings) stays a warning with the built-in uploader and for the
+     * build-info-only upload; when size analysis uploads the artifact through `bugsee-cli upload build`
+     * (the default), any failure that command reports, including those blobs, counts.
+     *
+     * Default: `false`
+     */
+    override val failOnUploadError: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(false)
 
     /**
      * NDK integration configuration block — gates the runtime
@@ -149,7 +174,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * Disabled by default; opt in for apps that ship native code.
      */
-    val ndk: BugseeNdkExtension = objects.newInstance(BugseeNdkExtension::class.java)
+    override val ndk: BugseeNdkExtension = objects.newInstance(BugseeNdkExtension::class.java)
 
     /**
      * Configure NDK integration via a DSL block.
@@ -163,7 +188,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    fun ndk(action: Action<BugseeNdkExtension>) {
+    override fun ndk(action: Action<BugseeNdkExtension>) {
         action.execute(ndk)
     }
 
@@ -197,6 +222,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * When `true`, the plugin auto-adds `com.bugsee:bugsee-android-feedback` to the
      * consuming app's `implementation` configuration, enabling the in-app feedback /
      * report-submission UI. Skipped if the app already declares the artifact.
+     * Has no effect when [sdkAutoLoad] is `false` and you do not declare the module yourself.
      *
      * Default: `false`
      */
@@ -209,24 +235,105 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * When `true` (default), the plugin adds the core SDK to the
      * consuming app's `implementation` configuration at a dynamic version
-     * range floored at the plugin's `MIN_SDK_VERSION`. This lets an app
+     * range floored at the plugin's `MIN_SDK_VERSION` — unless the build already
+     * declares an SDK version, in which case that version is used instead (precedence:
+     * `bugsee-android` on the app > `bugsee-android` in a project the app depends on >
+     * a `bugsee-android-*` extension on the app > an extension in a dependency
+     * project; highest version within a tier). A pin declared that way may be below
+     * `MIN_SDK_VERSION`. This lets an app
      * depend only on `bugsee-android-feedback` (or `bugsee-android-okhttp`,
      * `bugsee-android-ndk`, …) and have the matching core SDK pulled in
      * automatically — extension-only declarations are sufficient.
      *
      * If the app has declared `bugsee-android` itself on any
      * configuration (`api`, `implementation`, `compileOnly`, per-variant
-     * configs, …), the auto-add is skipped regardless of this setting:
-     * the user-declared version always wins.
+     * configs, …), or a project it depends on exposes it through `api`, the
+     * auto-add is skipped regardless of this setting: the user-declared version
+     * always wins. (A library that only has it as `implementation` still gets the
+     * core added to the app, at the library's version.)
      *
-     * Set to `false` to opt out of the auto-pull behaviour entirely —
-     * useful when shipping the core SDK via a local classpath path or
-     * a locally-published artefact, where the dynamic version range
-     * would conflict with the user-managed declaration.
+     * Set to `false` to opt out of the auto-pull behaviour entirely: the plugin
+     * then adds no Bugsee runtime module on its own, neither the core SDK nor any
+     * extension (`bugsee-android-okhttp`, `-compose`, `-ktor-2/3`, `-cronet`,
+     * `-ndk`, `-leak`, `-feedback`). Declare every module you want yourself.
+     * Because `leak.enabled` and `feedback` only existed to auto-add their module,
+     * they have no effect for a module you do not declare. `ndk.enabled` still enables
+     * the NDK symbol upload, but the NDK runtime is not added for an undeclared module.
+     * The plugin warns about each such opt-in. Modules you declare keep working as
+     * before (instrumentation, NDK symbol upload). The Compose compiler plugin
+     * (`bugsee-compose-compiler-plugin`) is a compiler-side artifact and is still
+     * resolved when Compose is present; it must stay resolvable from a repository.
+     * Also settable as `plugin.sdkAutoLoad` in bugsee.properties (global-only; the
+     * DSL wins unless `preferSettingsFile` is set). Useful when shipping the core
+     * SDK via a local classpath path or a locally-published artefact, where the
+     * dynamic version range would conflict with the user-managed declaration.
      *
      * Default: `true`
      */
     val sdkAutoLoad: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
+     * Warn when the core Bugsee SDK is declared only on `debug*` configurations (for example just
+     * `debugImplementation`), so release builds may ship without it.
+     *
+     * Set to `false` if the debug-only SDK is deliberate: the warning is then suppressed entirely, at
+     * every log level. This only controls the warning: the auto-add decision is unchanged (a
+     * debug-only core declaration still suppresses the core auto-add), and `sdkAutoLoad` is not
+     * affected.
+     *
+     * The decision is made for the whole project before variants exist, so this is a global-only
+     * setting: a compile error inside `variant { }` in Kotlin, silently ignored there in Groovy. Also settable as `plugin.warnDebugOnlySdk`
+     * in bugsee.properties (the DSL wins unless `preferSettingsFile` is set).
+     *
+     * Default: `true`
+     */
+    val warnDebugOnlySdk: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
+     * Warn once per library module that the plugin targets application modules (the module gets no
+     * Bugsee wiring). Covers `com.android.library`, AGP's KMP library plugin
+     * (`com.android.kotlin.multiplatform.library`) and fused library plugin (`com.android.fused-library`).
+     * Also controls the equivalent warning for a module with no Android application/library plugin at all
+     * (asset-pack, ai-pack, lint, a non-Android module): applying Bugsee there never fails the build.
+     *
+     * Set to `false` for a convention plugin that deliberately applies Bugsee to every Android module:
+     * the warning is then suppressed entirely. This only controls that one message; nothing about the
+     * wiring changes, and no value can turn it into a build failure.
+     *
+     * Global-only, like [warnDebugOnlySdk] (a compile error inside `variant { }` in Kotlin, silently
+     * ignored there in Groovy). Also settable as `plugin.warnLibraryModule` in bugsee.properties (the DSL
+     * wins unless `preferSettingsFile` is set).
+     *
+     * Default: `true`
+     */
+    val warnLibraryModule: Property<Boolean> = objects.property(Boolean::class.javaObjectType).convention(true)
+
+    /**
+     * Extra tasks the build-id asset task must run after, by task name.
+     *
+     * The task that injects `bugsee_build_id.properties` transforms AGP's merged assets
+     * directory. Any other task that writes into that directory without AGP knowing makes
+     * Gradle validation fail ("uses this output of task ... without declaring an explicit
+     * or implicit dependency"). Flutter's `copyFlutterAssets<Variant>` is handled
+     * automatically; use this for a renamed Flutter task or another plugin that writes there.
+     * `<Variant>` in a name is replaced by the capitalized variant name:
+     *
+     * ```kotlin
+     * bugsee { assetsDependsOn("copyFlutterAssets<Variant>") }
+     * ```
+     *
+     * Names are looked up lazily, so tasks registered later are found. Not available in
+     * `bugsee.properties`.
+     *
+     * Default: empty
+     */
+    val assetsDependsOn: ListProperty<String> =
+        objects.listProperty(String::class.java).convention(emptyList())
+
+    /** Add [taskNames] to [assetsDependsOn]; see there for the `<Variant>` placeholder. */
+    fun assetsDependsOn(vararg taskNames: String) {
+        assetsDependsOn.addAll(taskNames.toList())
+    }
 
     /**
      * Build-info configuration block. Always-on by default; registers
@@ -238,7 +345,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * Disable via `buildInfo { enabled.set(false) }` to opt out
      * entirely (e.g. for firewalled CI).
      */
-    val buildInfo: BugseeBuildInfoExtension = objects.newInstance(BugseeBuildInfoExtension::class.java)
+    override val buildInfo: BugseeBuildInfoExtension = objects.newInstance(BugseeBuildInfoExtension::class.java)
 
     /**
      * Configure build-info via a DSL block.
@@ -253,7 +360,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    fun buildInfo(action: Action<BugseeBuildInfoExtension>) {
+    override fun buildInfo(action: Action<BugseeBuildInfoExtension>) {
         action.execute(buildInfo)
     }
 
@@ -264,7 +371,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * toggled independently, or the entire instrumentation pipeline can be
      * disabled via `instrumentation { enabled.set(false) }`.
      */
-    val instrumentation: BugseeInstrumentationExtension = objects.newInstance(BugseeInstrumentationExtension::class.java)
+    override val instrumentation: BugseeInstrumentationExtension = objects.newInstance(BugseeInstrumentationExtension::class.java)
 
     /**
      * Configure bytecode instrumentation via a DSL block.
@@ -278,7 +385,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    fun instrumentation(action: Action<BugseeInstrumentationExtension>) {
+    override fun instrumentation(action: Action<BugseeInstrumentationExtension>) {
         action.execute(instrumentation)
     }
 
@@ -307,7 +414,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      * }
      * ```
      */
-    val optimizeExtensionsLoading: Property<Boolean> =
+    override val optimizeExtensionsLoading: Property<Boolean> =
         objects.property(Boolean::class.javaObjectType).convention(true)
 
     /** Default app token, used when no variant-specific token is provided. */
@@ -324,7 +431,7 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      *
      * @param token The app token from the Bugsee dashboard.
      */
-    fun appToken(token: String) {
+    override fun appToken(token: String) {
         defaultAppToken = token
     }
 
@@ -359,5 +466,40 @@ abstract class BugseePluginExtension @Inject constructor(objects: ObjectFactory)
      */
     fun feedback(enabled: Boolean) {
         feedback.set(enabled)
+    }
+
+    /**
+     * When `true`, values from `bugsee.properties` win over DSL values for
+     * file-bound settings; when `false` (default), DSL values win. Not itself
+     * settable from the properties file.
+     *
+     * Default: `false`
+     */
+    val preferSettingsFile: Property<Boolean> =
+        objects.property(Boolean::class.javaObjectType).convention(false)
+
+    private val blocks = linkedMapOf<String, BugseePluginExtension>()
+
+    /** Per-variant override blocks declared via [variant], keyed by variant name. */
+    internal val variantBlocks: Map<String, BugseePluginExtension>
+        get() = blocks
+
+    /**
+     * Override a subset of settings for one build variant. The block is created
+     * on first use; repeated calls with the same name merge into it.
+     *
+     * ```kotlin
+     * bugsee {
+     *     variant("staging") {
+     *         endpoint.set("https://staging.example.com")
+     *     }
+     * }
+     * ```
+     *
+     * See [BugseeVariantSettings] for what is available inside the block.
+     */
+    fun variant(name: String, action: Action<BugseeVariantSettings>) {
+        val block = blocks.getOrPut(name) { objects.newInstance(BugseePluginExtension::class.java) }
+        action.execute(block)
     }
 }

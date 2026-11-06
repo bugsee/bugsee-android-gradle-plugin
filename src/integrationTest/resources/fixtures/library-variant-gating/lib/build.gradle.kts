@@ -6,7 +6,8 @@ plugins {
 
 // Mirror the root group so the auto-install short-circuit treats
 // this as a Bugsee internal.
-group = "com.bugsee.testfixture"
+// Tests of the library-module warning override it with a customer-like group.
+group = project.findProperty("bugseeFixtureGroup")?.toString() ?: "com.bugsee.testfixture"
 
 android {
     namespace = "com.example.libfixture"
@@ -17,9 +18,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
 }
 
@@ -32,5 +30,20 @@ bugsee {
     // library-variant scope.
     buildInfo {
         enabled.set(false)
+    }
+}
+
+// Explicit, to match compileOptions above. The `kotlinOptions { jvmTarget }` it replaces is a hard
+// error from Kotlin 2.3; the `compilerOptions` DSL exists from Kotlin 2.0.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+// Opt-in: disable every variant so `onVariants` never fires (the warning must still appear).
+if (project.findProperty("bugseeFixtureDisableAllVariants")?.toString() == "true") {
+    androidComponents {
+        beforeVariants { it.enable = false }
     }
 }

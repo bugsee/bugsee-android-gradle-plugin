@@ -17,6 +17,10 @@ internal class InstrumentationException(
     cause: Throwable,
 ) : RuntimeException(buildMessage(className, methodName, methodDescriptor), cause) {
     private companion object {
+        /** Package of [dotted], or the class itself for the default package. */
+        fun packagePrefix(dotted: String): String =
+            dotted.substringBeforeLast('.', missingDelimiterValue = dotted)
+
         fun buildMessage(className: String, methodName: String?, methodDescriptor: String?): String {
             val dotted = className.replace('/', '.')
             return "Bugsee: bytecode instrumentation failed for " +
@@ -28,7 +32,10 @@ internal class InstrumentationException(
                 "        instrumentation {\n" +
                 "            excludes.add(\"$dotted\")\n" +
                 "        }\n" +
-                "    }"
+                "    }\n" +
+                "A package prefix works too and is the form to use for third-party libraries " +
+                "obfuscated by ProGuard/DexGuard/Allatori, whose class names are short " +
+                "(e.g. excludes.add(\"${packagePrefix(dotted)}\"))."
         }
     }
 }
@@ -47,6 +54,10 @@ internal class InstrumentationException(
  * than a build-time error. Re-throwing fails the build deterministically
  * with a message naming the class, so the consumer can exclude it (see
  * [InstrumentationException]) while the underlying plugin bug is fixed.
+ *
+ * The buffering lanes (operation dispatch, startup kind-candidates) additionally run under
+ * [FrameFallbackContext], which proves a method writable BEFORE it reaches the real writer
+ * and otherwise emits it unmodified; the streaming lanes keep the re-throw described here.
  *
  * The per-`visitX` try/catch is effectively free when no exception is
  * thrown (the JVM's exception-table approach has zero steady-state cost),
@@ -68,6 +79,11 @@ internal class CatchingMethodVisitor(
             // Already attributed by an inner guard — propagate as-is so we
             // don't bury the original class/method under a re-wrap.
             throw e
+        } catch (e: IllegalArgumentException) {
+            // AGP retries a version-50 class with COMPUTE_MAXS iff it sees exactly this
+            // exception, unwrapped; wrapping it turns a recoverable build into a failed one.
+            if (e.message == FrameFallbackContext.JSR_RET_MESSAGE) throw e
+            throw InstrumentationException(className, methodName, methodDescriptor, e)
         } catch (t: Throwable) {
             throw InstrumentationException(className, methodName, methodDescriptor, t)
         }

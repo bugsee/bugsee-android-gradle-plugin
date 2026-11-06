@@ -7,18 +7,19 @@ import org.apache.http.conn.ssl.DefaultHostnameVerifier
 import org.apache.http.entity.FileEntity
 import org.apache.http.entity.StringEntity
 import org.apache.http.impl.client.HttpClients
-import org.apache.http.impl.client.StandardHttpRequestRetryHandler
 import org.apache.http.message.BasicHeader
 import org.apache.http.protocol.HTTP
-import org.apache.http.util.EntityUtils
 import org.gradle.api.logging.Logger
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 
 internal object SymbolUploader {
 
     private const val CONNECT_TIMEOUT_MS = 30_000
     private const val SOCKET_TIMEOUT_MS = 120_000
+
+    private val QUERY_IN_MESSAGE = Regex("\\?[^\\r\\n]*")
 
     /**
      * Two-stage upload:
@@ -52,6 +53,51 @@ internal object SymbolUploader {
         logger: Logger,
         debug: Boolean,
         uploaderTag: String = "kotlin",
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
+    ): Boolean = try {
+        doUpload(file, json, appToken, endpoint, logger, debug, uploaderTag, retryPolicy)
+    } catch (e: IOException) {
+        // A cancelled build (Ctrl-C, daemon stop) must stay cancelled, not turn into a warning.
+        if (HttpRetry.isInterruption(e)) {
+            Thread.currentThread().interrupt()
+            throw e
+        }
+        warnTransportFailure(e, appToken, logger)
+        false
+    } catch (e: RuntimeException) {
+        warnTransportFailure(e, appToken, logger)
+        false
+    }
+
+    /**
+     * A transport failure (connection refused, DNS, timeout, TLS, ...) must not fail the build: like an
+     * HTTP-status failure it is a warning and the upload is skipped. The message is masked: it can carry
+     * the request URL, and the app token is part of the metadata path.
+     */
+    private fun warnTransportFailure(e: Exception, appToken: String, logger: Logger) {
+        logger.warn("Bugsee upload failed: ${e.javaClass.simpleName}: ${sanitize(e.message ?: "", appToken)}")
+        // Full detail (stack trace, causes) for diagnosis with --info; it can hide a programming error.
+        // Rendered to text and sanitized: passing the Throwable itself would print the raw message and
+        // cause chain, bypassing the masking.
+        logger.info("Bugsee upload failure details: ${sanitize(e.stackTraceToString(), appToken)}")
+    }
+
+    /**
+     * Mask the token and drop any query string: a malformed presigned URL echoed in an exception message
+     * carries its signature (a write credential) in the query.
+     */
+    private fun sanitize(text: String, appToken: String): String =
+        text.replace(appToken, BundleUploader.maskAppToken(appToken)).replace(QUERY_IN_MESSAGE, "?<redacted>")
+
+    private fun doUpload(
+        file: File,
+        json: String,
+        appToken: String,
+        endpoint: String,
+        logger: Logger,
+        debug: Boolean,
+        uploaderTag: String,
+        retryPolicy: HttpRetry.RetryPolicy,
     ): Boolean {
         if (debug) logger.warn("Bugsee: Starting upload. Body: $json")
 
@@ -72,14 +118,15 @@ internal object SymbolUploader {
             .build()
 
         val httpClient = HttpClients.custom()
+            .useSystemProperties()
             .setDefaultRequestConfig(requestConfig)
             .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
-            .setRetryHandler(StandardHttpRequestRetryHandler())
+            .disableAutomaticRetries() // HttpRetry owns retries; stacking both multiplied full-body PUTs
             .build()
 
         return httpClient.use { client ->
-            val response = client.execute(httpPost)
-            val statusCode = response.statusLine.statusCode
+            val reply = HttpRetry.execute(client, httpPost, "metadata request", logger, retryPolicy)
+            val statusCode = reply.status
 
             // Accept the full 2xx range. S3 and CDN proxies routinely
             // normalize successful responses to 201 Created or 204 No
@@ -90,20 +137,18 @@ internal object SymbolUploader {
             // 200..299 range; this aligns the two.
             if (statusCode !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$statusCode): " +
-                        EntityUtils.toString(response.entity, "utf-8"),
+                    "Bugsee upload failed (status=$statusCode): ${BundleUploader.redactBodyForLog(reply.body, appToken)}",
                 )
                 return@use false
             }
 
-            val resEntity = response.entity
-            if (resEntity == null) {
+            val contentText = reply.body
+            if (contentText == null) {
                 logger.warn("Bugsee upload failed: no response from server")
                 return@use false
             }
 
-            val contentText = EntityUtils.toString(resEntity, "utf-8")
-            if (debug) logger.warn("Bugsee: Upload step 2. Response: $contentText")
+            if (debug) logger.warn("Bugsee: Upload step 2. Response: ${redactedResponseForLog(contentText, appToken)}")
 
             // Parse the body defensively. The 2xx range covers
             // 201 Created / 202 Accepted / 204 No Content responses
@@ -125,8 +170,7 @@ internal object SymbolUploader {
             } catch (e: Exception) {
                 logger.warn(
                     "Bugsee upload failed: response body is not valid JSON " +
-                        "(status=$statusCode): ${e.message}. Body preview: " +
-                        contentText.take(200),
+                        "(status=$statusCode, ${contentText.length} chars)",
                 )
                 return@use false
             }
@@ -144,9 +188,9 @@ internal object SymbolUploader {
                 if (error != null) {
                     val errorType = error.optString("type", "")
                     if (errorType == "ApplicationNotFoundError") {
-                        logger.warn("App token is invalid: $appToken")
+                        logger.warn("App token is invalid: ${BundleUploader.maskAppToken(appToken)}")
                     } else {
-                        logger.warn("Bugsee upload failed with error: $error")
+                        logger.warn("Bugsee upload failed with error: ${BundleUploader.redactBodyForLog(error.toString(), appToken)}")
                     }
                 } else {
                     logger.warn("Bugsee upload failed: null endpoint")
@@ -155,21 +199,21 @@ internal object SymbolUploader {
             }
 
             // 2. Upload to presigned URL
-            if (debug) logger.warn("Bugsee: Uploading to endpoint: $presignedEndpoint")
+            // The presigned URL's query string is a write credential valid for days: never log it.
+            if (debug) logger.warn("Bugsee: Uploading to endpoint: ${BundleUploader.redactPresignedUrl(presignedEndpoint)}")
             val httpPut = HttpPut(presignedEndpoint)
             httpPut.entity = FileEntity(file)
-            val putResponse = client.execute(httpPut)
+            val putReply = HttpRetry.execute(client, httpPut, "file upload", logger, retryPolicy)
 
             // Same 2xx-range relaxation as the POST step above —
             // presigned-URL PUTs land on S3 (or whichever CDN the
             // appserver minted), and those return 200/201/204
             // interchangeably depending on multipart vs single-PUT
             // and storage-class settings.
-            val putStatus = putResponse.statusLine.statusCode
+            val putStatus = putReply.status
             if (putStatus !in 200..299) {
                 logger.warn(
-                    "Bugsee upload failed (status=$putStatus): " +
-                        EntityUtils.toString(putResponse.entity, "utf-8"),
+                    "Bugsee upload failed (status=$putStatus): ${BundleUploader.redactBodyForLog(putReply.body, appToken)}",
                 )
                 return@use false
             }
@@ -178,6 +222,14 @@ internal object SymbolUploader {
             true
         }
     }
+
+    /**
+     * The metadata POST's reply as it is safe to log: the `endpoint` field is a presigned PUT URL whose
+     * query string is a write credential valid for days, so the query is dropped (at any depth) and
+     * credential-looking fields are redacted; see [BundleUploader.redactBodyForLog].
+     */
+    internal fun redactedResponseForLog(contentText: String, appToken: String? = null): String =
+        BundleUploader.redactBodyForLog(contentText, appToken)
 
     /**
      * Whether the metadata POST's reply says the server already has this symbol

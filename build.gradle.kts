@@ -56,15 +56,16 @@ dependencies {
 
     // ASM tree + analysis used by the app-startup-tracing production
     // transforms (MethodNode-based rewrite, Analyzer/BasicInterpreter
-    // for natural-loop detection). compileOnly — AGP brings the same
-    // ASM 9.7 transitively at plugin runtime through its R8/transform
+    // for natural-loop detection). compileOnly — AGP brings its own
+    // ASM transitively at plugin runtime through its R8/transform
     // toolchain, so packaging another copy would risk classloader
     // pollution.
     //
     // **AGP→ASM version coupling.** AGP 8.6.0 (the version this plugin
-    // is built against) pulls ASM 9.7 transitively via its R8/transform
-    // chain (`com.android.tools.build:gradle:8.6.0` → `transform-api`
-    // → `org.ow2.asm:asm-*:9.7`). Consumers MUST use AGP 8.6.0+ at
+    // is built against) resolves ASM 9.6 at runtime (AGP 8.8/8.9 ship 9.7,
+    // 8.10 ships 9.7.1); the 9.7 here is only the compile/test API level.
+    // Code that depends on analyzer behaviour must hold on all of them — run
+    // the unit tests with `-PasmTestVersion=9.6` to check. Consumers MUST use AGP 8.6.0+ at
     // build time; earlier AGP releases shipped older ASM versions
     // (e.g. AGP 8.4 ships ASM 9.5) that lack a few utility methods
     // this plugin doesn't use today but is one refactor away from
@@ -94,10 +95,12 @@ dependencies {
     // ASM toolchain used by the app-startup-tracing test harness
     // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
     // for CFG-correctness assertions, tree + core for transform code).
-    testImplementation("org.ow2.asm:asm:9.7")
-    testImplementation("org.ow2.asm:asm-tree:9.7")
-    testImplementation("org.ow2.asm:asm-util:9.7")
-    testImplementation("org.ow2.asm:asm-analysis:9.7")
+    // `-PasmTestVersion=9.6` (AGP 8.6.0's runtime ASM) re-runs them on another ASM.
+    val asmTestVersion = providers.gradleProperty("asmTestVersion").orElse("9.7").get()
+    testImplementation("org.ow2.asm:asm:$asmTestVersion")
+    testImplementation("org.ow2.asm:asm-tree:$asmTestVersion")
+    testImplementation("org.ow2.asm:asm-util:$asmTestVersion")
+    testImplementation("org.ow2.asm:asm-analysis:$asmTestVersion")
 
     // Kotlin compiler embeddable for the test harness's Kotlin-source
     // compiler (compiles inline Kotlin snippets to class bytes that the
@@ -225,6 +228,9 @@ val launcher17Provider = javaToolchains.launcherFor {
 // `KotlinCompilerPluginSupportPlugin` when Gradle's plugin verifier
 // resolves Bugsee plugin class references.
 
+// Where the pre-built plugin is published for fixtures on a non-default Gradle (see the publishing block).
+val integrationTestPluginRepoDir = layout.buildDirectory.dir("integrationTest/plugin-repo")
+
 tasks.register<Test>("integrationTest") {
     description = "TestKit-driven build-time integration tests for the Bugsee Android Gradle plugin."
     group = "verification"
@@ -232,6 +238,19 @@ tasks.register<Test>("integrationTest") {
     classpath = integrationTest.runtimeClasspath
     dependsOn(buildStubSdkJar)
     dependsOn(publishStubSdkToLocalRepo)
+    // The Compose pipeline fixtures resolve the Bugsee compiler-plugin artifacts from this local
+    // repo, by path only (the producing project's build dir; no cross-project access).
+    dependsOn(":compose-compiler-plugin:publishAllPublicationsToIntegrationTestRepository")
+    // The path below MUST match `integrationTestComposeRepoDir` in compose-compiler-plugin/build.gradle.kts
+    // (referenced by path, never through the other project, so it stays Isolated-Projects clean).
+    systemProperty(
+        "bugsee.testkit.composePluginRepo",
+        layout.projectDirectory.dir("compose-compiler-plugin/build/integrationTest/compose-plugin-repo").asFile.absolutePath
+    )
+    // The jars' CONTENTS are the input (the published repo's SNAPSHOT file names carry a timestamp that
+    // changes on every publish, which would keep this task from ever being up to date).
+    inputs.files(fileTree(layout.projectDirectory.dir("compose-compiler-plugin/build/integrationTest/compose-plugin-repo")) { include("**/*.jar") })
+        .withPropertyName("composePluginJars").withPathSensitivity(PathSensitivity.NONE)
     useJUnit()
     // Forward the local stub-SDK Maven repo path so the fixture's
     // `settings.gradle.kts` can wire it via
@@ -248,6 +267,24 @@ tasks.register<Test>("integrationTest") {
         "bugsee.testkit.javaHome",
         launcher17Provider.get().metadata.installationPath.asFile.absolutePath
     )
+    // Toolchain matrix for the fixture builds. Each is optional: unset keeps the default
+    // (Gradle 8.7 from the wrapper's lane, AGP 8.6.0, Kotlin 2.1.0 — the declared minimums).
+    //   -Pbugsee.it.gradleVersion=9.4.1   Gradle that runs the fixture (GradleRunner.withGradleVersion)
+    //   -Pbugsee.it.agpVersion=8.13.2     com.android.* plugin version in the fixtures
+    //   -Pbugsee.it.kotlinVersion=2.3.20  org.jetbrains.kotlin.android version in the fixtures
+    // They are task inputs, so changing one re-runs the suite instead of reusing UP-TO-DATE.
+    // A non-default Gradle cannot compile this plugin as an included build (our Kotlin 2.1 compiler
+    // chokes on the newest Gradle APIs), so those legs resolve the pre-built plugin from a local repo.
+    if (providers.gradleProperty("bugsee.it.gradleVersion").orNull?.isNotBlank() == true) {
+        dependsOn("publishAllPublicationsToIntegrationTestPluginRepository")
+        systemProperty("bugsee.testkit.pluginRepo", integrationTestPluginRepoDir.get().asFile.absolutePath)
+        systemProperty("bugsee.testkit.pluginVersion", version.toString())
+    }
+    for (key in listOf("gradleVersion", "agpVersion", "kotlinVersion")) {
+        val value = providers.gradleProperty("bugsee.it.$key").orNull?.takeIf { it.isNotBlank() }
+        inputs.property("bugsee.it.$key", value ?: "default")
+        if (value != null) systemProperty("bugsee.testkit.$key", value)
+    }
     // Real bugsee-cli (>= 0.8.0) for the native-upload e2e tests; they skip when unset.
     System.getenv("BUGSEE_CLI_BIN")?.let {
         environment("BUGSEE_CLI_BIN", it)
@@ -275,6 +312,9 @@ tasks.register<Test>("integrationTest") {
 //      `scripts/integration-test.sh` relies on this to make the CI lane real.
 // ============================================================================
 tasks.named<Test>("test") {
+    // BuildHeapPolicyTest reads gradle.properties; keep the test from going stale when it changes.
+    inputs.file("gradle.properties").withPropertyName("gradleProperties")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     val cliBin: String? = System.getenv("BUGSEE_CLI_BIN")
         ?: (System.getProperty("bugsee.cli.bin"))
     if (cliBin != null) {
@@ -342,8 +382,8 @@ fun MavenPublication.configurePom() {
 
         licenses {
             license {
-                name.set("Proprietary")
-                url.set("https://bugsee.com/tos/")
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
             }
         }
         developers {
@@ -368,6 +408,24 @@ publishing {
         artifact(dokkaJavadocJar)
         configurePom()
     }
+}
+
+// Local Maven repo the integrationTest fixtures resolve the plugin from when the matrix asks for a
+// specific Gradle (see `bugsee.it.gradleVersion` on the integrationTest task). Wiped before every
+// publish so a stale SNAPSHOT build can never be picked up.
+publishing {
+    repositories {
+        maven {
+            name = "IntegrationTestPlugin"
+            url = uri(integrationTestPluginRepoDir)
+        }
+    }
+}
+val cleanIntegrationTestPluginRepo by tasks.registering(Delete::class) {
+    delete(integrationTestPluginRepoDir)
+}
+tasks.withType<PublishToMavenRepository>().configureEach {
+    if (name.endsWith("ToIntegrationTestPluginRepository")) dependsOn(cleanIntegrationTestPluginRepo)
 }
 
 nexusPublishing {

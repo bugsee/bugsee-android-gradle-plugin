@@ -73,4 +73,33 @@ class InstrumentationExcludesIntegrationTest {
             excluded.callsIn(sampleInitializer) > 0,
         )
     }
+
+    @Test
+    fun slashSeparatedExcludeOptsAClassOutOfInstrumentation() {
+        val fixture = FixtureProject.materialize("app-startup-tracing", temp.newFolder("excludes-slash"))
+
+        fixture.buildTasks(listOf(":app:assembleDebug"), "STANDARD")
+        assertTrue(
+            "baseline: SampleApp must be instrumented at STANDARD",
+            fixture.indexBytecode().callsIn(sampleApp) > 0,
+        )
+
+        // Bytecode-style spelling (issue #51) must behave like the dotted one.
+        fixture.buildTasks(
+            listOf(":app:assembleDebug"),
+            "STANDARD",
+            "-PbugseeFixtureExcludes=com/example/fixture/SampleApp",
+        )
+        val excluded = fixture.indexBytecode()
+        assertEquals(
+            "slash-form exclude must remove SampleApp's dispatcher calls, got: " +
+                "${excluded.dispatcherCalls[sampleApp]}",
+            0,
+            excluded.callsIn(sampleApp),
+        )
+        assertTrue(
+            "non-excluded SampleInitializer must remain instrumented",
+            excluded.callsIn(sampleInitializer) > 0,
+        )
+    }
 }

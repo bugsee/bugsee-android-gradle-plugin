@@ -41,8 +41,9 @@ import javax.inject.Inject
  *     directly with `transform = "breakpad"`.
  *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload --type elf`
  *     via [CliUploader.uploadElf]. On a structural CLI failure (exit 1 or 2,
- *     binary missing, exec failed), fall back to the Kotlin uploader.
- *     Substantive CLI failures (bad token, server, network) propagate.
+ *     exit < 0 / 126 / 127 / >= 128, binary missing, exec failed), fall back to the Kotlin uploader.
+ *     Substantive CLI failures (bad token, server, network) propagate. A cancelled build
+ *     (interrupt) is rethrown, never a fallback.
  *
  * Both paths share the [SymbolHashCache] — once a hash is uploaded
  * successfully by either path, subsequent builds skip the upload regardless
@@ -52,6 +53,14 @@ abstract class NativeUploadTask : DefaultTask() {
 
     @get:Input
     abstract val debug: Property<Boolean>
+
+    /**
+     * Fail the task when the upload does not complete. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.failOnUploadError] (default `false`: warn only).
+     */
+    @get:Input
+    @get:Optional
+    abstract val failOnUploadError: Property<Boolean>
 
     @get:Input
     abstract val variantName: Property<String>
@@ -141,6 +150,13 @@ abstract class NativeUploadTask : DefaultTask() {
     @get:Optional
     abstract val preResolvedAppToken: Property<String>
 
+    // Set at registration when a placeholder app token was ignored while resolving (absent otherwise,
+    // so inputs of ordinary builds are unchanged). With no real token the task then logs an info skip
+    // line instead of the missing-token warnings.
+    @get:Input
+    @get:Optional
+    abstract val placeholderTokenSeen: Property<Boolean>
+
     /**
      * `res/` source files for the `@string/foo`-fallback path inside
      * `AppTokenResolver.resolveFromManifest`. Wired at registration
@@ -189,16 +205,24 @@ abstract class NativeUploadTask : DefaultTask() {
 
         if (isDebug) logger.warn("Bugsee: Upload native symbols task for variant ${variantName.get()}")
 
+        var placeholderSeen = placeholderTokenSeen.getOrElse(false)
         val appToken = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
             ?: AppTokenResolver.resolveFromPropertiesFile(
-                rootProjectDirectory.get().asFile, logger, isDebug
+                rootProjectDirectory.get().asFile, logger, isDebug,
+                onPlaceholder = { placeholderSeen = true },
             )
             ?: AppTokenResolver.resolveFromManifest(
-                manifest, stringResourceFiles.files, logger, isDebug
+                manifest, stringResourceFiles.files, logger, isDebug,
+                warnIfMissing = !placeholderSeen,
+                onPlaceholder = { placeholderSeen = true },
             )
 
         if (appToken == null) {
-            logger.warn("Bugsee: Could not resolve appToken. Skipping native upload.")
+            if (placeholderSeen) {
+                AppTokenResolver.logPlaceholderSkip(logger, "native", variantName.get())
+            } else {
+                logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping native upload.")
+            }
             return
         }
 
@@ -206,7 +230,7 @@ abstract class NativeUploadTask : DefaultTask() {
         val versionName = ManifestModifier.getVersionName(manifest)
         val versionCode = ManifestModifier.getVersionCode(manifest)
         if (versionCode == null) {
-            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml")
+            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml for variant ${variantName.get()}. Skipping native upload.")
             return
         }
 
@@ -216,7 +240,7 @@ abstract class NativeUploadTask : DefaultTask() {
         // every R8-minified build, breaking NDK symbolication.
         val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
         if (buildUUID.isEmpty()) {
-            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping native upload.")
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty for variant ${variantName.get()}. Skipping native upload.")
             return
         }
 
@@ -232,7 +256,7 @@ abstract class NativeUploadTask : DefaultTask() {
         // resolving in one place keeps the strategy state easy to follow.
         // `null` means: no CLI available (or uploader=KOTLIN); fall back.
         val cliBinary: File? = if (uploaderChoice == UploaderStrategy.CLI) {
-            CliBinaryResolver.resolve(
+            val resolved = CliBinaryResolver.resolve(
                 cliVersion = cliVersion.orNull,
                 cliPath = cliPath.orNull,
                 execOps = execOps,
@@ -241,9 +265,17 @@ abstract class NativeUploadTask : DefaultTask() {
                 debug = isDebug,
                 autoUpdate = cliAutoUpdate.orNull ?: true,
             )
+            // A pending interrupt can make the resolver report "no CLI" (e.g. bad cliPath): still a cancel.
+            if (resolved == null) HttpRetry.throwIfInterrupted()
+            resolved
         } else {
             null
         }
+
+        // Set when the unstripped-libraries upload failed and fell through to the AGP sources: if none
+        // of those exists either, nothing was uploaded and failOnUploadError must still fire.
+        var dirUploadFailed = false
+        var agpSourceTried = false
 
         // Preferred source: the unstripped libraries, uploaded in place as a
         // directory (bugsee-cli >= 0.8.0). Independent of ndk.debugSymbolLevel.
@@ -254,6 +286,16 @@ abstract class NativeUploadTask : DefaultTask() {
         ) {
             val libsDir = findMergedNativeLibs(mergedNativeLibsDir.asFile.orNull)
             if (libsDir != null) {
+                // Cheap local "already uploaded" marker: a digest of the tree's file names, sizes
+                // and content. Only a successful CLI run records it, so a failed upload is retried;
+                // `force` bypasses the check (but still records on success).
+                val dirKey = nativeLibsCacheKey(appToken, variantName.get(), endpoint.get(), cliVersion.orNull, cliPath.orNull)
+                val dirDigest = nativeLibsDigest(libsDir)
+                if (!skipCache && SymbolHashCache.isCached(cacheFile, dirKey, dirDigest)) {
+                    val msg = "Bugsee: Native libraries unchanged (digest=$dirDigest). Skipping upload."
+                    if (isDebug) logger.warn(msg) else logger.info(msg)
+                    return
+                }
                 if (isDebug) logger.warn("Bugsee: Uploading unstripped native libraries from ${libsDir.path}")
                 val result = CliUploader.uploadElf(
                     execOps = execOps,
@@ -268,12 +310,21 @@ abstract class NativeUploadTask : DefaultTask() {
                     debug = isDebug,
                     force = skipCache,
                 )
+                if (result.success) SymbolHashCache.put(cacheFile, dirKey, dirDigest)
+                if (!result.success) HttpRetry.throwIfInterrupted()
                 // Success, or a substantive failure already logged (token / network /
                 // server: the zip path would hit the same error). Failures specific
                 // to the directory input continue to the AGP-produced sources:
                 // nothing usable (10), an unreadable directory or a CLI too old to
                 // take one (11), or a structural CLI failure.
-                if (result.success || !(result.shouldFallback || result.exitCode in DIRECTORY_INPUT_EXIT_CODES)) return
+                if (result.success || !(result.shouldFallback || result.exitCode in DIRECTORY_INPUT_EXIT_CODES)) {
+                    if (!result.success) {
+                        UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native libraries for variant ${variantName.get()}")
+                    }
+                    return
+                }
+                // Exit 10 is "nothing usable in the directory", not a failed upload.
+                dirUploadFailed = result.exitCode != CLI_EXIT_INPUT_NOT_FOUND
                 logger.warn(
                     "Bugsee: could not upload native libraries from ${libsDir.path} " +
                         "(bugsee-cli exit ${result.exitCode}); using AGP's native debug symbols instead."
@@ -286,6 +337,7 @@ abstract class NativeUploadTask : DefaultTask() {
         if (intermediateSymbolsDir.exists()) {
             if (isDebug) logger.warn("Bugsee: Intermediate symbols folder found: ${intermediateSymbolsDir.path}")
 
+            agpSourceTried = true
             val zipTemp = File.createTempFile(buildUUID, ".zip")
             try {
                 ZipUtils.zipDirectory(intermediateSymbolsDir.absolutePath, zipTemp.absolutePath)
@@ -320,6 +372,7 @@ abstract class NativeUploadTask : DefaultTask() {
                 ?.forEach { outputDir ->
                 val symbolsZip = File(outputDir, "native-debug-symbols.zip")
                 if (symbolsZip.exists()) {
+                    agpSourceTried = true
                     if (isDebug) logger.warn("Bugsee: Native symbols file found: ${symbolsZip.path}")
                     uploadOneZip(
                         zip = symbolsZip,
@@ -342,6 +395,9 @@ abstract class NativeUploadTask : DefaultTask() {
         } else {
             logger.warn("Bugsee: NDK upload is enabled but no native symbols found for variant ${variantName.get()}. " +
                 "Ensure your project includes native code and that debugSymbolLevel is configured.")
+        }
+        if (dirUploadFailed && !agpSourceTried) {
+            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native libraries for variant ${variantName.get()}")
         }
     }
 
@@ -402,12 +458,19 @@ abstract class NativeUploadTask : DefaultTask() {
                     // force whenever the zip carries DWARF (or the user asked).
                     force = skipCache || containsFullDebugSymbols(zip),
                 )
+                if (!cliResult.success) HttpRetry.throwIfInterrupted()
                 when {
                     cliResult.success -> {
                         SymbolHashCache.put(cacheFile, cacheKey, hash)
                         return
                     }
-                    !cliResult.shouldFallback -> return // already logged
+                    !cliResult.shouldFallback -> { // already logged
+                        // Deliberately no exit-10 carve-out here (unlike the directory path): for a zip
+                        // the CLI warns and exits 0 on an empty/unmatched archive (an unreadable one exits
+                        // 11), so 10 means the zip does not exist, which is a real failure.
+                        UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
+                        return
+                    }
                     else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
                 }
             }
@@ -433,6 +496,10 @@ abstract class NativeUploadTask : DefaultTask() {
         )
         if (success) {
             SymbolHashCache.put(cacheFile, cacheKey, hash)
+        } else {
+            HttpRetry.throwIfInterrupted()
+            logger.warn("Bugsee: the native symbols for variant ${variantName.get()} were not uploaded (see the warning above).")
+            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the native symbols for variant ${variantName.get()}")
         }
     }
 }
@@ -451,6 +518,46 @@ abstract class NativeUploadTask : DefaultTask() {
 internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
     "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-force-v1"
 
+/**
+ * Key into [SymbolHashCache] for the unstripped-libraries directory upload. Unlike the
+ * zip key it also carries the endpoint (the digest says what was sent, not where, and a
+ * token can be used against several backends) and the requested CLI version / explicit CLI
+ * path, so a CLI upgrade or swap re-sends what an older (possibly buggy) CLI recorded. The `elf-dir-v1` generation keeps these
+ * entries apart from the zip ones (a digest and a zip hash never compare).
+ */
+internal fun nativeLibsCacheKey(
+    appToken: String,
+    variantName: String,
+    endpoint: String,
+    cliVersion: String? = null,
+    cliPath: String? = null,
+): String =
+    "${HashUtils.sha1Hex(appToken)}:$variantName:" +
+        "cli-${cliVersion?.takeIf { it.isNotBlank() } ?: CliBinaryResolver.DEFAULT_VERSION}:" +
+        "path-${cliPath?.takeIf { it.isNotBlank() }?.let { HashUtils.sha1Hex(it).take(12) } ?: "none"}:" +
+        "elf-dir-v1:${HashUtils.sha1Hex(endpoint)}"
+
+/**
+ * Digest of the libraries the CLI would pick up under [dir] (`.so`, `.so.dbg`, `.so.sym`):
+ * relative path, size and SHA-1 content hash of each, in path order. Content, not mtime,
+ * so a rebuild producing identical libraries still hits the cache and any changed byte misses.
+ */
+internal fun nativeLibsDigest(dir: File): String {
+    val root = dir.toPath()
+    val lines = dir.walkTopDown()
+        .filter { it.isFile && isNativeLibraryName(it.name) }
+        .map { f ->
+            val rel = root.relativize(f.toPath()).joinToString("/")
+            "$rel\u0000${f.length()}\u0000${HashUtils.sha1Hex(f)}"
+        }
+        .sorted()
+        .toList()
+    return HashUtils.sha1Hex(lines.joinToString("\n"))
+}
+
+private fun isNativeLibraryName(name: String) =
+    name.endsWith(".so") || name.endsWith(".so.dbg") || name.endsWith(".so.sym")
+
 /** True when [zip] holds at least one AGP `FULL` (`*.so.dbg`) entry. */
 internal fun containsFullDebugSymbols(zip: File): Boolean = try {
     ZipFile(zip).use { z -> z.entries().asSequence().any { it.name.endsWith(".so.dbg") } }
@@ -459,11 +566,17 @@ internal fun containsFullDebugSymbols(zip: File): Boolean = try {
 }
 
 /**
- * bugsee-cli exit codes that only the directory input can cause: 10 = input not
- * found / no libraries in the directory, 11 = invalid input (a scan I/O error, or an
- * older CLI trying to open the directory as a zip).
+ * `bugsee-cli` exit code `InputNotFound`. For a directory input it means "no libraries in the
+ * directory", i.e. nothing to upload rather than a failure; for a zip it means the zip does not exist.
  */
-private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
+private const val CLI_EXIT_INPUT_NOT_FOUND = 10
+
+/**
+ * bugsee-cli exit codes that, for a directory input, mean the directory itself is unusable:
+ * 10 = no libraries in the directory, 11 = invalid input (a scan I/O error, or an older CLI
+ * trying to open the directory as a zip). They also occur for a zip, with a different meaning.
+ */
+private val DIRECTORY_INPUT_EXIT_CODES = setOf(CLI_EXIT_INPUT_NOT_FOUND, 11)
 
 /**
  * [dir] when it exists and holds at least one native library the CLI would
@@ -471,8 +584,6 @@ private val DIRECTORY_INPUT_EXIT_CODES = setOf(10, 11)
  */
 internal fun findMergedNativeLibs(dir: File?): File? {
     if (dir == null || !dir.isDirectory) return null
-    val hasLibs = dir.walkTopDown().any { f ->
-        f.isFile && (f.name.endsWith(".so") || f.name.endsWith(".so.dbg") || f.name.endsWith(".so.sym"))
-    }
+    val hasLibs = dir.walkTopDown().any { f -> f.isFile && isNativeLibraryName(f.name) }
     return dir.takeIf { hasLibs }
 }

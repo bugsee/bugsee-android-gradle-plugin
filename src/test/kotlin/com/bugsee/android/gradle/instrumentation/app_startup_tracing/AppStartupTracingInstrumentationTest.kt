@@ -106,6 +106,13 @@ class AppStartupTracingInstrumentationTest {
         org.junit.Assert.assertFalse(instrumentation.shouldApply(project, false, null))
     }
 
+    @Test fun `compileOnly-only too-old core pin refuses (#130)`() {
+        project.dependencies.add(project.configurations.maybeCreate("compileOnly").name, "com.bugsee:bugsee-android:6.5.0")
+        extension.startupTier.set(StartupTier.STANDARD)
+        val instrumentation = AppStartupTracingInstrumentation(resolver)
+        org.junit.Assert.assertFalse(instrumentation.shouldApply(project, false, null))
+    }
+
     @Test fun `tier STANDARD with unparseable version still returns true`() {
         // Dynamic / range versions (e.g. `7.+`, version catalogs that
         // haven't resolved at config time) parse to null and the gate
@@ -155,6 +162,52 @@ class AppStartupTracingInstrumentationTest {
         org.junit.Assert.assertFalse(instrumentation.shouldApply(project, true, null))
     }
 
+    // ── #100: the gate reads the SAME resolver as the core auto-add ──
+
+    @Test fun `several app pins gate on the highest version not the first declared`() {
+        // The old resolver returned the first hit in configuration order (6.5.0 here) and
+        // refused; Gradle (and the auto-add) pick the highest.
+        project.dependencies.add(project.configurations.maybeCreate("implementation").name, "com.bugsee:bugsee-android:6.5.0")
+        project.dependencies.add(project.configurations.maybeCreate("api").name, "com.bugsee:bugsee-android:7.0.0")
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
+    @Test fun `debug-only old pin in a dependency project does not refuse`() {
+        val lib = ProjectBuilder.builder().withName("lib").withParent(project).build()
+        lib.dependencies.add(lib.configurations.maybeCreate("debugImplementation").name, "com.bugsee:bugsee-android:6.5.0")
+        lib.dependencies.add(lib.configurations.maybeCreate("implementation").name, "com.bugsee:bugsee-android:7.0.0")
+        project.dependencies.add(
+            project.configurations.maybeCreate("implementation").name,
+            project.dependencies.project(mapOf("path" to lib.path))
+        )
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
+    @Test fun `old project-dependency pin refuses and an app pin wins over it`() {
+        val lib = ProjectBuilder.builder().withName("lib").withParent(project).build()
+        lib.dependencies.add(lib.configurations.maybeCreate("implementation").name, "com.bugsee:bugsee-android:6.5.0")
+        project.dependencies.add(
+            project.configurations.maybeCreate("implementation").name,
+            project.dependencies.project(mapOf("path" to lib.path))
+        )
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertFalse(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+        // The app's own core pin is tier 1 and wins, exactly as in the auto-add.
+        addBugseeAndroidDependency(project, "7.0.0")
+        org.junit.Assert.assertTrue(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
+    @Test fun `a newer test-only app pin does not lift the gate over a production pin (#114)`() {
+        addBugseeAndroidDependency(project, "6.5.0")
+        project.dependencies.add(
+            project.configurations.maybeCreate("testImplementation").name, "com.bugsee:bugsee-android:7.5.0",
+        )
+        extension.startupTier.set(StartupTier.STANDARD)
+        org.junit.Assert.assertFalse(AppStartupTracingInstrumentation(resolver).shouldApply(project, false, null))
+    }
+
     /**
      * Adds a real `com.bugsee:bugsee-android` external dependency to a
      * resolvable configuration on the project so [DependencyDetector]
@@ -163,7 +216,7 @@ class AppStartupTracingInstrumentationTest {
      * dependency metadata, not the resolved classpath.
      */
     private fun addBugseeAndroidDependency(project: Project, version: String) {
-        val config = project.configurations.maybeCreate("bugseeProbe")
+        val config = project.configurations.maybeCreate("implementation")
         project.dependencies.add(config.name, "com.bugsee:bugsee-android:$version")
     }
 

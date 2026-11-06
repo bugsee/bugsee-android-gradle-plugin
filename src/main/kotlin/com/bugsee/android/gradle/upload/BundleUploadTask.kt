@@ -1,6 +1,6 @@
 package com.bugsee.android.gradle.upload
 
-import com.bugsee.android.gradle.BugseePlugin
+import com.bugsee.android.gradle.BugseePluginImpl
 import com.bugsee.android.gradle.manifest.ManifestModifier
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -50,6 +50,14 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Input
     abstract val debug: Property<Boolean>
 
+    /**
+     * Fail the task when the build registration does not complete. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.failOnUploadError] (default `false`: warn only).
+     */
+    @get:Input
+    @get:Optional
+    abstract val failOnUploadError: Property<Boolean>
+
     @get:Input
     abstract val variantName: Property<String>
 
@@ -92,9 +100,9 @@ abstract class BundleUploadTask : DefaultTask() {
     // Shared BuildService that collects per-task timings across the
     // whole build. `@ServiceReference(name)` declaratively auto-wires
     // the task to the service registered under that name in
-    // `BugseePlugin.apply()` — no explicit `task.set(...)` or
+    // `BugseePluginImpl.apply()` — no explicit `task.set(...)` or
     // `task.usesService(...)` call required on the registration site.
-    @get:ServiceReference(BugseePlugin.BUILD_TIMING_SERVICE_NAME)
+    @get:ServiceReference(BugseePluginImpl.BUILD_TIMING_SERVICE_NAME)
     abstract val timingService: Property<BuildTimingService>
 
     // Android `compileSdk` rendered as a string — wired from the
@@ -118,6 +126,13 @@ abstract class BundleUploadTask : DefaultTask() {
     @get:Input
     @get:Optional
     abstract val preResolvedAppToken: Property<String>
+
+    // Set at registration when a placeholder app token was ignored while resolving (absent otherwise,
+    // so inputs of ordinary builds are unchanged). With no real token the task then logs an info skip
+    // line instead of the missing-token warnings.
+    @get:Input
+    @get:Optional
+    abstract val placeholderTokenSeen: Property<Boolean>
 
     // `res/` source files from the app's main source set — used by
     // `AppTokenResolver.resolveFromManifest` only when the manifest
@@ -171,7 +186,7 @@ abstract class BundleUploadTask : DefaultTask() {
     // ── In-build size-check inputs ─────────────────────────────────
     //
     // Resolved at task registration via DSL → env-var fallback in
-    // `BugseePlugin.registerBundleUploadTask`. A `0` in any threshold
+    // `BugseePluginImpl.registerBundleUploadTask`. A `0` in any threshold
     // is treated as "disabled" (the resolver normalises to absent),
     // so users can leave a single gate active without having to spell
     // out the others.
@@ -290,7 +305,7 @@ abstract class BundleUploadTask : DefaultTask() {
      * fastlane reader's `ACTION_KEYS` list; an unilateral rename on
      * either side silently breaks de-duplication.
      *
-     * Wired by [com.bugsee.android.gradle.BugseePlugin] to
+     * Wired by [com.bugsee.android.gradle.BugseePluginImpl] to
      * `<project>/build/intermediates/bugsee/<variant>/build-actions.json`
      * — same parent dir as `build-id.txt`, so a single glob
      * matching every file under each per-variant
@@ -361,15 +376,22 @@ abstract class BundleUploadTask : DefaultTask() {
         // `preResolvedAppToken` at registration), manifest fallback
         // second. Never touches `project` at execution time.
         val preResolved = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
+        var placeholderSeen = placeholderTokenSeen.getOrElse(false)
         val appToken = preResolved
             ?: AppTokenResolver.resolveFromManifest(
                 manifestFile = manifest,
                 stringResourceFiles = stringResourceFiles,
                 logger = logger,
                 debug = isDebug,
+                warnIfMissing = !placeholderSeen,
+                onPlaceholder = { placeholderSeen = true },
             )
         if (appToken == null) {
-            logger.warn("Bugsee: Could not resolve appToken. Skipping bundle upload.")
+            if (placeholderSeen) {
+                AppTokenResolver.logPlaceholderSkip(logger, "build-info", variantName.get())
+            } else {
+                logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping bundle upload.")
+            }
             return
         }
 
@@ -379,7 +401,7 @@ abstract class BundleUploadTask : DefaultTask() {
         // R8-minified build.
         val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
         if (buildUUID.isEmpty()) {
-            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping bundle upload.")
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty for variant ${variantName.get()}. Skipping bundle upload.")
             return
         }
 
@@ -388,14 +410,14 @@ abstract class BundleUploadTask : DefaultTask() {
         val versionCode = ManifestModifier.getVersionCode(manifest)
         val packageName = ManifestModifier.getPackageName(manifest)
         if (versionCode == null) {
-            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml")
+            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml for variant ${variantName.get()}. Skipping bundle upload.")
             return
         }
 
         // Resolve the artifact file
         val artifactFile = resolveArtifactFile()
         if (artifactFile == null || !artifactFile.exists()) {
-            if (isDebug) logger.warn("Bugsee: Artifact file not found. Skipping bundle upload.")
+            if (isDebug) logger.warn("Bugsee: Artifact file not found for variant ${variantName.get()}. Skipping bundle upload.")
             return
         }
 
@@ -419,7 +441,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val gradleUserHome = gradleUserHomeDir.orNull?.asFile
         val resolveCli: () -> File? = {
             if (gradleUserHome != null) {
-                CliBinaryResolver.resolve(
+                val resolved = CliBinaryResolver.resolve(
                     cliVersion = cliVersion.orNull,
                     cliPath = cliPath.orNull,
                     execOps = execOps,
@@ -428,6 +450,9 @@ abstract class BundleUploadTask : DefaultTask() {
                     debug = isDebug,
                     autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
+                // A pending interrupt can make the resolver report "no CLI" (e.g. bad cliPath): still a cancel.
+                if (resolved == null) HttpRetry.throwIfInterrupted()
+                resolved
             } else {
                 null
             }
@@ -459,6 +484,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val vcs = try {
             VcsMetadataResolver.resolve(projectDirectory.get().asFile)
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             if (isDebug) logger.warn("Bugsee: VCS metadata resolution failed: ${e.message}")
             com.bugsee.android.gradle.upload.VcsMetadata()
         }
@@ -486,6 +512,7 @@ abstract class BundleUploadTask : DefaultTask() {
         val buildMetadata = try {
             resolveBuildMetadataJson(timingsSnapshot)
         } catch (e: Exception) {
+            HttpRetry.throwIfInterrupted()
             if (isDebug) logger.warn("Bugsee: build_metadata resolution failed: ${e.message}")
             null
         }
@@ -532,6 +559,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 try {
                     resolveDependenciesPayload()
                 } catch (e: Exception) {
+                    HttpRetry.throwIfInterrupted()
                     if (isDebug) logger.warn(
                         "Bugsee: dependency collection failed: ${e.message} — skipping deps upload"
                     )
@@ -554,6 +582,7 @@ abstract class BundleUploadTask : DefaultTask() {
                 try {
                     resolveTimingsPayload(timingsSnapshot)
                 } catch (e: Exception) {
+                    HttpRetry.throwIfInterrupted()
                     if (isDebug) logger.warn(
                         "Bugsee: timings serialisation failed: ${e.message} — skipping timings upload"
                     )
@@ -651,8 +680,12 @@ abstract class BundleUploadTask : DefaultTask() {
             // structural CLI failure / unavailable binary falls through to the
             // native Bundle/ChunkedBundleUploader path below; a substantive
             // failure (bad token / server) is NOT retried natively — the native
-            // path would hit the same error.
+            // path would hit the same error. A cancelled build (interrupt) never falls
+            // back: it is rethrown, flag intact.
             var uploadHandled = false
+            // Set when the build registration did not complete; failOnUploadError then fails the task
+            // after the size check below (a failed upload must not hide a size-check verdict).
+            var uploadFailed = false
             if (wantsArtifactUpload && !legacyGzip && cliSupportsUploadBuild()) {
                 val cli = resolveCli()
                 if (cli != null) {
@@ -660,6 +693,8 @@ abstract class BundleUploadTask : DefaultTask() {
                     payloadFile.deleteOnExit()
                     try {
                         payloadFile.writeText(json)
+                        // Don't start a registration subprocess for a build that is already cancelled.
+                        HttpRetry.throwIfInterrupted()
                         val result = CliUploader.uploadBuild(
                             execOps = execOps,
                             cliBinary = cli,
@@ -674,11 +709,24 @@ abstract class BundleUploadTask : DefaultTask() {
                             logger = logger,
                             debug = isDebug,
                         )
-                        uploadHandled = result.success || !result.shouldFallback
+                        if (!result.success) HttpRetry.throwIfInterrupted()
+                        uploadHandled = result.success || !result.shouldFallbackForBuildRegistration
+                        if (!result.success && uploadHandled) uploadFailed = true
+                        if (!result.success && result.shouldFallback && uploadHandled) {
+                            logger.warn(
+                                "Bugsee: bugsee-cli was killed or crashed (exit ${result.exitCode}) during build " +
+                                    "registration; registration state is unknown, so the native " +
+                                    "uploader is NOT attempted to avoid a duplicate registration.",
+                            )
+                        }
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
                     } catch (e: Exception) {
+                        HttpRetry.throwIfInterrupted()
                         logger.warn(
                             "Bugsee: bugsee-cli upload build threw — falling back to " +
-                                "the native uploader. Cause: ${e.message}",
+                                "the native uploader. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}",
                         )
                     } finally {
                         payloadFile.delete()
@@ -689,7 +737,7 @@ abstract class BundleUploadTask : DefaultTask() {
             // Native fallback (used when the CLI path is inert/unavailable or
             // hit a structural failure). Chunked first, then single-PUT — both
             // consume the lazily-packed uploadZip and carry their own build-info
-            // handling. Best-effort: a failed upload never fails the build.
+            // handling. Best-effort: a failed upload only warns, unless failOnUploadError is on.
             if (!uploadHandled) {
                 var chunkedSucceeded = false
                 if (chunked) {
@@ -710,14 +758,25 @@ abstract class BundleUploadTask : DefaultTask() {
                             debug     = isDebug,
                         )
                         chunkedSucceeded = true
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    } catch (e: java.io.IOException) {
+                        // A cancelled build must stay cancelled, not become a fallback or a warning.
+                        if (HttpRetry.isInterruption(e)) {
+                            Thread.currentThread().interrupt()
+                            throw e
+                        }
+                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     } catch (e: Exception) {
-                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${e.message}")
+                        HttpRetry.throwIfInterrupted()
+                        logger.warn("Bugsee: chunked upload failed — falling back to single-PUT. Cause: ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
                     }
                 }
 
                 if (!chunkedSucceeded) {
                     try {
-                        BundleUploader.uploadData(
+                        val artifactUploaded = BundleUploader.uploadData(
                             file = uploadZip.value,
                             json = json,
                             appToken = appToken,
@@ -733,8 +792,22 @@ abstract class BundleUploadTask : DefaultTask() {
                             logger = logger,
                             debug = isDebug
                         )
+                        if (!artifactUploaded) uploadFailed = true
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    } catch (e: java.io.IOException) {
+                        // A cancelled build must stay cancelled, not become a fallback or a warning.
+                        if (HttpRetry.isInterruption(e)) {
+                            Thread.currentThread().interrupt()
+                            throw e
+                        }
+                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
+                        uploadFailed = true
                     } catch (e: Exception) {
-                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${e.message}")
+                        HttpRetry.throwIfInterrupted()
+                        logger.error("Bugsee: build upload failed (build-info / size analysis unavailable for this build): ${BundleUploader.scrubForLog(e.message ?: "", appToken)}")
+                        uploadFailed = true
                     }
                 }
             }
@@ -768,6 +841,10 @@ abstract class BundleUploadTask : DefaultTask() {
                 }
             } else if (sizeCheckEnabled.getOrElse(false) && sizeCheckThresholds.anyActive) {
                 logger.info("Bugsee: size-check skipped — no baseline available")
+            }
+
+            if (uploadFailed) {
+                UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the ${format.get()} build upload for variant ${variantName.get()}")
             }
         } finally {
             // Only the native fallback materializes the ZIP; the CLI path never
@@ -852,7 +929,7 @@ abstract class BundleUploadTask : DefaultTask() {
             obj.put("machine", it)
         }
 
-        obj.put("plugin_version", BugseePlugin.PLUGIN_VERSION)
+        obj.put("plugin_version", BugseePluginImpl.PLUGIN_VERSION)
         // Renamed from the earlier `gradle_version` as part of cross-
         // platform schema harmonisation — the same slot carries the
         // Xcode version on iOS builds.
@@ -1047,25 +1124,36 @@ abstract class BundleUploadTask : DefaultTask() {
         // ANY CLI failure falls through to the
         // native packer, which always produces a valid (if larger) ZIP —
         // writeNormalizedUploadZip truncates zipTemp, discarding a partial CLI
-        // write — so a CLI hiccup never breaks the build.
-        if (mapping != null && !legacyGzip && cliSupportsPack()) {
-            val cli = resolveCli()
-            if (cli != null && CliUploader.packUploadZip(
-                    execOps = execOps,
-                    cliBinary = cli,
-                    artifactFile = bundle,
-                    mappingFile = mapping,
-                    outZip = zipTemp,
-                    logger = logger,
-                    debug = isDebug,
-                )
-            ) {
-                return zipTemp
+        // write — so a CLI hiccup never breaks the build. A cancelled build (interrupt)
+        // is the exception: it is rethrown, never a fallback.
+        // A failed or cancelled pack abandons the partial zip: the lazy never completes, so the
+        // task's `finally` cannot delete it.
+        try {
+            if (mapping != null && !legacyGzip && cliSupportsPack()) {
+                val cli = resolveCli()
+                if (cli != null && CliUploader.packUploadZip(
+                        execOps = execOps,
+                        cliBinary = cli,
+                        artifactFile = bundle,
+                        mappingFile = mapping,
+                        outZip = zipTemp,
+                        logger = logger,
+                        debug = isDebug,
+                    )
+                ) {
+                    return zipTemp
+                }
+                // A cancelled pack must not fall through to the native packer.
+                HttpRetry.throwIfInterrupted()
             }
+            writeNormalizedUploadZip(bundle, mapping, zipTemp)
+            // The native write does not stop on an interrupt: don't hand a cancelled build to the uploader.
+            HttpRetry.throwIfInterrupted()
+            return zipTemp
+        } catch (e: Throwable) {
+            zipTemp.delete()
+            throw e
         }
-
-        writeNormalizedUploadZip(bundle, mapping, zipTemp)
-        return zipTemp
     }
 
     /**

@@ -21,9 +21,10 @@ Release builds: set `RELEASE=true` environment variable to drop `-SNAPSHOT` suff
 
 ## Testing
 
-No test suite currently exists. After making changes:
+After making changes:
+0. `./gradlew :test` (unit tests) and `./gradlew :integrationTest` (Gradle TestKit tests)
 1. `./gradlew build` — plugin compiles and `validatePlugins` passes
-2. `./gradlew publishToMavenLocal` — publishes `com.bugsee:bugsee-android-gradle-plugin:4.0.0-SNAPSHOT`
+2. `./gradlew publishToMavenLocal` — publishes `com.bugsee:bugsee-android-gradle-plugin:4.1.0-SNAPSHOT`
 3. Apply plugin in the SDK's `app/` module → `./gradlew :app:assembleDebug` — verify manifest UUID injection
 4. For instrumentation testing: inspect bytecode of a consuming app via `javap` or ASM bytecode dump
 
@@ -32,7 +33,7 @@ No test suite currently exists. After making changes:
 | Property | Value |
 |----------|-------|
 | Plugin ID | `com.bugsee.android.gradle` |
-| Version | 4.0.0 (in `version.txt`) |
+| Version | 4.1.0 (in `version.txt`) |
 | Artifact | `com.bugsee:bugsee-android-gradle-plugin` |
 | Language | Kotlin (2.1.0) |
 | Java target | 11 |
@@ -59,14 +60,21 @@ The plugin does four things:
 
 ```
 src/main/kotlin/com/bugsee/android/gradle/
-├── BugseePlugin.kt                          # Entry point: extension, variant wiring, instrumentation
+├── BugseePlugin.kt                          # Thin entry (implementation-class): NO AGP types; warns + returns without AGP, else delegates
+├── BugseePluginImpl.kt                      # The real plugin: extension, variant wiring, instrumentation (AGP-aware)
 ├── BugseePluginExtension.kt                 # DSL: endpoint, appToken, debug, ndk, instrumentationEnabled
+├── BugseeVariantSettings.kt                 # @BugseeDsl DSL for variant("x") { } blocks (per-variant subset)
 ├── AppTokenProvider.kt                      # Interface: getAppToken(variantName: String)
+├── config/
+│   ├── ExplicitSetProbe.kt                  # Detects an explicit Property.set (clear convention, isPresent, restore)
+│   ├── SettingDefinitions.kt                # Registry of file-settable keys, parsers, VARIANT/GLOBAL scope
+│   ├── SettingsFile.kt                      # Parses bugsee.properties incl. variant.<name>.* keys
+│   └── SettingsResolver.kt                  # Lookup order, DSL-vs-file precedence, token chain, shadow warning; no-variant-input fast path
 ├── manifest/
 │   ├── ManifestModifier.kt                  # XML DOM: remove old BUILD_UUID, inject new, read meta-data
 │   └── BugseeManifestTask.kt               # DefaultTask wired via SingleArtifact.MERGED_MANIFEST
 ├── upload/
-│   ├── AppTokenResolver.kt                 # Priority: closure → provider → default → manifest meta-data
+│   ├── AppTokenResolver.kt                 # Token building blocks + manifest fallback; full chain is in SettingsResolver.appTokenFor
 │   ├── SymbolUploader.kt                    # Two-stage HTTP: POST → presigned URL, PUT → upload
 │   ├── MappingUploadTask.kt                # ZIP mapping+icon, SHA-1 hash, upload
 │   ├── NativeUploadTask.kt                 # Find NDK symbols (2 locations), zip, upload
@@ -92,12 +100,14 @@ src/main/kotlin/com/bugsee/android/gradle/
     └── StringResourceResolver.kt            # Resolve @string/ references from strings.xml
 ```
 
-### Plugin Entry Point (`BugseePlugin.kt`)
+### Plugin Entry Point (`BugseePlugin.kt` -> `BugseePluginImpl.kt`)
+
+`BugseePlugin` must never mention an AGP type (Gradle decorates it by loading every signature type; AGP is compileOnly, so a module without AGP would fail with NoClassDefFoundError, #161). It implements `KotlinCompilerPluginSupportPlugin` (KGP discovers compiler plugins by that interface) and delegates everything to `BugseePluginImpl`, created only when `AndroidComponentsExtension` is loadable FROM BUGSEE'S CLASSLOADER (a parent-scope Bugsee with AGP only in a child project fails with a message when `com.android.application` is applied). Constants the entry needs live in `PluginMetadata`, never on the Impl companion. Put all AGP-aware code in `BugseePluginImpl`.
 
 Uses `AndroidComponentsExtension.onVariants` to register per-variant:
 - **Manifest task** — `createBugsee${Variant}ManifestConfig` (all variants)
-- **Mapping upload task** — `uploadBugsee${Variant}Mapping` (ApplicationVariant only, finalized by assemble/bundle)
-- **Native upload task** — `uploadBugsee${Variant}Native` (ApplicationVariant only, when `ndk=true`)
+- **Mapping upload task** — `uploadBugsee${Variant}Mapping` (ApplicationVariant only, finalized by `assemble<V>`/`bundle<V>` for every variant, plus `package<V>`, `package<V>Bundle`, `sign<V>Bundle` for release-like (non-debuggable) variants only — so `install`/`publish<V>Bundle` pipelines upload too (the bundle upload follows only `bundle<V>`/`sign<V>Bundle`, never `package<V>Bundle`, which must not force signing), while `installDebug`/`connectedDebugAndroidTest` do not; with `testBuildType = "release"`, `connectedReleaseAndroidTest` packages the release APK and does trigger the `packageRelease` finalizers, duplicates being treated as success)
+- **Native upload task** — `uploadBugsee${Variant}Native` (ApplicationVariant only, when `ndk=true`; non-debuggable variants unless `ndk.allBuildTypes`; unchanged unstripped-libs trees skipped via a digest in `SymbolHashCache`; same finalizer rule as the mapping task, as are the build-info `...Bundle` (bundle tasks) and `...Apk` (assemble/package) tasks)
 - **Instrumentation** — applies all matching instrumentations via `InstrumentationRegistrar`
 
 ### Instrumentation Framework
@@ -151,13 +161,22 @@ Error handling:
 - `ApplicationNotFoundError` → invalid app token
 - Uses `StandardHttpRequestRetryHandler` for transient failures
 
-### App Token Resolution (`AppTokenResolver`)
+### App Token Resolution (`SettingsResolver.appTokenFor`)
 
-Priority order:
-1. `appTokenByVariant` closure: `(variantName: String) -> String?`
+`AppTokenResolver` holds the building blocks (closure/provider/default token, masking, the
+execution-time manifest fallback); the full chain is `SettingsResolver.appTokenFor` (default mode):
+1. `appTokenByVariant` closure: `(variantName: String) -> String?` (null/empty falls through)
 2. `AppTokenProvider` interface: `getAppToken(variantName: String): String?`
-3. `defaultAppToken` property
-4. `com.bugsee.android.APP_TOKEN` meta-data in manifest (supports `@string/` references)
+3. DSL `variant("x") { appToken(..) }` per lookup order, then `defaultAppToken`
+4. `bugsee.properties`: `variant.<name>.app_token` per lookup order, then root `app_token`
+5. `com.bugsee.android.APP_TOKEN` meta-data in manifest (supports `@string/` references)
+
+The placeholder token `00000000-0000-4000-8000-000000000000` (`AppTokenResolver.PLACEHOLDER_TOKEN`) counts as
+absent at every step via `AppTokenResolver.isUsable` (info log, falls through), so upload tasks skip like a missing token. When only a placeholder was seen (`SettingsResolver.sawPlaceholder` / task input `placeholderTokenSeen`), the tasks log one info skip line instead of the missing-token warnings.
+
+Lookup order inside a source: variant name, each product flavor (AGP dimension order),
+build type, then the root/global value; first match wins. With `preferSettingsFile` step 4
+moves to the front. Wrappers (React Native) mirror the file lookup.
 
 ### DSL Extension (`BugseePluginExtension`)
 
@@ -165,14 +184,37 @@ Priority order:
 bugsee {
     endpoint.set("https://api.bugsee.com")  // API endpoint
     debug.set(false)                         // Enable debug logging
+    failOnUploadError.set(false)             // Fail the build when an upload does not complete (default: warn only)
     ndk.set(false)                           // Enable NDK symbol upload
     instrumentationEnabled.set(true)         // Enable bytecode instrumentation
 
     appToken("your-token")                   // Default token
     appToken { variantName -> "token" }      // Per-variant token
     appToken(myAppTokenProvider)             // Strong-typed provider
+
+    variant("staging") {                     // variant, flavor or build type name
+        appToken("STAGING_TOKEN")            // per-variant subset only (BugseeVariantSettings):
+        endpoint.set("https://staging.example.com") // endpoint, debug, optimizeExtensionsLoading,
+        ndk { enabled.set(true) }            // ndk, buildInfo, instrumentation, appToken
+    }
+    preferSettingsFile.set(false)            // true: bugsee.properties beats the DSL (whole build)
 }
 ```
+
+Precedence: `DSL (variant, then global) > bugsee.properties (variant.* then root) > default`,
+flipped by `preferSettingsFile`. Global-only settings (`feedback`, `leak`, `sdkAutoLoad`, `warnDebugOnlySdk`, `warnLibraryModule`,
+`cliPath`, `cliVersion`, `cliAutoUpdate`, `uploader`) are a compile error inside `variant { }`
+in Kotlin (`@BugseeDsl`). In Groovy the closure runs against the block (DELEGATE_FIRST), which is a
+full `BugseePluginExtension`, so they write the block's own copy and are SILENTLY IGNORED (they do
+not reach the global value). `instrumentation.excludes` is DSL-only (no file key) and ignored inside
+a block.
+
+No-variant-input fast path: without `preferSettingsFile` and without a `variant { }` block or
+`variant.*` key for the setting at hand, `SettingsResolver` links/reads the global properties
+exactly as the pre-variant code did (`task.x.set(extension.x)`, plain `get()`/`isPresent`) and
+never runs `ExplicitSetProbe` (which reads properties and rewrites conventions).
+A `variant.*` file key shadowed by the DSL warns once; a shadowed root key does not.
+Per-variant capability is declared by `SettingScope` in `SettingDefinitions.kt`.
 
 All properties use `Property<T>` for lazy evaluation and Gradle configuration avoidance.
 
@@ -204,4 +246,6 @@ This agent reviews the diff for correctness, security, Kotlin/Gradle conventions
 5. **ASM 9** — all visitors use `Opcodes.ASM9` for maximum compatibility.
 6. **COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS** — safe: recomputes stack map frames only for methods we touch.
 7. **isInstrumentable exclusions** — always exclude `com.bugsee.*` to prevent recursion; each instrumentation also excludes its target framework package.
-8. **`sdk-min-version.txt` tracks the SDK release** — this file at the plugin root declares the minimum-compatible Bugsee Android SDK version. `processResources` packages it as `bugsee-sdk-min-version.txt`; it is read at runtime as `BugseePlugin.MIN_SDK_VERSION` and used as the floor (`[MIN_SDK_VERSION,)`) when auto-adding the core SDK to apps that don't declare it. It is **separate** from the plugin's own `version.txt`. **When the Bugsee Android SDK version changes — especially a new major/release — bump `sdk-min-version.txt` to match; never leave it on a `-beta` after the SDK ships a stable release** (e.g. the 7.0.0 release required bumping it from `7.0.0-beta13` → `7.0.0`).
+8. **`sdk-min-version.txt` tracks the SDK release** — this file at the plugin root declares the minimum-compatible Bugsee Android SDK version. `processResources` packages it as `bugsee-sdk-min-version.txt`; it is read at runtime as `BugseePluginImpl.MIN_SDK_VERSION` and used as the floor (`[MIN_SDK_VERSION,)`) when auto-adding the core SDK to apps that don't declare it. It is **separate** from the plugin's own `version.txt`. **When the Bugsee Android SDK version changes — especially a new major/release — bump `sdk-min-version.txt` to match; never leave it on a `-beta` after the SDK ships a stable release** (e.g. the 7.0.0 release required bumping it from `7.0.0-beta13` → `7.0.0`).
+9. **Flutter asset ordering** — `FlutterAssetsOrdering` makes `injectBugsee<Variant>BuildId` `dependsOn` Flutter's `copyFlutterAssets<Variant>` plus any names in `bugsee { assetsDependsOn(...) }` (`<Variant>` placeholder; looked up lazily at graph time, so late registration works and nothing is realized). Flutter writes the merged-assets dir unknown to AGP; without the dependency Gradle validation fails (issue #33). The transform must stay: a generated assets source would route the file through `mergeAssets` and close a cycle with Flutter's wiring (build id derives from R8). `projectsEvaluated` warns when Flutter is applied but NO variant has the copy task (Flutter registers it only for the variant being built, so per-variant misses are normal) and for configured names matching nothing. Sentry's plugin does the same transform + name-based `dependsOn`.
+10. **Dynamic-feature / `com.android.test` modules** (#163) — not wired; they get a default-level warning (`warnLibraryModule` opt-out, SDK-group exemption) and the SDK auto-add only while the Compose compiler plugin applies to them (`composeNeedsSdk`: Compose dependency + tag/secure on, plus `composeInTests` for a test module), because the Compose wraps call into the SDK. A feature that calls the SDK must declare it `compileOnly` itself; the SDK cannot sit in a feature alone (the base app's resource linking fails). Do not claim SDK calls resolve through the base app: they do not.

@@ -40,7 +40,8 @@ import javax.inject.Inject
  *     directly, exactly as the task always has.
  *   - [UploaderStrategy.CLI] — exec `bugsee-cli debug-files upload` via
  *     [CliUploader]. On a structural CLI failure (exit 1 or 2 per the
- *     CLI contract, binary missing, exec failed), fall back to the
+ *     CLI contract, binary did not run / killed by a signal: exit < 0, 126,
+ *     127 or >= 128, binary missing, exec failed), fall back to the
  *     Kotlin uploader so the build still ships symbols. Substantive CLI
  *     failures (bad token, server, network) propagate without retry.
  *
@@ -52,6 +53,14 @@ abstract class MappingUploadTask : DefaultTask() {
 
     @get:Input
     abstract val debug: Property<Boolean>
+
+    /**
+     * Fail the task when the upload does not complete. Wired from
+     * [com.bugsee.android.gradle.BugseePluginExtension.failOnUploadError] (default `false`: warn only).
+     */
+    @get:Input
+    @get:Optional
+    abstract val failOnUploadError: Property<Boolean>
 
     @get:Input
     abstract val variantName: Property<String>
@@ -112,6 +121,16 @@ abstract class MappingUploadTask : DefaultTask() {
     abstract val mappingFile: RegularFileProperty
 
     /**
+     * Whether the build-id resolve task listens for the R8 mapping (see
+     * `BugseePluginImpl.mayProduceMapping`). False plus a present [mappingFile] means a
+     * non-AGP producer (e.g. DexGuard with minify off) supplied it: the build id is then
+     * not mapping-derived, and the task warns.
+     */
+    @get:Input
+    @get:Optional
+    abstract val mappingListenerRegistered: Property<Boolean>
+
+    /**
      * The resolved BUILD_UUID for this variant, written by
      * [com.bugsee.android.gradle.manifest.BugseeBuildIdResolveTask]:
      *   - R8 enabled: a hash of the mapping.txt content. Bytecode-
@@ -142,6 +161,13 @@ abstract class MappingUploadTask : DefaultTask() {
     @get:Input
     @get:Optional
     abstract val preResolvedAppToken: Property<String>
+
+    // Set at registration when a placeholder app token was ignored while resolving (absent otherwise,
+    // so inputs of ordinary builds are unchanged). With no real token the task then logs an info skip
+    // line instead of the missing-token warnings.
+    @get:Input
+    @get:Optional
+    abstract val placeholderTokenSeen: Property<Boolean>
 
     /**
      * `res/` source files from the app's main source set — used by
@@ -189,21 +215,40 @@ abstract class MappingUploadTask : DefaultTask() {
 
         if (isDebug) logger.warn("Bugsee: Upload mapping task for variant ${variantName.get()}")
 
+        // Nothing to upload (non-minified variant, no R8 mapping): bail out before
+        // token/versionCode resolution so those checks cannot warn about an
+        // upload that could never happen (#53).
+        val mapping = mappingFile.orNull?.asFile
+        if (mapping == null || !mapping.exists()) {
+            if (isDebug) {
+                logger.warn("Bugsee: Mapping file does not exist for variant ${variantName.get()}. Skipping upload.")
+            }
+            return
+        }
+
         // App-token resolution chain — mirrors BundleUploadTask. The
         // registration-time work (extension + properties-file) is
         // already baked into `preResolvedAppToken`; the manifest
         // fallback runs here because the merged manifest only exists
         // at execution.
+        var placeholderSeen = placeholderTokenSeen.getOrElse(false)
         val appToken = preResolvedAppToken.orNull?.takeIf { it.isNotEmpty() }
             ?: AppTokenResolver.resolveFromPropertiesFile(
-                rootProjectDirectory.get().asFile, logger, isDebug
+                rootProjectDirectory.get().asFile, logger, isDebug,
+                onPlaceholder = { placeholderSeen = true },
             )
             ?: AppTokenResolver.resolveFromManifest(
-                manifest, stringResourceFiles.files, logger, isDebug
+                manifest, stringResourceFiles.files, logger, isDebug,
+                warnIfMissing = !placeholderSeen,
+                onPlaceholder = { placeholderSeen = true },
             )
 
         if (appToken == null) {
-            logger.warn("Bugsee: Could not resolve appToken. Skipping mapping upload.")
+            if (placeholderSeen) {
+                AppTokenResolver.logPlaceholderSkip(logger, "mapping", variantName.get())
+            } else {
+                logger.warn("Bugsee: Could not resolve appToken for variant ${variantName.get()}. Skipping mapping upload.")
+            }
             return
         }
 
@@ -214,7 +259,7 @@ abstract class MappingUploadTask : DefaultTask() {
         // the runtime UUID in every minified release build.
         val buildUUID = resolvedBuildIdFile.get().asFile.readText().trim()
         if (buildUUID.isEmpty()) {
-            logger.warn("Bugsee: Resolved BUILD_UUID file is empty. Skipping mapping upload.")
+            logger.warn("Bugsee: Resolved BUILD_UUID file is empty for variant ${variantName.get()}. Skipping mapping upload.")
             return
         }
 
@@ -222,16 +267,20 @@ abstract class MappingUploadTask : DefaultTask() {
         val versionName = ManifestModifier.getVersionName(manifest)
         val versionCode = ManifestModifier.getVersionCode(manifest)
         if (versionCode == null) {
-            logger.warn("Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml")
+            logger.warn(
+                "Bugsee: Could not find 'android:versionCode' in AndroidManifest.xml " +
+                    "for variant ${variantName.get()}. Skipping mapping upload."
+            )
             return
         }
 
-        // Get the mapping file
-        val mapping = mappingFile.orNull?.asFile
-        if (mapping == null || !mapping.exists()) {
-            if (isDebug) logger.warn("Bugsee: Mapping file does not exist. Skipping upload.")
-            return
-        }
+        // The build id is only mapping-derived when the resolve task listened for the
+        // mapping. A mapping that exists although it did not (a third-party R8 replacement
+        // publishing it with minify off) leaves the manifest-derived id, which does not change
+        // with the code: a later upload for new code can be skipped as a duplicate. Warned only
+        // here, once an upload will actually happen.
+        buildIdNotMappingDerivedWarning(variantName.get(), mappingListenerRegistered.getOrElse(true))
+            ?.let { logger.warn(it) }
 
         // Resolve app icon from the pre-wired source-file list.
         val iconResourceId = ManifestModifier.getApplicationIcon(manifest)
@@ -260,6 +309,8 @@ abstract class MappingUploadTask : DefaultTask() {
                     autoUpdate = cliAutoUpdate.orNull ?: true,
                 )
                 if (cliBinary == null) {
+                    // A pending interrupt can make the resolver report "no CLI": still a cancel.
+                    HttpRetry.throwIfInterrupted()
                     "kotlin-fallback-cli-not-resolved"
                 } else {
                     val cliResult = CliUploader.uploadMapping(
@@ -275,9 +326,13 @@ abstract class MappingUploadTask : DefaultTask() {
                         logger = logger,
                         debug = isDebug,
                     )
+                    if (!cliResult.success) HttpRetry.throwIfInterrupted()
                     when {
                         cliResult.success -> return
-                        !cliResult.shouldFallback -> return // already logged
+                        !cliResult.shouldFallback -> { // already logged
+                            UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the mapping for variant ${variantName.get()}")
+                            return
+                        }
                         else -> "kotlin-fallback-cli-${cliResult.fallbackReason ?: "unknown"}"
                     }
                 }
@@ -299,7 +354,7 @@ abstract class MappingUploadTask : DefaultTask() {
             }.toString()
 
             // Upload
-            SymbolUploader.uploadData(
+            val uploaded = SymbolUploader.uploadData(
                 file = zipTemp,
                 json = json,
                 appToken = appToken,
@@ -308,8 +363,25 @@ abstract class MappingUploadTask : DefaultTask() {
                 debug = isDebug,
                 uploaderTag = kotlinFallbackTag,
             )
+            if (!uploaded) {
+                HttpRetry.throwIfInterrupted()
+                logger.warn("Bugsee: the mapping for variant ${variantName.get()} was not uploaded (see the warning above).")
+                UploadFailure.failIfRequested(failOnUploadError.getOrElse(false), "the mapping for variant ${variantName.get()}")
+            }
         } finally {
             zipTemp.delete()
         }
+    }
+
+    internal companion object {
+        /**
+         * Warning for a mapping that exists although the build-id resolve task did not listen
+         * for it, or null when the build id is mapping-derived.
+         */
+        fun buildIdNotMappingDerivedWarning(variantName: String, listenerRegistered: Boolean): String? =
+            if (listenerRegistered) null
+            else "Bugsee: a mapping file exists for variant $variantName, but minification is " +
+                "not enabled for it, so its build id is not derived from the mapping. " +
+                "Crashes may not deobfuscate after code-only changes."
     }
 }

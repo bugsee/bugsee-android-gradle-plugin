@@ -15,7 +15,7 @@ import org.junit.Test
  * Pin the CLI-option contract that Kotlin's compiler driver and the
  * Kotlin Gradle Plugin (KGP) both rely on:
  *  - The plugin ID is the constant the KGP-side
- *    [com.bugsee.android.gradle.BugseePlugin] hands to the
+ *    [com.bugsee.android.gradle.BugseePluginImpl] hands to the
  *    `kotlinCompilerPluginClasspath` declaration. A drift between
  *    the KGP and compiler sides would silently disable the plugin
  *    in published builds.

@@ -56,19 +56,25 @@ internal object ZipUtils {
     fun createMappingZip(mappingFile: File, iconFile: File?, buildUUID: String): File {
         val zipTemp = File.createTempFile(buildUUID, ".zip")
         zipTemp.deleteOnExit()
-        ZipOutputStream(FileOutputStream(zipTemp)).use { zos ->
-            // Add mapping file
-            zos.putNextEntry(stableEntry("mapping.txt"))
-            FileInputStream(mappingFile).use { fis -> fis.copyTo(zos) }
-            zos.closeEntry()
-
-            // Add icon file if present
-            if (iconFile != null && iconFile.exists()) {
-                val extension = iconFile.extension
-                zos.putNextEntry(stableEntry("icon.$extension"))
-                FileInputStream(iconFile).use { fis -> fis.copyTo(zos) }
+        try {
+            ZipOutputStream(FileOutputStream(zipTemp)).use { zos ->
+                // Add mapping file
+                zos.putNextEntry(stableEntry("mapping.txt"))
+                FileInputStream(mappingFile).use { fis -> fis.copyTo(zos) }
                 zos.closeEntry()
+
+                // Add icon file if present
+                if (iconFile != null && iconFile.exists()) {
+                    val extension = iconFile.extension
+                    zos.putNextEntry(stableEntry("icon.$extension"))
+                    FileInputStream(iconFile).use { fis -> fis.copyTo(zos) }
+                    zos.closeEntry()
+                }
             }
+        } catch (e: Throwable) {
+            // The caller never receives the file, so nothing else can delete it.
+            zipTemp.delete()
+            throw e
         }
         return zipTemp
     }

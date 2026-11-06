@@ -21,7 +21,7 @@ import org.gradle.api.tasks.TaskProvider
  *
  * The instrumentation reads the detected-extensions file produced by
  * [BugseeManifestTask] — the [TaskProvider] is passed in at construction
- * time by [com.bugsee.android.gradle.BugseePlugin] so the visitor's
+ * time by [com.bugsee.android.gradle.BugseePluginImpl] so the visitor's
  * parameter property carries the correct task dependency.
  */
 internal class ExtensionsInitInstrumentation(

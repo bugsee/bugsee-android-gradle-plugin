@@ -45,8 +45,11 @@ class PluginPropertiesApplierTest {
 
         assertEquals("https://api.bugsee.com", ext.endpoint.get())
         assertEquals(false, ext.debug.get())
+        assertEquals(false, ext.failOnUploadError.get())
         assertEquals(true, ext.optimizeExtensionsLoading.get())
         assertEquals(true, ext.sdkAutoLoad.get())
+        assertEquals(true, ext.warnDebugOnlySdk.get())
+        assertEquals(true, ext.warnLibraryModule.get())
         assertEquals(true, ext.buildInfo.enabled.get())
         // Optional module lanes default off (opt-in).
         assertEquals(false, ext.ndk.enabled.get())
@@ -73,6 +76,12 @@ class PluginPropertiesApplierTest {
         assertEquals(true, ext.debug.get())
         assertEquals(false, ext.optimizeExtensionsLoading.get())
         assertEquals(false, ext.buildInfo.enabled.get())
+    }
+
+    @Test
+    fun failOnUploadError_isSettableFromProperties() {
+        writeProperties("plugin.failOnUploadError=true")
+        assertEquals(true, setUpExtension().second.failOnUploadError.get())
     }
 
     // ── Precedence: DSL wins over properties (the critical one) ─────
@@ -382,8 +391,11 @@ class PluginPropertiesApplierTest {
             "plugin.feedback=true",
             "plugin.optimizeExtensionsLoading=false",
             "plugin.sdkAutoLoad=false",
+            "plugin.warnDebugOnlySdk=false",
+            "plugin.warnLibraryModule=false",
             // ndk
             "plugin.ndk.enabled=true",
+            "plugin.ndk.allBuildTypes=true",
             "plugin.ndk.forceDebugSymbolsUpload=true",
             "plugin.ndk.useMergedNativeLibs=false",
             // leak
@@ -431,8 +443,11 @@ class PluginPropertiesApplierTest {
         assertEquals(true, ext.feedback.get())
         assertEquals(false, ext.optimizeExtensionsLoading.get())
         assertEquals(false, ext.sdkAutoLoad.get())
+        assertEquals(false, ext.warnDebugOnlySdk.get())
+        assertEquals(false, ext.warnLibraryModule.get())
         // ndk
         assertEquals(true, ext.ndk.enabled.get())
+        assertEquals(true, ext.ndk.allBuildTypes.get())
         assertEquals(true, ext.ndk.forceDebugSymbolsUpload.get())
         assertEquals(false, ext.ndk.useMergedNativeLibs.get())
         // leak
@@ -492,7 +507,7 @@ class PluginPropertiesApplierTest {
         // here in a way it isn't for the convention-defaulted ones.
         val noConventionKeys = listOf(
             "okhttp", "httpEngine", "log", "thread", "mainThreadMisuse",
-            "operationDispatch", "compose", "composeSecure", "composeInput",
+            "operationDispatch", "compose", "composeSecure", "composeInput", "composeInTests",
             "ktor", "cronet",
         )
 
@@ -549,6 +564,7 @@ class PluginPropertiesApplierTest {
         "compose" -> instr.compose
         "composeSecure" -> instr.composeSecure
         "composeInput" -> instr.composeInput
+        "composeInTests" -> instr.composeInTests
         "ktor" -> instr.ktor
         "cronet" -> instr.cronet
         else -> error("unknown instrumentation key: $name")

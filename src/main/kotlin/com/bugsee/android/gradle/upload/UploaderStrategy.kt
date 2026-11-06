@@ -10,7 +10,8 @@ package com.bugsee.android.gradle.upload
  * into the `bugsee-cli` binary referenced by [BugseePluginExtension.cliPath].
  *
  * When the CLI is selected but fails *structurally* (binary missing, exec
- * failed, exit codes 1 or 2 per the CLI's documented contract), the task
+ * failed, exit codes 1 or 2 per the CLI's documented contract, or the process did
+ * not run / was killed: exit < 0, 126, 127 or >= 128), the task
  * falls back to the Kotlin uploader so the build still ships symbols. The
  * fallback transition is logged at WARN and stamped into the
  * `X-Bugsee-Uploader` request header so backend can count fallback rates.
@@ -27,7 +28,7 @@ enum class UploaderStrategy {
 
     /**
      * Exec the `bugsee-cli` binary at [BugseePluginExtension.cliPath]; on a
-     * structural failure (CLI exit code 1 or 2), fall back to [KOTLIN].
+     * structural failure (CLI exit code 1, 2, < 0, 126, 127 or >= 128), fall back to [KOTLIN].
      */
     CLI,
 }

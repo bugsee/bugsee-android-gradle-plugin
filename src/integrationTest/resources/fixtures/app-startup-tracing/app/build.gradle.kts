@@ -23,9 +23,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
@@ -84,6 +81,9 @@ dependencies {
         compileOnly("com.bugsee:bugsee-android:99.0.0")
     }
     implementation("androidx.startup:startup-runtime:1.1.1")
+    // `-PbugseeFixtureLibJar=<absolute path>` adds a prebuilt third-party-style library jar
+    // (used by InstrumentationFallbackIntegrationTest, whose classes cannot come from javac).
+    project.findProperty("bugseeFixtureLibJar")?.toString()?.let { implementation(files(it)) }
 }
 
 bugsee {
@@ -119,7 +119,7 @@ bugsee {
     }
 
     // Instrumentation excludes — exercised by InstrumentationExcludesIntegrationTest.
-    // `-PbugseeFixtureExcludes=<comma-separated FQN patterns>` opts those
+    // `-PbugseeFixtureExcludes=<comma-separated patterns, dotted or slash form>` opts those
     // classes out of ALL Bugsee bytecode instrumentation.
     val excludePatterns = project.findProperty("bugseeFixtureExcludes")?.toString()
     if (!excludePatterns.isNullOrBlank()) {
@@ -129,6 +129,9 @@ bugsee {
         }
     }
 
+    // `-PbugseeFixtureAssetsDependsOn=<name>` exercises the opt-in `assetsDependsOn` setting.
+    project.findProperty("bugseeFixtureAssetsDependsOn")?.toString()?.let { assetsDependsOn(it) }
+
     // Optional opt-out for the extension-stripping path. Defaults to
     // the plugin's default (`true`) when the property is absent. Used
     // by the manifest-stripping integration test to exercise BOTH
@@ -137,5 +140,45 @@ bugsee {
     val optimizeExt = project.findProperty("bugseeFixtureOptimizeExtensions")?.toString()
     if (optimizeExt != null) {
         optimizeExtensionsLoading.set(optimizeExt == "true")
+    }
+}
+
+// Opt-in: applies a plugin class named `FlutterPlugin`, which is how the Bugsee plugin recognises
+// Flutter's Gradle plugin, so the "Flutter applied but its copy task is missing" warning can be exercised.
+if (project.findProperty("bugseeFixtureFlutterPluginStandIn")?.toString() == "true") {
+    class FlutterPlugin : Plugin<Project> {
+        override fun apply(target: Project) = Unit
+    }
+    apply<FlutterPlugin>()
+}
+
+// Opt-in: simulates Flutter's Gradle plugin, whose `copyFlutterAssets<Variant>`
+// task writes into AGP's merged-assets directory without AGP knowing
+// (issue #33). Off by default so other tests are unaffected.
+if (project.findProperty("bugseeFixtureFakeFlutter")?.toString() == "true") {
+    val mergedAssets = layout.buildDirectory.dir("intermediates/assets/debug/mergeDebugAssets")
+    val flutterSrc = layout.projectDirectory.file("fake-flutter/flutter_marker.txt")
+    // Mirrors Flutter: the copy depends on mergeAssets and writes into its
+    // output dir; processResources depends on the copy.
+    // `-PbugseeFixtureFakeFlutterTaskName=<name>` simulates a renamed Flutter task.
+    val flutterTaskName = project.findProperty("bugseeFixtureFakeFlutterTaskName")?.toString()
+        ?: "copyFlutterAssetsDebug"
+    val copyFlutter = tasks.register<Copy>(flutterTaskName) {
+        from(flutterSrc)
+        into(mergedAssets)
+        dependsOn("mergeDebugAssets")
+    }
+    // Flutter also declares the copy as a dependency of the tasks that read the
+    // merged dir (FlutterPlugin.kt `tasksToCheck`: compress<Variant>Assets, ...).
+    tasks.matching { it.name == "processDebugResources" || it.name == "compressDebugAssets" }.configureEach {
+        dependsOn(copyFlutter)
+    }
+}
+
+// Explicit, to match compileOptions above. The `kotlinOptions { jvmTarget }` it replaces is a hard
+// error from Kotlin 2.3; the `compilerOptions` DSL exists from Kotlin 2.0.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }

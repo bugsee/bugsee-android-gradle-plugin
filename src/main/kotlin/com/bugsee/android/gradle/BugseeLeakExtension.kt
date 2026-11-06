@@ -35,7 +35,8 @@ abstract class BugseeLeakExtension @Inject constructor(objects: ObjectFactory) {
      * leaks.
      *
      * Skipped if the app already declares the `bugsee-android-leak` artifact
-     * (no double-add).
+     * (no double-add). Has no effect when `sdkAutoLoad` is `false` and you do not
+     * declare the module yourself.
      *
      * Default: `false`
      */

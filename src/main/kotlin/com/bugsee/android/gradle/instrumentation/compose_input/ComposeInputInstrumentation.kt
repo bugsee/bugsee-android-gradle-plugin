@@ -64,18 +64,15 @@ internal class ComposeInputInstrumentation : Instrumentation {
     }
 
     /**
-     * Checks whether any Compose UI dependency is declared in the project.
-     * Apps typically depend on material/material3/foundation which pull in
-     * `androidx.compose.ui:ui` transitively, so we check the group prefix
-     * rather than a single exact artifact.
+     * Checks whether any Compose UI dependency is declared on a production configuration of the
+     * project (same rule as the auto-add and compiler-plugin gates). Apps typically depend on
+     * material/material3/foundation which pull in `androidx.compose.ui:ui` transitively, so we
+     * check the group prefix rather than a single exact artifact.
      */
-    private fun hasComposeDependency(project: Project): Boolean {
-        return project.configurations.any { config ->
-            config.dependencies.any { dep ->
-                dep.group?.startsWith("androidx.compose") == true
-            }
+    private fun hasComposeDependency(project: Project): Boolean =
+        DependencyDetector.anyProductionDependency(project) { dep ->
+            dep.group?.startsWith("androidx.compose") == true
         }
-    }
 
     private companion object {
         val LOGGER_ = org.gradle.api.logging.Logging.getLogger(ComposeInputInstrumentation::class.java)

@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.StartupTier
+import com.bugsee.android.gradle.instrumentation.BugseeSdkDeclarations
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
 import com.bugsee.android.gradle.instrumentation.SdkSymbolAvailability
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
@@ -22,7 +23,8 @@ import org.gradle.api.Project
  * Gated on (checked once at configuration time in [shouldApply]):
  *  - the resolved [StartupTier] being something other than [StartupTier.OFF]
  *  - the `com.bugsee:bugsee-android` dependency being present
- *  - the declared `bugsee-android` version being &ge; the version that
+ *  - the version resolved by [BugseeSdkDeclarations.declaredCoreSdkVersion]
+ *    (the same resolver as the core auto-add) being &ge; the version that
  *    first ships [com.bugsee.library.adapters.BugseeAppStartupDispatcher]
  *    (see `MIN_SDK_VERSION_WITH_DISPATCHER` in [shouldApply]). When the
  *    version is older, the plugin logs a warning and skips
@@ -89,7 +91,7 @@ internal class AppStartupTracingInstrumentation(
         // than refuse — Gradle's lazy model makes a strict probe
         // expensive and the most common case is a pinned version
         // string we CAN parse.
-        val declaredVersion = DependencyDetector.getBugseeDependencyVersion(project, "bugsee-android")
+        val declaredVersion = BugseeSdkDeclarations.declaredCoreSdkVersion(project)
         val parsed = BugseeSdkVersion.parse(declaredVersion)
         if (parsed != null && parsed < MIN_SDK_VERSION_WITH_DISPATCHER) {
             project.logger.warn(

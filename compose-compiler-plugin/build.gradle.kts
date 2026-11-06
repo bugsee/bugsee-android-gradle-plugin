@@ -32,7 +32,10 @@ repositories {
 // `composeVariants` below, from the same shared sources with a different IR source set.
 sourceSets {
     main {
-        java.srcDirs("src/legacyIr/kotlin", "src/registrarPlain/kotlin")
+        java.srcDirs("src/legacyIr/kotlin", "src/registrarPlain/kotlin", "src/legacyRegistrar/kotlin")
+        // The legacy ComponentRegistrar service file is k21-only: the k22/k24 variants never run on a
+        // Kotlin 1.x compiler and their jars take just `src/main/resources`.
+        resources.srcDirs("src/legacyRegistrar/resources")
     }
 }
 
@@ -204,8 +207,25 @@ val simulatorJars = composeVariants.associate { variant ->
 // 2.0.21 and 2.3.0 are here because the mapping CLAIMS them: 2.0 routes to the base artifact and
 // 2.3.0-exact is the boundary where the k22 registrar's plain `val pluginId` must satisfy the
 // abstract member 2.3 introduced. A claimed line with no row here is an unverified claim.
-val matrixKotlinVersions =
-    listOf("1.9.22", "2.0.21", "2.1.0", "2.2.0", "2.2.21", "2.3.0", "2.3.21", "2.4.0", "2.4.10")
+// The patch rows (2.1.10/20/21, 2.2.10/20, 2.3.10/20) pin the releases between each line's `.0` and
+// its latest patch, which the plugin is compiled against a different patch of (issue #59).
+//
+// `-Pbugsee.matrix.extraKotlin=<v>[,<v>]` appends versions on top of that list; the scheduled
+// workflow passes the newest published Kotlin release, so a compiler change is noticed within a week
+// rather than at the next release. ComposeVariantMatrixTest derives the expected variant from the
+// version's line and FAILS for a line no variant claims.
+val extraMatrixKotlinVersions: List<String> =
+    (findProperty("bugsee.matrix.extraKotlin") as String?).orEmpty()
+        .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+val matrixKotlinVersions = (
+    listOf(
+        "1.9.22", "1.9.25", "2.0.21",
+        "2.1.0", "2.1.10", "2.1.20", "2.1.21",
+        "2.2.0", "2.2.10", "2.2.20", "2.2.21",
+        "2.3.0", "2.3.10", "2.3.20", "2.3.21",
+        "2.4.0", "2.4.10",
+    ) + extraMatrixKotlinVersions
+    ).distinct()
 
 val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
     val cfg = configurations.create("matrixCompiler${kotlinVersion.replace(".", "_")}") {
@@ -220,6 +240,42 @@ val matrixClasspaths = matrixKotlinVersions.associateWith { kotlinVersion ->
         cfg.name("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0")
     }
     cfg
+}
+
+// The REAL Compose pipeline for Kotlin 1.9 (issue #119): the 1.9 line pairs with the androidx Compose
+// compiler 1.5.x (1.5.15 is a legacy `ComponentRegistrar` plugin), and the stub fixtures above never
+// run a Compose lowering at all. 1.5.15 is the release for Kotlin 1.9.25; its runtime is needed only
+// so the compiler can resolve `Composer`. Non-transitive: the compiler classpath is the matrix one.
+val compose19Compiler by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+val compose19Runtime by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+val compose19CompilerCoordinates = "androidx.compose.compiler:compiler:1.5.15"
+// Compose Multiplatform runtime, not the androidx one: the compiler only needs `Composer` to resolve.
+val compose19RuntimeCoordinates = "org.jetbrains.compose.runtime:runtime-desktop:1.6.11"
+dependencies {
+    compose19Compiler(compose19CompilerCoordinates)
+    compose19Runtime(compose19RuntimeCoordinates)
+}
+
+// The REAL Compose pipeline for Kotlin 2.x (issue #146): the Compose compiler ships with Kotlin from 2.0
+// as kotlin-compose-compiler-plugin-embeddable, one artifact per Kotlin version. Non-transitive: the
+// compiler classpath is the matrix one, and the 1.9-era runtime above is enough for `Composer`.
+val compose2Versions = listOf("2.1.0", "2.2.0", "2.4.0")
+val compose2Compilers = compose2Versions.associateWith { kotlinVersion ->
+    configurations.create("compose2Compiler${kotlinVersion.replace(".", "_")}") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+        isTransitive = false
+    }.also {
+        dependencies { it.name("org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:$kotlinVersion") }
+    }
 }
 
 val variantTest: SourceSet by sourceSets.creating {
@@ -260,6 +316,27 @@ val composeVariantMatrix by tasks.registering(Test::class) {
         inputs.file(jar).withPropertyName("simulatorJar.$id").withPathSensitivity(PathSensitivity.NONE)
     }
 
+    // Real Compose 1.5 compiler plugin + runtime for the Kotlin 1.9 pipeline test (immutable
+    // coordinates, so the paths are enough).
+    val compose19CompilerFiles = objects.fileCollection().from(compose19Compiler)
+    val compose19RuntimeFiles = objects.fileCollection().from(compose19Runtime)
+    jvmArgumentProviders.add(CommandLineArgumentProvider {
+        listOf(
+            "-Dbugsee.compose19.compilerPlugin=${compose19CompilerFiles.singleFile.absolutePath}",
+            "-Dbugsee.compose19.runtime=${compose19RuntimeFiles.singleFile.absolutePath}",
+        )
+    })
+
+    val compose2CompilerFiles = compose2Compilers.mapValues { (_, cfg) -> objects.fileCollection().from(cfg) }
+    jvmArgumentProviders.add(CommandLineArgumentProvider {
+        compose2CompilerFiles.map { (v, files) ->
+            "-Dbugsee.compose2.compilerPlugin.$v=${files.singleFile.absolutePath}"
+        }
+    })
+    inputs.property("compose2Versions", compose2Versions)
+
+    inputs.property("compose19Coordinates", "$compose19CompilerCoordinates,$compose19RuntimeCoordinates")
+
     // The compiler jars come from immutable Maven coordinates, so the version list pins them; there
     // is no need to hash ~400 MB of compiler distributions on every up-to-date check.
     inputs.property("matrixKotlinVersions", matrixKotlinVersions)
@@ -269,7 +346,8 @@ val composeVariantMatrix by tasks.registering(Test::class) {
     // Resolved lazily: building the argument list at configuration time would force all seven
     // compiler distributions to download merely to CONFIGURE the task (e.g. on `gradle tasks`).
     jvmArgumentProviders.add(CommandLineArgumentProvider {
-        variantJarFiles.map { (id, jar) -> "-Dbugsee.variantJar.$id=${jar.get().asFile.absolutePath}" } +
+        listOf("-Dbugsee.matrix.extraKotlin=${extraMatrixKotlinVersions.joinToString(",")}") +
+            variantJarFiles.map { (id, jar) -> "-Dbugsee.variantJar.$id=${jar.get().asFile.absolutePath}" } +
             simulatorJarFiles.map { (id, jar) -> "-Dbugsee.simulatorJar.$id=${jar.get().asFile.absolutePath}" } +
             matrixClasspathFiles.map { (v, files) -> "-Dbugsee.kotlinClasspath.$v=${files.asPath}" }
     })
@@ -323,8 +401,8 @@ publishing {
 
                 licenses {
                     license {
-                        name.set("Proprietary")
-                        url.set("https://bugsee.com/tos/")
+                        name.set("MIT License")
+                        url.set("https://opensource.org/licenses/MIT")
                     }
                 }
                 developers {
@@ -361,8 +439,8 @@ publishing {
 
                     licenses {
                         license {
-                            name.set("Proprietary")
-                            url.set("https://bugsee.com/tos/")
+                            name.set("MIT License")
+                            url.set("https://opensource.org/licenses/MIT")
                         }
                     }
                     developers {
@@ -379,6 +457,26 @@ publishing {
             }
         }
     }
+}
+
+// Local Maven repo the ROOT project's integrationTest fixtures resolve these artifacts from (the
+// Compose pipeline fixtures: the Kotlin Gradle plugin adds the artifact to the compilation's plugin
+// classpath exactly as for a real consumer). Wiped before every publish so a stale SNAPSHOT build can
+// never be picked up. The root build refers to this directory by path only.
+val integrationTestComposeRepoDir = layout.buildDirectory.dir("integrationTest/compose-plugin-repo")
+publishing {
+    repositories {
+        maven {
+            name = "IntegrationTest"
+            url = uri(integrationTestComposeRepoDir)
+        }
+    }
+}
+val cleanIntegrationTestComposeRepo by tasks.registering(Delete::class) {
+    delete(integrationTestComposeRepoDir)
+}
+tasks.withType<PublishToMavenRepository>().configureEach {
+    if (name.endsWith("ToIntegrationTestRepository")) dependsOn(cleanIntegrationTestComposeRepo)
 }
 
 // Same in-memory key path as the root build (see there). This project configures

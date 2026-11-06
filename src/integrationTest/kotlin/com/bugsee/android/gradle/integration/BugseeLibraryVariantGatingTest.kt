@@ -1,8 +1,8 @@
 package com.bugsee.android.gradle.integration
 
 import com.bugsee.android.gradle.integration.harness.FixtureProject
-import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -112,16 +112,13 @@ class BugseeLibraryVariantGatingTest {
         val sharedDir = temp.newFolder("lib-gating-tasks")
         val fixture = FixtureProject.materialize("library-variant-gating", sharedDir)
 
-        val result = GradleRunner.create()
-            .withProjectDir(fixture.projectDir)
+        val result = FixtureProject.runner(fixture.projectDir)
             .withArguments(
                 ":lib:tasks", "--all",
                 "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
                 "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
                 "--stacktrace",
             )
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
             .build()
 
         val output = result.output
@@ -147,22 +144,143 @@ class BugseeLibraryVariantGatingTest {
         // on the manifest-task absence.).
     }
 
+    @Test
+    fun library_module_warns_once_at_default_level_not_per_variant() {
+        // Default log level (no `debug`, no --info). The fixture library has debug + release
+        // variants, so a per-variant warning would print twice.
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-warn"))
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        val expected = "apply the plugin to the application module (in a convention plugin"
+        assertEquals(
+            "expected exactly one library-module warning. Output:\n$output",
+            1,
+            Regex(Regex.escape(expected)).findAll(output).count(),
+        )
+        assertTrue("warning must name the module path", output.contains("Bugsee: :lib is a library module."))
+    }
+
+    @Test
+    fun library_module_warns_even_when_every_variant_is_disabled() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-warn-novariants"))
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureDisableAllVariants=true", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertEquals(
+            "expected exactly one library-module warning with all variants disabled. Output:\n$output",
+            1,
+            Regex(Regex.escape("Bugsee: :lib is a library module.")).findAll(output).count(),
+        )
+    }
+
+    @Test
+    fun warnLibraryModule_false_in_the_dsl_silences_the_warning_and_the_build_still_succeeds() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-silence-dsl"))
+        fixture.projectDir.resolve("lib/build.gradle.kts").appendText("\nbugsee { warnLibraryModule.set(false) }\n")
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertFalse("DSL false must silence the warning. Output:\n$output", output.contains("is a library module."))
+    }
+
+    @Test
+    fun warnLibraryModule_false_in_bugsee_properties_silences_the_warning() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-silence-props"))
+        fixture.projectDir.resolve("bugsee.properties").writeText("plugin.warnLibraryModule=false\n")
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertFalse("properties false must silence the warning. Output:\n$output", output.contains("is a library module."))
+    }
+
+    @Test
+    fun warnLibraryModule_true_still_warns_and_the_dsl_wins_over_the_file() {
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-silence-prec"))
+        fixture.projectDir.resolve("bugsee.properties").writeText("plugin.warnLibraryModule=false\n")
+        fixture.projectDir.resolve("lib/build.gradle.kts").appendText("\nbugsee { warnLibraryModule.set(true) }\n")
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks", "-PbugseeFixtureGroup=com.customer.lib").output
+
+        assertEquals(1, Regex(Regex.escape("Bugsee: :lib is a library module.")).findAll(output).count())
+    }
+
+    @Test
+    fun bugsee_sdk_group_library_is_exempt_from_the_warning() {
+        // Default fixture group is com.bugsee.testfixture, i.e. one of Bugsee's own SDK modules.
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-sdk-group"))
+
+        val output = runTasks(fixture.projectDir, ":lib:tasks").output
+
+        assertFalse(
+            "Bugsee SDK-group libraries must not get the warning. Output:\n$output",
+            output.contains("is a library module."),
+        )
+    }
+
+    @Test
+    fun application_module_does_not_get_the_library_warning() {
+        val fixture = FixtureProject.materialize("build-type-gating", temp.newFolder("app-nowarn"))
+
+        val output = runTasks(fixture.projectDir, ":app:tasks").output
+
+        assertFalse(
+            "application modules must not get the library-module warning. Output:\n$output",
+            output.contains("Bugsee registers upload tasks for application modules only"),
+        )
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
+
+    @Test
+    fun bugsee_listed_before_the_library_plugin_still_wires_and_skips_library_variants() {
+        // Issue #46: with the old apply() the wiring never ran for this order. Debug mode makes the
+        // library skip path log, which proves the variant callback was registered and reached.
+        val fixture = FixtureProject.materialize("library-variant-gating", temp.newFolder("lib-first"))
+        val build = fixture.projectDir.resolve("lib/build.gradle.kts")
+        build.writeText(
+            build.readText()
+                .replace(
+                    "    id(\"com.android.library\")\n    id(\"org.jetbrains.kotlin.android\")\n    id(\"com.bugsee.android.gradle\")",
+                    "    id(\"com.bugsee.android.gradle\")\n    id(\"com.android.library\")\n    id(\"org.jetbrains.kotlin.android\")",
+                )
+                .replace("bugsee {\n", "bugsee {\n    debug.set(true)\n"),
+        )
+        assertTrue(
+            "fixture rewrite must put bugsee first",
+            build.readText().indexOf("com.bugsee.android.gradle") < build.readText().indexOf("com.android.library"),
+        )
+
+        val result = buildLibAssembleDebug(fixture.projectDir)
+
+        assertTrue(
+            "wiring must run and skip the library variant:\n${result.output}",
+            result.output.contains("skipping plugin wiring for non-application variant debug"),
+        )
+        assertFalse(result.output.contains("AndroidComponentsExtension not found"))
+    }
+
+    private fun runTasks(projectDir: File, vararg tasks: String): org.gradle.testkit.runner.BuildResult =
+        FixtureProject.runner(projectDir)
+            .withArguments(
+                *tasks,
+                "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
+                "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
+                "--stacktrace",
+            )
+            .build()
 
     private fun buildLibAssembleDebug(projectDir: File): org.gradle.testkit.runner.BuildResult {
         // Pure helper — assembles the library AAR. Doesn't go through
         // FixtureProject.build() because that hardcodes
         // `:app:assembleDebug` (which doesn't exist in this fixture).
-        return GradleRunner.create()
-            .withProjectDir(projectDir)
+        return FixtureProject.runner(projectDir)
             .withArguments(
                 ":lib:assembleDebug",
                 "-PbugseeStubSdkRepo=${requireSystemProperty("bugsee.testkit.stubSdkRepo")}",
                 "-PbugseePluginProjectDir=${requireSystemProperty("bugsee.testkit.pluginProjectDir")}",
                 "--stacktrace",
             )
-            .withEnvironment(testKitEnvironment())
-            .forwardOutput()
             .build()
     }
 
@@ -181,23 +299,5 @@ class BugseeLibraryVariantGatingTest {
     private fun requireSystemProperty(key: String): String {
         return System.getProperty(key)
             ?: error("missing system property $key — is the integrationTest task wired to forward it?")
-    }
-
-    private fun testKitEnvironment(): Map<String, String> {
-        // Same shape as FixtureProject's private helper — duplicated
-        // here because that one is package-private to the
-        // harness module and this test wants the buildTasks side
-        // door without going through FixtureProject.build's
-        // hardcoded `:app:assembleDebug`.
-        val env = HashMap<String, String>()
-        env["JAVA_HOME"] = requireSystemProperty("bugsee.testkit.javaHome")
-        val androidHome = System.getenv("ANDROID_HOME")
-            ?: System.getenv("ANDROID_SDK_ROOT")
-            ?: System.getProperty("user.home") + "/Library/Android/sdk"
-        env["ANDROID_HOME"] = androidHome
-        env["ANDROID_SDK_ROOT"] = androidHome
-        System.getenv("HOME")?.let { env["HOME"] = it }
-        System.getenv("PATH")?.let { env["PATH"] = it }
-        return env
     }
 }

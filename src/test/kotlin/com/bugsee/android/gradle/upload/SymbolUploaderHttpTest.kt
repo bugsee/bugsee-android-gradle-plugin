@@ -72,6 +72,233 @@ class SymbolUploaderHttpTest {
 
     private val sampleJson = """{"uuid":"u-1","version":"1.0","build":1,"hash":"abc"}"""
 
+    // ── credentials never reach the log ──────────────────────────────
+
+    @Test fun `ApplicationNotFoundError logs a masked token, not the full app token`() {
+        server.setPostBody("""{"ok":false,"error":{"type":"ApplicationNotFoundError"}}""")
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = false,
+        )
+        assertFalse(ok, "an unknown app token must fail the upload")
+        val line = logger.warnMessages.singleOrNull { it.contains("App token is invalid") }
+        assertTrue(line != null, "must warn about the invalid token; got: ${logger.warnMessages}")
+        assertFalse(logger.warnMessages.any { it.contains(appToken) }, "full token must not be logged; got: ${logger.warnMessages}")
+        assertTrue(line.contains("test…oken"), "must show the masked form; got: $line")
+    }
+
+    @Test fun `debug logging drops the query of the presigned upload URL`() {
+        server.setPostBody("""{"endpoint":"${server.baseUrl}/presigned/blob?X-Amz-Signature=SECRETSIG0123"}""")
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = true,
+        )
+        assertTrue(ok, "upload must still succeed; warns: ${logger.warnMessages}")
+        val line = logger.warnMessages.singleOrNull { it.contains("Uploading to endpoint") }
+        assertTrue(line != null, "debug must log the upload endpoint; got: ${logger.warnMessages}")
+        assertFalse(logger.warnMessages.any { it.contains("SECRETSIG0123") }, "signature must not be logged; got: ${logger.warnMessages}")
+        assertTrue(line.contains("/presigned/blob?…<redacted>"), "must keep the path, drop the query; got: $line")
+    }
+
+    // ── transport errors and transient 5xx (#40) ─────────────────────
+
+    private fun upload(endpoint: String = server.baseUrl) = SymbolUploader.uploadData(
+        file = tempFile(),
+        json = sampleJson,
+        appToken = appToken,
+        endpoint = endpoint,
+        logger = logger,
+        debug = false,
+        retryPolicy = HttpRetry.RetryPolicy(backoffMs = 0),
+    )
+
+    @Test fun `502 then 502 then 200 on the POST succeeds after three requests`() {
+        server.scriptPostStatuses(502, 502)
+        assertTrue(upload(), "warns: ${logger.warnMessages}")
+        assertEquals(3, server.postCallCount())
+        assertEquals(1, server.putCallCount())
+    }
+
+    @Test fun `persistent 503 on the POST gives up after three requests with false`() {
+        server.setPostStatus(503)
+        assertFalse(upload())
+        assertEquals(3, server.postCallCount())
+        assertEquals(0, server.putCallCount())
+        assertTrue(logger.warnMessages.any { it.contains("status=503") }, "final warning; got: ${logger.warnMessages}")
+    }
+
+    @Test fun `429 on the POST is retried`() {
+        server.scriptPostStatuses(429)
+        assertTrue(upload())
+        assertEquals(2, server.postCallCount())
+    }
+
+    @Test fun `4xx on the POST is not retried`() {
+        server.setPostStatus(401)
+        assertFalse(upload())
+        assertEquals(1, server.postCallCount())
+    }
+
+    @Test fun `ApplicationNotFoundError is not retried`() {
+        server.setPostBody("""{"ok":false,"error":{"type":"ApplicationNotFoundError"}}""")
+        assertFalse(upload())
+        assertEquals(1, server.postCallCount())
+    }
+
+    @Test fun `DuplicateSymbolsFoundError in the nested envelope is a success without a PUT`() {
+        server.setPostBody("""{"ok":false,"error":{"type":"DuplicateSymbolsFoundError","code":16004}}""")
+        assertTrue(upload())
+        assertEquals(1, server.postCallCount())
+        assertEquals(0, server.putCallCount())
+    }
+
+    @Test fun `503 then 200 on the PUT succeeds after two PUTs`() {
+        server.scriptPutStatuses(503)
+        assertTrue(upload(), "warns: ${logger.warnMessages}")
+        assertEquals(2, server.putCallCount())
+        assertEquals(1, server.postCallCount())
+    }
+
+    @Test fun `persistent 500 on the PUT gives up after three PUTs with false`() {
+        server.setPutStatus(500)
+        assertFalse(upload())
+        assertEquals(3, server.putCallCount())
+    }
+
+    @Test fun `403 on the PUT is not retried`() {
+        server.setPutStatus(403)
+        assertFalse(upload())
+        assertEquals(1, server.putCallCount())
+    }
+
+    @Test fun `closed port returns false without throwing and masks the token`() {
+        val dead = java.net.ServerSocket(0).use { it.localPort }
+        assertFalse(upload("http://127.0.0.1:$dead"))
+        val line = logger.warnMessages.lastOrNull { it.contains("Bugsee upload failed") }
+        assertNotNull(line, "must warn; got: ${logger.warnMessages}")
+        assertFalse(logger.warnMessages.any { it.contains(appToken) }, "token must not be logged; got: ${logger.warnMessages}")
+    }
+
+    @Test fun `every PUT retry sends an identical body`() {
+        server.scriptPutStatuses(503, 503)
+        assertTrue(upload(), "warns: ${logger.warnMessages}")
+        assertEquals(3, server.putBodyHashes.size)
+        assertEquals(1, server.putBodyHashes.toSet().size, "PUT bodies differ: ${server.putBodyHashes}")
+    }
+
+    @Test fun `Retry-After on a 503 replaces the default backoff, capped`() {
+        server.retryAfterHeader = "100"
+        server.scriptPostStatuses(503)
+        val started = System.nanoTime()
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = server.baseUrl,
+            logger = logger, debug = false,
+            retryPolicy = HttpRetry.RetryPolicy(backoffMs = 0, retryAfterCapMs = 300),
+        )
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        assertTrue(ok)
+        assertEquals(2, server.postCallCount())
+        assertTrue(elapsedMs in 250..5_000, "must wait the capped Retry-After (~300ms), waited ${elapsedMs}ms")
+    }
+
+    @Test fun `retries stop when the time budget would be exceeded`() {
+        server.setPostStatus(503)
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = server.baseUrl,
+            logger = logger, debug = false,
+            retryPolicy = HttpRetry.RetryPolicy(backoffMs = 1_000, budgetMs = 500),
+        )
+        assertFalse(ok)
+        assertEquals(1, server.postCallCount(), "no retry may start when its wait alone exceeds the budget")
+    }
+
+    @Test fun `a malformed presigned URL does not leak its signature into the warning`() {
+        server.setPostBody("""{"endpoint":"http://127.0.0.1:1/bad path?X-Amz-Signature=SECRETSIG"}""")
+        assertFalse(upload())
+        assertFalse(logger.warnMessages.any { it.contains("SECRETSIG") }, "got: ${logger.warnMessages}")
+        assertTrue(logger.warnMessages.any { it.contains("Bugsee upload failed") }, "must still warn; got: ${logger.warnMessages}")
+    }
+
+    @Test fun `a failed PUT does not echo the S3 error body's signature fields into the warning`() {
+        server.setPostBody("""{"endpoint":"${server.baseUrl}/presigned/blob"}""")
+        server.setPutStatus(403)
+        server.setPutBody(
+            "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIASECRETKEYID</AWSAccessKeyId>" +
+                "<StringToSign>SECRETSTRINGTOSIGN</StringToSign><SignatureProvided>SECRETSIG</SignatureProvided></Error>",
+        )
+        assertFalse(upload())
+        val all = logger.warnMessages.joinToString("\n")
+        assertTrue(all.contains("status=403") && all.contains("SignatureDoesNotMatch"), "got: $all")
+        assertFalse(all.contains("SECRET") || all.contains("AKIA"), "got: $all")
+    }
+
+    @Test fun `a failed POST does not echo credentials from the response body`() {
+        server.setPostStatus(400)
+        server.setPostBody("""{"error":"bad","signature":"SECRETSIG","detail":"see http://x/y?X-Amz-Signature=SECRETSIG2 for $appToken"}""")
+        assertFalse(upload())
+        val all = logger.warnMessages.joinToString("\n")
+        assertTrue(all.contains("status=400") && all.contains("bad"), "got: $all")
+        assertFalse(all.contains("SECRET") || all.contains(appToken), "got: $all")
+    }
+
+    @Test fun `the info-level failure details do not leak the app token or a signature`() {
+        // A configured endpoint with a space makes HttpPost throw IllegalArgumentException that echoes the URL.
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = "http://127.0.0.1:1/bad path?X-Amz-Signature=SECRETSIG",
+            logger = logger, debug = false,
+        )
+        assertFalse(ok)
+        val all = logger.warnMessages + logger.infoMessages
+        assertTrue(logger.infoMessages.any { it.contains("failure details") }, "must log details at info; got: $all")
+        assertFalse(all.any { it.contains("SECRETSIG") || it.contains(appToken) }, "leak; got: $all")
+    }
+
+    @Test fun `a malformed endpoint without a query shows only the masked token`() {
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = "http://127.0.0.1:1/bad path",
+            logger = logger, debug = false,
+        )
+        assertFalse(ok)
+        val all = logger.warnMessages + logger.infoMessages
+        assertFalse(all.any { it.contains(appToken) }, "full token leaked; got: $all")
+        assertTrue(all.any { it.contains("test…oken") }, "masked token expected; got: $all")
+    }
+
+    @Test fun `a signature after whitespace inside the query is redacted too`() {
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(), json = sampleJson, appToken = appToken, endpoint = "http://127.0.0.1:1/p?a=b c X-Amz-Signature=SECRETSIG",
+            logger = logger, debug = false,
+        )
+        assertFalse(ok)
+        val all = logger.warnMessages + logger.infoMessages
+        assertFalse(all.any { it.contains("SECRETSIG") }, "got: $all")
+    }
+
+    @Test fun `an interrupted thread rethrows instead of swallowing the failure`() {
+        val dead = java.net.ServerSocket(0).use { it.localPort }
+        Thread.currentThread().interrupt()
+        try {
+            val thrown = runCatching { upload("http://127.0.0.1:$dead") }.exceptionOrNull()
+            // HttpRetry now stops before the first attempt, so the cancel surfaces as InterruptedException.
+            assertTrue(
+                thrown is InterruptedException || thrown is java.io.IOException,
+                "must propagate the cancellation; got: $thrown",
+            )
+            assertTrue(Thread.currentThread().isInterrupted, "interrupt status must be preserved")
+            assertEquals(0, logger.warnMessages.count { it.contains("retrying") }, "must not retry when cancelled")
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
     // ── POST-metadata status handling ────────────────────────────────
 
     @Test fun `POST returning 200 succeeds (baseline)`() {
@@ -333,6 +560,30 @@ class SymbolUploaderHttpTest {
         )
     }
 
+    private fun assertNonJsonBodyNotLogged(debug: Boolean) {
+        // A proxy / CDN page can echo anything, including a presigned URL with its signature.
+        server.setPostStatus(200)
+        server.setPostBody("<html>retry https://s3.example/blob?X-Amz-Signature=SECRETSIG0123</html>")
+
+        val ok = SymbolUploader.uploadData(
+            file = tempFile(),
+            json = sampleJson,
+            appToken = appToken,
+            endpoint = server.baseUrl,
+            logger = logger,
+            debug = debug,
+        )
+        assertFalse(ok)
+        assertFalse(
+            logger.warnMessages.any { it.contains("SECRETSIG0123") },
+            "body must not be logged (debug=$debug); got: ${logger.warnMessages}",
+        )
+    }
+
+    @Test fun `non-JSON 2xx body is never echoed into the log`() = assertNonJsonBodyNotLogged(debug = false)
+
+    @Test fun `non-JSON 2xx body is never echoed into the debug log`() = assertNonJsonBodyNotLogged(debug = true)
+
     @Test fun `POST 200 with HTML error page (proxy-injected) fails gracefully`() {
         // Intermediate proxies (corporate forward proxies, CDN
         // error edges) occasionally rewrite the response body to
@@ -559,6 +810,17 @@ internal class MockSymbolServer(private val appToken: String) {
     fun setPutBody(body: String) { putBody = body }
     fun putCallCount(): Int = putAttempts.get()
 
+    val putBodyHashes: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+    @Volatile var retryAfterHeader: String? = null
+    private val postAttempts = AtomicInteger(0)
+    private val postScript = ConcurrentLinkedQueue<Int>()
+    private val putScript = ConcurrentLinkedQueue<Int>()
+    fun postCallCount(): Int = postAttempts.get()
+
+    /** Statuses served to the first POSTs / PUTs, in order; afterwards the configured status applies. */
+    fun scriptPostStatuses(vararg statuses: Int) { postScript.addAll(statuses.toList()) }
+    fun scriptPutStatuses(vararg statuses: Int) { putScript.addAll(statuses.toList()) }
+
     fun start() {
         server.executor = Executors.newSingleThreadExecutor()
         // Symbol POST endpoint.
@@ -581,6 +843,8 @@ internal class MockSymbolServer(private val appToken: String) {
         // Capture request headers BEFORE the response is sent — tests assert
         // on telemetry headers like X-Bugsee-Uploader.
         lastPostHeaders = exchange.requestHeaders
+        postAttempts.incrementAndGet()
+        val scripted = postScript.poll()
         // Drain the body so the client can read the response.
         exchange.requestBody.use { it.readBytes() }
         val body = postBody ?: JSONObject().apply {
@@ -588,7 +852,8 @@ internal class MockSymbolServer(private val appToken: String) {
         }.toString()
         val bytes = body.toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.add("Content-Type", "application/json")
-        exchange.sendResponseHeaders(postStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
+        retryAfterHeader?.let { exchange.responseHeaders.add("Retry-After", it) }
+        exchange.sendResponseHeaders(scripted ?: postStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
         if (bytes.isNotEmpty()) {
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -596,11 +861,13 @@ internal class MockSymbolServer(private val appToken: String) {
 
     private fun handlePut(exchange: HttpExchange) {
         putAttempts.incrementAndGet()
+        val scripted = putScript.poll()
         // Drain the body.
         val bos = ByteArrayOutputStream()
         exchange.requestBody.use { it.copyTo(bos) }
+        putBodyHashes.add(java.security.MessageDigest.getInstance("SHA-256").digest(bos.toByteArray()).joinToString("") { "%02x".format(it) })
         val bytes = putBody.toByteArray(Charsets.UTF_8)
-        exchange.sendResponseHeaders(putStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
+        exchange.sendResponseHeaders(scripted ?: putStatus, if (bytes.isEmpty()) -1L else bytes.size.toLong())
         if (bytes.isNotEmpty()) {
             exchange.responseBody.use { it.write(bytes) }
         }
@@ -643,11 +910,12 @@ private class RecordingLoggerForSymbol : Logger {
     override fun debug(marker: org.slf4j.Marker?, msg: String?, t: Throwable?) {}
     override fun isInfoEnabled(): Boolean = false
     override fun isInfoEnabled(p: org.slf4j.Marker?): Boolean = false
-    override fun info(msg: String?) {}
+    val infoMessages: MutableList<String> = mutableListOf()
+    override fun info(msg: String?) { if (msg != null) infoMessages.add(msg) }
     override fun info(format: String?, arg: Any?) {}
     override fun info(format: String?, arg1: Any?, arg2: Any?) {}
     override fun info(format: String?, vararg arguments: Any?) {}
-    override fun info(msg: String?, t: Throwable?) {}
+    override fun info(msg: String?, t: Throwable?) { if (msg != null) infoMessages.add(msg + (t?.let { " " + it } ?: "")) }
     override fun info(marker: org.slf4j.Marker?, msg: String?) {}
     override fun info(marker: org.slf4j.Marker?, format: String?, arg: Any?) {}
     override fun info(marker: org.slf4j.Marker?, format: String?, arg1: Any?, arg2: Any?) {}

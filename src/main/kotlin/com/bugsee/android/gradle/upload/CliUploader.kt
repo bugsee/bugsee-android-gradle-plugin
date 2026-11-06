@@ -12,7 +12,9 @@ import java.io.File
  *   - exit 0 → success, no fallback.
  *   - exit 1 (Unexpected) or exit 2 (Usage) → structural CLI failure;
  *     the Kotlin uploader is given a chance to take over.
- *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40+) →
+ *   - negative, 126, 127 or >= 128 → the binary did not run (not executable,
+ *     not found, loader failure, killed by a signal); fall back as well.
+ *   - any other non-zero exit (10–19 input, 20–29 config, 30–39 upload, 40–125) →
  *     substantive failure; the Kotlin uploader would hit the same error,
  *     so we do NOT retry and the caller surfaces the failure as-is.
  *
@@ -30,7 +32,21 @@ internal data class CliUploadResult(
      * touching customer code.
      */
     val fallbackReason: String?,
-)
+) {
+    /**
+     * Fallback gate for the build-registration path (`upload build`). Symbol
+     * uploads are idempotent by contract (duplicate 16004 is success). A repeated
+     * registration is believed safe too (the appserver replaces a build with the
+     * same uuid, as `HttpRetry` relies on; confirmed by code reading during #118,
+     * not verified end to end), so this gate stays conservative: a signal
+     * exit (> 128) or a Windows crash/kill status (< -1, other than loader failures
+     * such as 0xC0000135) — where the CLI DID run and may have already registered
+     * the build before dying — does not trigger a retry. Only 1, 2, 126, 127, 128,
+     * loader failures and the plugin-synthesized -1 keep the fallback.
+     */
+    val shouldFallbackForBuildRegistration: Boolean
+        get() = shouldFallback && !CliUploader.ranAndDied(exitCode)
+}
 
 /**
  * Drives `bugsee-cli debug-files upload` invocations for the symbol types
@@ -54,6 +70,24 @@ internal object CliUploader {
     /** Per the CLI's documented exit-code contract: 2 = Usage (argv error). */
     private const val EXIT_USAGE = 2
 
+    /** POSIX shell convention: 126 = found but not executable, 127 = not found. */
+    private const val EXIT_NOT_EXECUTABLE = 126
+    private const val EXIT_NOT_FOUND = 127
+
+    /**
+     * Windows NT statuses meaning the image never started (so nothing could have been
+     * registered): 0xC0000135 DLL_NOT_FOUND, 0xC000007B INVALID_IMAGE_FORMAT,
+     * 0xC0000139 ENTRYPOINT_NOT_FOUND, 0xC0000142 DLL_INIT_FAILED.
+     */
+    private val WINDOWS_LOADER_FAILURES: Set<Int> =
+        setOf(0xC0000135L, 0xC000007BL, 0xC0000139L, 0xC0000142L).map { it.toInt() }.toSet()
+
+    /** POSIX: 128 + signal number when the process is killed by a signal. */
+    private const val EXIT_SIGNAL_BASE = 128
+
+    /** The environment variable bugsee-cli reads the app token from (`--app-token` is its flag form). */
+    internal const val APP_TOKEN_ENV = "BUGSEE_APP_TOKEN"
+
     @Suppress("LongParameterList")
     fun uploadMapping(
         execOps: ExecOperations,
@@ -72,13 +106,13 @@ internal object CliUploader {
         cliBinary = cliBinary,
         argv = buildMappingArgv(
             endpoint = endpoint,
-            appToken = appToken,
             version = version,
             build = build,
             uuid = uuid,
             mappingFile = mappingFile,
             iconFile = iconFile,
         ),
+        appToken = appToken,
         logger = logger,
         debug = debug,
     )
@@ -101,13 +135,13 @@ internal object CliUploader {
         cliBinary = cliBinary,
         argv = buildElfArgv(
             endpoint = endpoint,
-            appToken = appToken,
             version = version,
             build = build,
             uuid = uuid,
             symbolsZip = symbolsZip,
             force = force,
         ),
+        appToken = appToken,
         logger = logger,
         debug = debug,
     )
@@ -125,7 +159,8 @@ internal object CliUploader {
      * At least one of [depsJsonFile] / [timingsJsonFile] must be non-null
      * (the CLI rejects an empty bundle with a config error). Returns the
      * same [CliUploadResult] contract as the symbol uploads — a
-     * structural failure (exit 1/2, binary missing) signals the caller to
+     * structural failure (exit 1/2, exit < 0 / 126 / 127 / >= 128,
+     * binary missing) signals the caller to
      * fall back to the legacy per-blob gzip PUTs.
      *
      * Requires `bugsee-cli` >= 0.2.0 (the version that introduced the
@@ -150,6 +185,8 @@ internal object CliUploader {
             depsJsonFile = depsJsonFile,
             timingsJsonFile = timingsJsonFile,
         ),
+        // Pre-signed mode: the URL authorises the PUT, so there is no app token to hand over.
+        appToken = null,
         logger = logger,
         debug = debug,
     )
@@ -164,11 +201,15 @@ internal object CliUploader {
      * the CLI owns *how* (packing, registration, presigned PUTs, chunking,
      * retries, telemetry).
      *
-     * Returns the [CliUploadResult] contract: a structural failure (exit 1/2,
-     * binary missing) signals the caller to fall back to the native
-     * Bundle/ChunkedBundleUploader path; a substantive failure (bad token /
-     * server / transport) propagates without fallback since the native path
-     * would hit the same error.
+     * Returns the [CliUploadResult] contract. Callers must gate the native
+     * Bundle/ChunkedBundleUploader fallback on
+     * [CliUploadResult.shouldFallbackForBuildRegistration], NOT on `shouldFallback`:
+     * only exit 1/2, 126, 127, 128, Windows loader failures and the plugin-synthesized
+     * -1 (binary missing / exec failed) keep the fallback, because the CLI provably
+     * did not register anything. A signal exit (> 128) or Windows crash/kill status
+     * (< -1, non-loader) skips it, since the build may already be registered. A
+     * substantive failure (bad token / server / transport) propagates without
+     * fallback since the native path would hit the same error.
      *
      * Requires `bugsee-cli` >= the version that introduced `upload build`
      * (gated by the caller via [CliBinaryResolver]); an older binary yields a
@@ -193,7 +234,6 @@ internal object CliUploader {
         cliBinary = cliBinary,
         argv = buildBuildArgv(
             endpoint = endpoint,
-            appToken = appToken,
             payloadJsonFile = payloadJsonFile,
             artifactFile = artifactFile,
             mappingFile = mappingFile,
@@ -201,6 +241,7 @@ internal object CliUploader {
             timingsJsonFile = timingsJsonFile,
             chunked = chunked,
         ),
+        appToken = appToken,
         logger = logger,
         debug = debug,
     )
@@ -240,29 +281,32 @@ internal object CliUploader {
 
         val argv = buildPackArgv(artifactFile, mappingFile, outZip)
         if (debug) {
-            logger.warn("Bugsee: invoking bugsee-cli with args: ${argv.joinToString(" ")}")
+            logger.warn("Bugsee: invoking bugsee-cli with args: ${redactForLog(argv)}")
         }
 
         val stderr = ByteArrayOutputStream()
+        val stdout = ByteArrayOutputStream()
         val exitCode = try {
             execOps.exec { spec ->
                 spec.executable = cliBinary.absolutePath
                 spec.args = argv
+                spec.environment(proxyEnvForCli())
+                spec.standardOutput = stdout
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }.exitValue
         } catch (e: Exception) {
-            logger.warn(
-                "Bugsee: failed to execute bugsee-cli pack: ${e.message}; " +
-                    "using the native packer.",
-            )
+            // A cancelled build is rethrown by the caller; don't announce a fallback that will not happen.
+            if (!Thread.currentThread().isInterrupted) {
+                logger.warn(
+                    "Bugsee: failed to execute bugsee-cli pack: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
+                        "using the native packer.",
+                )
+            }
             return false
         }
 
-        val stderrText = stderr.toString(Charsets.UTF_8).trim()
-        if (stderrText.isNotEmpty()) {
-            logger.warn("Bugsee: bugsee-cli output:\n$stderrText")
-        }
+        forwardCliOutput(logger, stdout, stderr, exitCode, appToken = null)
 
         // Require a non-empty output, not just presence: an exit-0 that left a
         // 0-byte / truncated ZIP (a future CLI bug, or a reaped-but-killed
@@ -270,11 +314,135 @@ internal object CliUploader {
         if (exitCode == 0 && outZip.isFile && outZip.length() > 0L) {
             return true
         }
-        logger.warn(
-            "Bugsee: bugsee-cli pack exited $exitCode (or produced no/empty output); " +
-                "using the native packer.",
-        )
+        // A cancel that killed the CLI can surface as an exit code; the caller rethrows it, so no fallback is announced.
+        if (!Thread.currentThread().isInterrupted) {
+            logger.warn(
+                "Bugsee: bugsee-cli pack exited $exitCode (or produced no/empty output); " +
+                    "using the native packer.",
+            )
+        }
         return false
+    }
+
+    // Line-level secrets scrubForLog does not know: S3 error fields printed as `Name: value` / `Name=value`
+    // (a raw 403 body echoes StringToSign / SignatureProvided / AWSAccessKeyId), JSON string values under
+    // credential-looking keys (the CLI embeds response bodies verbatim), and bare query pairs whose `?` was
+    // cut off (e.g. a wrapped or truncated URL).
+    private val CLI_SECRET_FIELD = Regex(
+        "\\b(StringToSign|SignatureProvided|AWSAccessKeyId|CanonicalRequest|SecretAccessKey|SessionToken)\\b[ \\t]*[:=][^\\r\\n]*",
+        RegexOption.IGNORE_CASE,
+    )
+    private val CLI_SECRET_JSON_PAIR = Regex(
+        // `\\?"` also matches the escaped-quote form of a body logged through a Debug/quoted string.
+        "\\\\?\"([^\"\\r\\n]*(?:${BundleUploader.SENSITIVE_KEY_PATTERN})[^\"\\r\\n]*)\\\\?\"\\s*:\\s*\\\\?\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?",
+        RegexOption.IGNORE_CASE,
+    )
+    // tracing-subscriber may colour its output even on a pipe; escapes split `key=value` pairs.
+    private val ANSI_ESCAPE = Regex("\\u001B\\[[0-9;:?]*[A-Za-z]")
+    // `key=value` (bare, double- or single-quoted, escaped quotes included) and Debug-style `key: "value"`
+    // (colon form only before a quote, so prose such as `error: token expired` is left alone). The quoted
+    // alternatives are unrolled (no repeated alternation group) so long escape runs cannot overflow the stack.
+    private const val DQ_VALUE = "\\\\?\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"?"
+    private const val SQ_VALUE = "\\\\?'[^'\\\\\\r\\n]*+(?:\\\\.[^'\\\\\\r\\n]*+)*+'?"
+    // The key is matched as one possessive word run (no backtracking, so no super-linear blow-up on long
+    // runs) and judged sensitive in code by [isSensitiveKey]; see [scrubKeyValuePairs].
+    private val CLI_KEY_VALUE_PAIR =
+        Regex(
+            "(?<![A-Za-z0-9_-])([A-Za-z0-9_-]++)" +
+                // Debug output of Option<String> / newtype fields: `name: Some("v")`, `name=Secret("v")`.
+                "(?:=(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE|[^\\s&\"'<>]+)|" +
+                "[ \\t]*:[ \\t]*(?:[A-Za-z_][A-Za-z0-9_]{0,32}\\()?(?:$DQ_VALUE|$SQ_VALUE))",
+        )
+    private val SENSITIVE_KEY = Regex(BundleUploader.SENSITIVE_KEY_PATTERN, RegexOption.IGNORE_CASE)
+
+    private fun isSensitiveKey(key: String): Boolean =
+        key.equals("expires", ignoreCase = true) || SENSITIVE_KEY.containsMatchIn(key)
+
+    /**
+     * Replaces the value of every credential-named `key=value` / `key: "value"` pair with `<redacted>`.
+     * A non-credential pair is skipped key-only, so a secret nested in its (quoted) value is still found.
+     */
+    private fun scrubKeyValuePairs(text: String): String {
+        val out = StringBuilder(text.length)
+        var pos = 0
+        while (pos < text.length) {
+            val m = CLI_KEY_VALUE_PAIR.find(text, pos) ?: break
+            val key = m.groupValues[1]
+            val keyEnd = m.groups[1]!!.range.last + 1
+            out.append(text, pos, keyEnd)
+            if (isSensitiveKey(key)) {
+                out.append("=<redacted>")
+                pos = m.range.last + 1
+            } else {
+                pos = keyEnd
+            }
+        }
+        out.append(text, pos, text.length)
+        return out.toString()
+    }
+
+    private const val CLI_OUTPUT_KEEP = 2000
+
+    /**
+     * Keeps the first and last ~2000 chars of long output, cut at line boundaries: the CLI prints its
+     * summary `error:` line last, after any retry warnings, so a plain head cap would lose it.
+     */
+    private fun headAndTail(text: String): String {
+        if (text.length <= CLI_OUTPUT_KEEP * 2) return text
+        val head = text.take(CLI_OUTPUT_KEEP).substringBeforeLast('\n', "")
+        val tail = text.takeLast(CLI_OUTPUT_KEEP).substringAfter('\n', "")
+        return "$head\n…[output truncated]…\n$tail"
+    }
+
+    /**
+     * Log-safe rendering of bugsee-cli's stderr/stdout. The CLI embeds raw HTTP response bodies, presigned
+     * URLs and request URLs in its diagnostics, so the text goes through [BundleUploader.scrubForLog]
+     * (masks [appToken], drops URL query strings, SigV4 pairs, bearer tokens, credential headers and the text
+     * of credential-named XML elements; capped at 4096 chars) plus the CLI-specific patterns above, and is trimmed.
+     */
+    internal fun scrubCliOutput(text: String, appToken: String? = null): String =
+        // The XML pass runs on the full text, before head/tail trimming: a multi-line secret element whose opening
+        // tag falls in the dropped middle would otherwise leak the lines that land at the start of the tail.
+        BundleUploader.scrubForLog(headAndTail(BundleUploader.redactSecretXml(ANSI_ESCAPE.replace(text, ""))), appToken)
+            .replace(CLI_SECRET_FIELD) { "${it.groupValues[1]}: <redacted>" }
+            .replace(CLI_SECRET_JSON_PAIR, "\"$1\":\"<redacted>\"")
+            .let(::scrubKeyValuePairs)
+            .trim()
+
+    /**
+     * Forwards the CLI's captured stderr (warn) and stdout (lifecycle) to [logger], scrubbed by [scrubCliOutput].
+     * Called on success and failure alike; it has no effect on the exit-code / fallback decision.
+     */
+    internal fun forwardCliOutput(
+        logger: Logger,
+        stdout: ByteArrayOutputStream,
+        stderr: ByteArrayOutputStream,
+        exitCode: Int,
+        appToken: String?,
+        quietStdout: Boolean = false,
+    ) {
+        // Scrubbing must never fail the task (even a StackOverflowError): on any failure, log nothing of the output.
+        runCatching { forwardScrubbed(logger, stdout, stderr, exitCode, appToken, quietStdout) }
+            .onFailure { logger.warn("Bugsee: bugsee-cli output suppressed (exit $exitCode): could not be scrubbed safely.") }
+    }
+
+    private fun forwardScrubbed(
+        logger: Logger,
+        stdout: ByteArrayOutputStream,
+        stderr: ByteArrayOutputStream,
+        exitCode: Int,
+        appToken: String?,
+        quietStdout: Boolean,
+    ) {
+        val err = scrubCliOutput(stderr.toString(Charsets.UTF_8), appToken)
+        if (err.isNotEmpty()) {
+            logger.warn("Bugsee: bugsee-cli output (exit $exitCode):\n$err")
+        }
+        val out = scrubCliOutput(stdout.toString(Charsets.UTF_8), appToken)
+        if (out.isNotEmpty()) {
+            val msg = "Bugsee: bugsee-cli stdout (exit $exitCode):\n$out"
+            if (quietStdout) logger.debug(msg) else logger.lifecycle(msg)
+        }
     }
 
     private fun verifyAndExec(
@@ -283,6 +451,7 @@ internal object CliUploader {
         argv: List<String>,
         logger: Logger,
         debug: Boolean,
+        appToken: String?,
     ): CliUploadResult {
         if (!cliBinary.isFile) {
             logger.warn(
@@ -310,30 +479,42 @@ internal object CliUploader {
         }
 
         if (debug) {
-            // app-token is intentionally NOT scrubbed here — we log it the same
-            // way the Kotlin uploader logs the metadata JSON when `debug=true`.
-            logger.warn("Bugsee: invoking bugsee-cli with args: ${argv.joinToString(" ")}")
+            // The app token is a credential and CI logs are routinely shared or public, so it is
+            // masked even in debug output (see [redactForLog]).
+            logger.warn("Bugsee: invoking bugsee-cli with args: ${redactForLog(argv)}")
         }
 
         val stderr = ByteArrayOutputStream()
+        val stdout = ByteArrayOutputStream()
 
         val exitCode = try {
             val result = execOps.exec { spec ->
                 spec.executable = cliBinary.absolutePath
                 spec.args = argv
+                // bugsee-cli reads proxies from the environment only; derive them from the JVM
+                // proxy system properties (gradle.properties systemProp.*) unless already set.
+                spec.environment(proxyEnvForCli())
+                // The app token goes in the environment, not on the command line: argv is world-
+                // readable to other local users and processes (ps, /proc/<pid>/cmdline), the
+                // environment of a process is not. bugsee-cli reads BUGSEE_APP_TOKEN (every version).
+                appToken?.let { spec.environment(APP_TOKEN_ENV, it) }
                 // The CLI logs all diagnostics to stderr via the `tracing` crate;
                 // forward to the Gradle logger so users see what happened.
-                // stdout stays untouched — currently unused, reserved for future
-                // structured (JSON) output.
+                // stdout is captured too (it would otherwise reach the Gradle log raw) and
+                // forwarded scrubbed at lifecycle level; it is reserved for future structured output.
+                spec.standardOutput = stdout
                 spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }
             result.exitValue
         } catch (e: Exception) {
-            logger.warn(
-                "Bugsee: failed to execute bugsee-cli: ${e.message}; " +
-                    "will fall back to the Kotlin uploader.",
-            )
+            // A cancelled build is rethrown by the caller; don't announce a fallback that will not happen.
+            if (!Thread.currentThread().isInterrupted) {
+                logger.warn(
+                    "Bugsee: failed to execute bugsee-cli: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
+                        "will fall back to the Kotlin uploader.",
+                )
+            }
             return CliUploadResult(
                 success = false,
                 exitCode = -1,
@@ -342,12 +523,7 @@ internal object CliUploader {
             )
         }
 
-        val stderrText = stderr.toString(Charsets.UTF_8).trim()
-        if (stderrText.isNotEmpty()) {
-            // Forward the CLI's own logs unprocessed — let the user read what
-            // the binary said about its own failure rather than paraphrasing.
-            logger.warn("Bugsee: bugsee-cli output:\n$stderrText")
-        }
+        forwardCliOutput(logger, stdout, stderr, exitCode, appToken)
 
         return when {
             exitCode == 0 -> CliUploadResult(
@@ -357,25 +533,33 @@ internal object CliUploader {
                 fallbackReason = null,
             )
             shouldFallback(exitCode) -> {
-                logger.warn(
-                    "Bugsee: bugsee-cli exited with $exitCode (structural failure); " +
-                        "falling back to the Kotlin uploader.",
-                )
+                // A cancel that killed the CLI can surface as an exit code; the task rethrows it, so no fallback is announced.
+                if (!Thread.currentThread().isInterrupted) {
+                    logger.warn(
+                        "Bugsee: bugsee-cli ${describeFallback(exitCode)}; " +
+                            "falling back to the Kotlin uploader.",
+                    )
+                }
                 CliUploadResult(
                     success = false,
                     exitCode = exitCode,
                     shouldFallback = true,
-                    fallbackReason = "exit-$exitCode",
+                    fallbackReason = fallbackReason(exitCode),
                 )
             }
             else -> {
                 // Substantive failure (bad token / network / server). The Kotlin
-                // uploader would hit the same error, so don't waste a second
-                // round-trip.
-                logger.warn(
-                    "Bugsee: bugsee-cli exited with $exitCode (substantive failure); " +
-                        "the Kotlin uploader would hit the same error so no fallback is attempted.",
-                )
+                // uploader would normally hit the same error: the CLI's proxy settings
+                // (incl. credentials) are derived from the same JVM properties. If the
+                // user set HTTPS_PROXY/NO_PROXY in the environment themselves, the two
+                // paths can differ, but exit codes cannot isolate proxy failures, so no
+                // fallback is attempted (fallback policy is tracked in #45).
+                if (!Thread.currentThread().isInterrupted) {
+                    logger.warn(
+                        "Bugsee: bugsee-cli exited with $exitCode (substantive failure); " +
+                            "the Kotlin uploader would hit the same error so no fallback is attempted.",
+                    )
+                }
                 CliUploadResult(
                     success = false,
                     exitCode = exitCode,
@@ -395,7 +579,6 @@ internal object CliUploader {
      */
     internal fun buildMappingArgv(
         endpoint: String,
-        appToken: String,
         version: String,
         build: String,
         uuid: String,
@@ -403,7 +586,6 @@ internal object CliUploader {
         iconFile: File?,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
-        add("--app-token"); add(appToken)
         add("debug-files"); add("upload")
         add("--type"); add("proguard")
         add("--version"); add(version)
@@ -425,7 +607,6 @@ internal object CliUploader {
      */
     internal fun buildElfArgv(
         endpoint: String,
-        appToken: String,
         version: String,
         build: String,
         uuid: String,
@@ -433,7 +614,6 @@ internal object CliUploader {
         force: Boolean = false,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
-        add("--app-token"); add(appToken)
         add("debug-files"); add("upload")
         add("--type"); add("elf")
         if (force) add("--force")
@@ -478,6 +658,40 @@ internal object CliUploader {
         add("--out"); add(outZip.absolutePath)
     }
 
+    private val APP_TOKEN_IN_URL = Regex("(/v2/apps/)[^/\\s?#]+")
+
+    /**
+     * The argv as it is safe to print. Masked:
+     *  - the value of `--app-token` (also `--app-token=<value>`) → `***`;
+     *  - the value of `--upload-url` (also `--upload-url=<value>`): the build-info bundle is PUT to
+     *    a server-signed S3 URL whose query string is a write credential valid for days, so the
+     *    query is dropped (same policy as [BundleUploader.redactPresignedUrl] on the Kotlin path
+     *    and bugsee-cli's own `redact_url`);
+     *  - defence in depth, in any value: the token segment of a `…/v2/apps/<token>/…` URL, the
+     *    shape of the URLs this plugin builds itself (see [ApiEndpoint]).
+     *
+     * Only for logging: the real argv is passed to the process unchanged.
+     */
+    internal fun redactForLog(argv: List<String>): String {
+        var maskNext = false
+        var urlNext = false
+        return argv.joinToString(" ") { arg ->
+            val shown = when {
+                maskNext -> "***"
+                urlNext -> redactUrl(arg)
+                arg.startsWith("--app-token=") -> "--app-token=***"
+                arg.startsWith("--upload-url=") -> "--upload-url=" + redactUrl(arg.removePrefix("--upload-url="))
+                else -> APP_TOKEN_IN_URL.replace(arg, "$1***")
+            }
+            maskNext = arg == "--app-token"
+            urlNext = arg == "--upload-url"
+            shown
+        }
+    }
+
+    private fun redactUrl(url: String): String =
+        APP_TOKEN_IN_URL.replace(BundleUploader.redactPresignedUrl(url), "$1***")
+
     internal fun buildBuildInfoArgv(
         uploadUrl: String,
         depsJsonFile: File?,
@@ -491,8 +705,9 @@ internal object CliUploader {
 
     /**
      * Constructs the argv vector for `bugsee-cli upload build`. Carries
-     * `--endpoint` / `--app-token` (the CLI does the registration POST, unlike
-     * build-info's pre-signed mode). `--artifact` is the RAW `.aab`/`.apk` (the
+     * `--endpoint`; the app token is NOT in argv, it is passed through the environment
+     * ([APP_TOKEN_ENV]) — the CLI does the registration POST, unlike
+     * build-info's pre-signed mode. `--artifact` is the RAW `.aab`/`.apk` (the
      * CLI packs it + the optional `--mapping`); omit `--deps`/`--timings` when
      * not collected; `--chunked` opts into the chunked transport.
      *
@@ -501,7 +716,6 @@ internal object CliUploader {
     @Suppress("LongParameterList")
     internal fun buildBuildArgv(
         endpoint: String,
-        appToken: String,
         payloadJsonFile: File,
         artifactFile: File,
         mappingFile: File?,
@@ -510,7 +724,6 @@ internal object CliUploader {
         chunked: Boolean,
     ): List<String> = buildList {
         add("--endpoint"); add(endpoint)
-        add("--app-token"); add(appToken)
         add("upload"); add("build")
         add("--payload-json"); add(payloadJsonFile.absolutePath)
         add("--artifact"); add(artifactFile.absolutePath)
@@ -521,12 +734,61 @@ internal object CliUploader {
     }
 
     /**
-     * Whether [exitCode] is one of the CLI's "structural failure" codes that
-     * mean the binary never got a fair chance — and the Kotlin uploader can
-     * still succeed.
+     * Whether the symbol uploaders should fall back to the Kotlin uploader for
+     * [exitCode]: the CLI's structural codes (1, 2) or an OS-level failure
+     * ([isOsLevelFailure]). Symbol uploads are idempotent (duplicate 16004 is
+     * success), so this is safe even when the CLI ran and was killed. Build
+     * registration uses the stricter [CliUploadResult.shouldFallbackForBuildRegistration].
      *
      * Visible for testing.
      */
     internal fun shouldFallback(exitCode: Int): Boolean =
-        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE
+        exitCode == EXIT_UNEXPECTED || exitCode == EXIT_USAGE || isOsLevelFailure(exitCode)
+
+    /**
+     * Exit codes produced by the OS/shell rather than a substantive CLI result, for
+     * which the symbol uploaders fall back: negative (Windows loader failures and
+     * crash/kill statuses), POSIX 126 (not executable) / 127 (not found), 128, and
+     * > 128 (killed by a signal). Not all of these mean the process never started;
+     * see [ranAndDied] for the ones where the CLI did run.
+     *
+     * Visible for testing.
+     */
+    internal fun isOsLevelFailure(exitCode: Int): Boolean =
+        exitCode < 0 || exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode >= EXIT_SIGNAL_BASE
+
+    /**
+     * Whether the CLI DID start and then died: a POSIX signal exit (> 128, signal
+     * `exit - 128`) or a Windows NT status crash/kill (< -1, e.g. 0xC0000005), except
+     * Windows loader failures ([WINDOWS_LOADER_FAILURES]; the process never reached main). Plugin-
+     * synthesized -1 (binary missing / not executable / exec failed) is NOT included.
+     * Used to avoid a second build registration, whose state is unknown.
+     */
+    internal fun ranAndDied(exitCode: Int): Boolean =
+        exitCode > EXIT_SIGNAL_BASE || (exitCode < -1 && exitCode !in WINDOWS_LOADER_FAILURES)
+
+    /**
+     * `X-Bugsee-Uploader` fallback reason for a fallback [exitCode]: `exit-1` /
+     * `exit-2` (structural), `exit-<n>-not-runnable` (126, 127, 128), `exit-<n>-signal-<sig>`
+     * (> 128), or `exit-0x<HEX>-not-runnable` for negative codes (unsigned hex avoids
+     * a double hyphen). The `not-runnable` token is a stable backend bucket and also
+     * covers Windows crash statuses; it is kept for header compatibility.
+     *
+     * Visible for testing.
+     */
+    internal fun fallbackReason(exitCode: Int): String = when {
+        exitCode < 0 -> "exit-0x${Integer.toHexString(exitCode).uppercase()}-not-runnable"
+        exitCode > EXIT_SIGNAL_BASE -> "exit-$exitCode-signal-${exitCode - EXIT_SIGNAL_BASE}"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode == EXIT_SIGNAL_BASE ->
+            "exit-$exitCode-not-runnable"
+        else -> "exit-$exitCode"
+    }
+
+    private fun describeFallback(exitCode: Int): String = when {
+        exitCode < 0 -> "could not be run (exit 0x${Integer.toHexString(exitCode).uppercase()})"
+        exitCode > EXIT_SIGNAL_BASE -> "was killed by signal ${exitCode - EXIT_SIGNAL_BASE} (exit $exitCode)"
+        exitCode == EXIT_NOT_EXECUTABLE || exitCode == EXIT_NOT_FOUND || exitCode == EXIT_SIGNAL_BASE ->
+            "could not be run (exit $exitCode)"
+        else -> "exited with $exitCode (structural failure)"
+    }
 }

@@ -5,8 +5,6 @@ import org.apache.http.client.methods.HttpGet
 import org.apache.http.client.utils.URIBuilder
 import org.apache.http.conn.ssl.DefaultHostnameVerifier
 import org.apache.http.impl.client.HttpClients
-import org.apache.http.impl.client.StandardHttpRequestRetryHandler
-import org.apache.http.util.EntityUtils
 import org.gradle.api.logging.Logger
 import org.json.JSONObject
 
@@ -38,6 +36,10 @@ internal object BaselineClient {
         val build: String?,
     )
 
+    /** [url] with every occurrence of the app token replaced by its masked form (no-op for an empty token). */
+    private fun maskTokenIn(url: String, appToken: String): String =
+        if (appToken.isEmpty()) url else url.replace(appToken, BundleUploader.maskAppToken(appToken))
+
     /**
      * Fetch the baseline build's recorded artifact size for a
      * (package_id, format, build_configuration) tuple.
@@ -54,6 +56,7 @@ internal object BaselineClient {
         buildConfiguration: String?,
         logger: Logger,
         debug: Boolean,
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
     ): Baseline? {
         val url = try {
             val base = ApiEndpoint.buildsUrl(endpoint, appToken, "/baseline")
@@ -66,11 +69,12 @@ internal object BaselineClient {
                 .build()
                 .toASCIIString()
         } catch (e: Exception) {
-            logger.warn("Bugsee: size-check baseline URL build failed (${e.message}); skipping")
+            logger.warn("Bugsee: size-check baseline URL build failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping")
             return null
         }
 
-        if (debug) logger.warn("Bugsee: size-check fetching baseline from $url")
+        // The URL path carries the app token (`/v2/apps/<token>/builds/baseline`): mask it.
+        if (debug) logger.warn("Bugsee: size-check fetching baseline from ${maskTokenIn(url, appToken)}")
 
         val httpGet = HttpGet(url)
         val requestConfig = RequestConfig.custom()
@@ -81,19 +85,21 @@ internal object BaselineClient {
 
         return try {
             HttpClients.custom()
+                .useSystemProperties()
                 .setDefaultRequestConfig(requestConfig)
                 .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
-                .setRetryHandler(StandardHttpRequestRetryHandler())
+                .disableAutomaticRetries() // HttpRetry owns retries (I/O errors and transient statuses)
                 .build()
                 .use { client ->
-                    val response = client.execute(httpGet)
-                    val statusCode = response.statusLine.statusCode
-                    val body = response.entity?.let { EntityUtils.toString(it, "utf-8") } ?: ""
+                    // A read-only GET: safe to repeat, so 429/5xx and I/O errors are retried (bounded).
+                    val reply = HttpRetry.execute(client, httpGet, "size-check baseline lookup", logger, retryPolicy)
+                    val statusCode = reply.status
+                    val body = reply.body ?: ""
 
                     if (statusCode !in 200..299) {
                         logger.warn(
                             "Bugsee: size-check baseline lookup returned $statusCode " +
-                                "(${body.take(200)}); skipping check"
+                                "(${BundleUploader.redactBodyForLog(body, appToken)}); skipping check"
                         )
                         return@use null
                     }
@@ -101,7 +107,7 @@ internal object BaselineClient {
                     val payload = try {
                         ApiEndpoint.unwrapResult(JSONObject(body))
                     } catch (e: Exception) {
-                        logger.warn("Bugsee: size-check baseline returned non-JSON; skipping (${body.take(200)})")
+                        logger.warn("Bugsee: size-check baseline returned non-JSON; skipping (${BundleUploader.redactBodyForLog(body, appToken)})")
                         return@use null
                     }
 
@@ -133,8 +139,19 @@ internal object BaselineClient {
                         build = if (build.isNull("build")) null else build.optString("build").takeIf { it.isNotEmpty() },
                     )
                 }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw e
+        } catch (e: java.io.IOException) {
+            if (HttpRetry.isInterruption(e)) {
+                Thread.currentThread().interrupt()
+                throw e
+            }
+            logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
+            null
         } catch (e: Exception) {
-            logger.warn("Bugsee: size-check baseline lookup failed (${e.message}); skipping check")
+            HttpRetry.throwIfInterrupted()
+            logger.warn("Bugsee: size-check baseline lookup failed (${BundleUploader.scrubForLog(e.message ?: "", appToken)}); skipping check")
             null
         }
     }

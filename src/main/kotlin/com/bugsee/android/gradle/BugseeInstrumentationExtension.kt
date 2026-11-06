@@ -19,6 +19,7 @@ import javax.inject.Inject
  *         mainThreadMisuse.set(true)
  *         ktor.set(true)              // Ktor HTTP client plugin auto-loading
  *         cronet.set(true)            // Cronet HTTP client plugin auto-loading
+ *         composeInTests.set(false)   // also wrap Compose in test compilations (off by default)
  *         startupTier.set(StartupTier.STANDARD) // App-startup bytecode tracing depth
  *     }
  * }
@@ -55,7 +56,8 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      * names the offending class; add it here to unblock while the
      * underlying plugin bug is fixed.
      *
-     * Patterns match the dot-separated FQN. A bare class name matches
+     * Patterns match the dot-separated FQN; the slash-separated bytecode
+     * spelling (`com/vendor/sdk`) is accepted too and is equivalent. A bare class name matches
      * exactly; a bare package name excludes everything under it; `*` is a
      * wildcard (any characters). Examples:
      * ```kotlin
@@ -64,6 +66,7 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      *         excludes.add("com.example.Problematic")  // one class
      *         excludes.add("com.vendor.sdk")           // whole package (+ sub-packages)
      *         excludes.add("*.databinding.*Binding")   // glob
+     *         excludes.add("com/vendor/sdk")           // slash form of a package
      *     }
      * }
      * ```
@@ -150,6 +153,22 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
      * When unset, defaults to `true`.
      */
     val composeInput: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
+
+    /**
+     * Also apply the Compose compiler plugin (`compose` tag and `composeSecure` wrapping) to TEST
+     * compilations: unit tests (Robolectric), instrumented tests, test fixtures and other test source sets.
+     *
+     * Off by default: the tag/secure wraps add modifier and semantics nodes that can change
+     * parent/child matchers in Compose tests. Turn it on when you want tags in test runs, e.g.
+     * Robolectric recordings. It only widens WHICH compilations are processed; [compose] and
+     * [composeSecure] still decide what is injected there.
+     *
+     * Scope note: the gate is project-level like [compose]. Enabling this in ANY scope (global
+     * DSL or a variant block) applies the compiler plugin to every test compilation of the module.
+     *
+     * When unset, defaults to `false`.
+     */
+    val composeInTests: Property<Boolean> = objects.property(Boolean::class.javaObjectType)
 
     /**
      * Depth of app-startup bytecode tracing.
@@ -242,6 +261,9 @@ abstract class BugseeInstrumentationExtension @Inject constructor(objects: Objec
         "compose" -> compose
         "composeSecure" -> composeSecure
         "composeInput" -> composeInput
+        // Compiler-plugin gate only (default FALSE, applied in BugseePluginImpl.isApplicable); do not
+        // route it through InstrumentationConfigResolver, whose fallback default is true.
+        "composeInTests" -> composeInTests
         // Ktor / Cronet: today read only via direct property access in
         // the auto-install flow, but the keyed path is wired so a future
         // bytecode-instrumentation addition that uses these keys honors

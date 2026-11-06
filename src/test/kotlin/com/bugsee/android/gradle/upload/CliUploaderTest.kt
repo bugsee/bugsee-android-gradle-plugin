@@ -38,7 +38,6 @@ class CliUploaderTest {
     @Test fun `buildMappingArgv without icon produces the documented flag order`() {
         val argv = CliUploader.buildMappingArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.2.3",
             build = "42",
             uuid = "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
@@ -48,13 +47,12 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "token-xyz",
                 "debug-files", "upload",
                 "--type", "proguard",
                 "--version", "1.2.3",
                 "--build", "42",
                 "--uuid", "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
-                "/tmp/mapping.txt",
+                File("/tmp/mapping.txt").absolutePath,
             ),
             argv,
         )
@@ -64,7 +62,6 @@ class CliUploaderTest {
         val icon = File("/tmp/ic_launcher.png")
         val argv = CliUploader.buildMappingArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -85,7 +82,6 @@ class CliUploaderTest {
     @Test fun `buildElfArgv produces the documented flag order`() {
         val argv = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.2.3",
             build = "42",
             uuid = "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
@@ -94,13 +90,12 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "token-xyz",
                 "debug-files", "upload",
                 "--type", "elf",
                 "--version", "1.2.3",
                 "--build", "42",
                 "--uuid", "eb642b4e-9fe3-31c6-9a66-dd05ee3516f4",
-                "/tmp/native-debug-symbols.zip",
+                File("/tmp/native-debug-symbols.zip").absolutePath,
             ),
             argv,
         )
@@ -109,7 +104,6 @@ class CliUploaderTest {
     @Test fun `buildElfArgv adds --force only when requested`() {
         fun argv(force: Boolean) = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -127,7 +121,6 @@ class CliUploaderTest {
         val dir = File("/tmp/merged_native_libs/release")
         val argv = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -144,7 +137,6 @@ class CliUploaderTest {
         // silently start sending --icon and breaking native uploads.
         val argv = CliUploader.buildElfArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "token-xyz",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
@@ -168,8 +160,8 @@ class CliUploaderTest {
             listOf(
                 "upload", "build-info",
                 "--upload-url", "https://s3.example/final/build-info/abc-tid.zip?sig=…",
-                "--deps", "/tmp/dependencies.json",
-                "--timings", "/tmp/timings.json",
+                "--deps", File("/tmp/dependencies.json").absolutePath,
+                "--timings", File("/tmp/timings.json").absolutePath,
             ),
             argv,
         )
@@ -221,9 +213,9 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "pack",
-                "--artifact", "/tmp/app.apk",
-                "--mapping", "/tmp/mapping.txt",
-                "--out", "/tmp/upload.zip",
+                "--artifact", File("/tmp/app.apk").absolutePath,
+                "--mapping", File("/tmp/mapping.txt").absolutePath,
+                "--out", File("/tmp/upload.zip").absolutePath,
             ),
             argv,
         )
@@ -236,7 +228,7 @@ class CliUploaderTest {
             outZip = File("/tmp/upload.zip"),
         )
         assertContentEquals(
-            listOf("pack", "--artifact", "/tmp/app.aab", "--out", "/tmp/upload.zip"),
+            listOf("pack", "--artifact", File("/tmp/app.aab").absolutePath, "--out", File("/tmp/upload.zip").absolutePath),
             argv,
         )
         assertFalse(argv.contains("--mapping"), "no --mapping flag when mapping is null; argv=$argv")
@@ -247,7 +239,6 @@ class CliUploaderTest {
     @Test fun `buildBuildArgv with all inputs produces the documented flag order`() {
         val argv = CliUploader.buildBuildArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "tok",
             payloadJsonFile = File("/tmp/payload.json"),
             artifactFile = File("/tmp/app.aab"),
             mappingFile = File("/tmp/mapping.txt"),
@@ -258,13 +249,12 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "tok",
                 "upload", "build",
-                "--payload-json", "/tmp/payload.json",
-                "--artifact", "/tmp/app.aab",
-                "--mapping", "/tmp/mapping.txt",
-                "--deps", "/tmp/deps.json",
-                "--timings", "/tmp/timings.json",
+                "--payload-json", File("/tmp/payload.json").absolutePath,
+                "--artifact", File("/tmp/app.aab").absolutePath,
+                "--mapping", File("/tmp/mapping.txt").absolutePath,
+                "--deps", File("/tmp/deps.json").absolutePath,
+                "--timings", File("/tmp/timings.json").absolutePath,
                 "--chunked",
             ),
             argv,
@@ -274,7 +264,6 @@ class CliUploaderTest {
     @Test fun `buildBuildArgv omits optional flags when not supplied`() {
         val argv = CliUploader.buildBuildArgv(
             endpoint = "https://api.bugsee.com",
-            appToken = "tok",
             payloadJsonFile = File("/tmp/payload.json"),
             artifactFile = File("/tmp/app.apk"),
             mappingFile = null,
@@ -285,10 +274,9 @@ class CliUploaderTest {
         assertContentEquals(
             listOf(
                 "--endpoint", "https://api.bugsee.com",
-                "--app-token", "tok",
                 "upload", "build",
-                "--payload-json", "/tmp/payload.json",
-                "--artifact", "/tmp/app.apk",
+                "--payload-json", File("/tmp/payload.json").absolutePath,
+                "--artifact", File("/tmp/app.apk").absolutePath,
             ),
             argv,
         )
@@ -393,16 +381,97 @@ class CliUploaderTest {
         )
     }
 
-    @Test fun `reserved exit codes in 40+ range do NOT trigger fallback`() {
+    @Test fun `binary-did-not-run exit codes trigger fallback`() {
+        listOf(126, 127, 128, 134, 137, 139, 255, -1, -1073741701, -1073741515, Int.MIN_VALUE).forEach { code ->
+            assertTrue(CliUploader.shouldFallback(code), "exit $code means the binary did not run")
+        }
+    }
+
+    @Test fun `substantive and reserved exit codes 3 and 40 to 125 do NOT trigger fallback`() {
         // Defensive: any future addition to the CLI's exit-code enum lands
         // in a non-fallback bucket by default. A new code that SHOULD trigger
         // fallback must be added explicitly to `CliUploader.shouldFallback`.
-        listOf(40, 41, 50, 99, 127).forEach { code ->
+        listOf(3, 40, 41, 50, 99, 125).forEach { code ->
             assertFalse(
                 CliUploader.shouldFallback(code),
                 "exit $code (reserved) must default to substantive-failure; update both sides if needed",
             )
         }
+    }
+
+    // ── debug-log redaction ──────────────────────────────────────────
+
+    private val secretToken = "tok_SECRET_0123456789abcdef"
+
+    @Test fun `a real mapping argv carries no app token and redactForLog keeps the rest`() {
+        val argv = CliUploader.buildMappingArgv(
+            endpoint = "https://api.bugsee.com",
+            mappingFile = mappingFile,
+            version = "1.2.3",
+            build = "45",
+            uuid = "uuid-1",
+            iconFile = null,
+        )
+        // The token travels in BUGSEE_APP_TOKEN, never in argv.
+        assertFalse(argv.any { it.startsWith("--app-token") }, argv.toString())
+        val shown = CliUploader.redactForLog(argv)
+        assertFalse(shown.contains(secretToken), shown)
+        // Everything else is still there for debugging.
+        assertTrue(shown.contains("--endpoint https://api.bugsee.com"), shown)
+        assertTrue(shown.contains("--version 1.2.3"), shown)
+    }
+
+    @Test fun `redactForLog still masks the value after --app-token (defence in depth)`() {
+        val shown = CliUploader.redactForLog(listOf("--endpoint", "https://api.bugsee.com", "--app-token", secretToken, "--version", "1.2.3"))
+        assertFalse(shown.contains(secretToken), shown)
+        assertTrue(shown.contains("--app-token ***"), shown)
+        assertTrue(shown.contains("--version 1.2.3"), shown)
+    }
+
+    @Test fun `redactForLog masks the token segment of a plugin-built v2 apps URL`() {
+        val url = ApiEndpoint.buildsUrl("https://api.bugsee.com", secretToken, "/info")
+        assertTrue(url.contains(secretToken), "precondition: the URL carries the token ($url)")
+        val argv = CliUploader.buildBuildInfoArgv(url, depsJsonFile = null, timingsJsonFile = null)
+        val shown = CliUploader.redactForLog(argv)
+        assertFalse(shown.contains(secretToken), shown)
+        assertTrue(shown.contains("/v2/apps/***/builds"), shown)
+    }
+
+    @Test fun `redactForLog drops the query of the presigned build-info upload URL`() {
+        val signature = "SECRETSIG0123456789"
+        val url = "https://s3.example/final/build-info/abc-tid.zip?X-Amz-Signature=$signature&X-Amz-Credential=AKIAEXAMPLE"
+        val argv = CliUploader.buildBuildInfoArgv(url, depsJsonFile = null, timingsJsonFile = null)
+        assertTrue(argv.contains(url), "precondition: the real argv carries the full URL")
+        val shown = CliUploader.redactForLog(argv)
+        assertFalse(shown.contains(signature), shown)
+        assertFalse(shown.contains("AKIAEXAMPLE"), shown)
+        assertTrue(shown.contains("--upload-url https://s3.example/final/build-info/abc-tid.zip?…<redacted>"), shown)
+        assertTrue(argv.contains(url), "the argv passed to the process is not modified")
+    }
+
+    @Test fun `redactForLog drops the query in the --upload-url=value form too`() {
+        val shown = CliUploader.redactForLog(listOf("upload", "build-info", "--upload-url=https://s3.example/k.zip?sig=SECRETSIG"))
+        assertEquals("upload build-info --upload-url=https://s3.example/k.zip?…<redacted>", shown)
+    }
+
+    @Test fun `redactForLog leaves an upload URL without a query unchanged`() {
+        assertEquals(
+            "upload build-info --upload-url https://s3.example/u",
+            CliUploader.redactForLog(listOf("upload", "build-info", "--upload-url", "https://s3.example/u")),
+        )
+    }
+
+    @Test fun `redactForLog masks the --app-token=value form and leaves the input argv untouched`() {
+        val argv = listOf("upload", "build", "--app-token=$secretToken", "--chunked")
+        assertEquals("upload build --app-token=*** --chunked", CliUploader.redactForLog(argv))
+        assertEquals("--app-token=$secretToken", argv[2])
+    }
+
+    @Test fun `redactForLog does not mask unrelated values or a trailing --app-token`() {
+        assertEquals(
+            "debug-files upload --version 1.0 --app-token",
+            CliUploader.redactForLog(listOf("debug-files", "upload", "--version", "1.0", "--app-token")),
+        )
     }
 
     // ── verifyAndExec exit-code → CliUploadResult mapping ────────────
@@ -428,20 +497,35 @@ class CliUploaderTest {
     private class FakeExec(
         private val cliExitValue: Int,
         private val stderr: String = "",
+        private val stdout: String = "",
     ) : ExecOperations {
+        /** The argv and environment the production code gave the process, as recorded from the spec. */
+        var recordedArgs: List<String> = emptyList()
+        val recordedEnv: MutableMap<String, String> = mutableMapOf()
+        var execCount = 0
+
         override fun exec(action: Action<in ExecSpec>): ExecResult {
+            execCount++
             // Capture into a local so the anonymous ExecResult below
             // references THIS value — not its own getExitValue() (a name
             // clash with the Java `exitValue` property → infinite recursion).
             val resultExit = cliExitValue
             var capturedErr: java.io.OutputStream? = null
+            var capturedOut: java.io.OutputStream? = null
             val spec = java.lang.reflect.Proxy.newProxyInstance(
                 ExecSpec::class.java.classLoader,
                 arrayOf(ExecSpec::class.java),
             ) { proxy, method, args ->
                 when (method.name) {
                     "setErrorOutput" -> { capturedErr = args[0] as? java.io.OutputStream; proxy }
+                    "setArgs" -> { recordedArgs = (args[0] as Iterable<*>).map { it.toString() }; proxy }
+                    "environment" -> {
+                        if (args.size == 2) recordedEnv[args[0] as String] = args[1].toString()
+                        proxy
+                    }
                     "getErrorOutput" -> capturedErr
+                    "setStandardOutput" -> { capturedOut = args[0] as? java.io.OutputStream; proxy }
+                    "getStandardOutput" -> capturedOut
                     // Defaults for the few getters Gradle might probe — the
                     // production code only sets executable/args/errorOutput.
                     "hashCode" -> System.identityHashCode(proxy)
@@ -452,6 +536,10 @@ class CliUploaderTest {
             } as ExecSpec
 
             action.execute(spec)
+            if (stdout.isNotEmpty()) {
+                capturedOut?.write(stdout.toByteArray(Charsets.UTF_8))
+                capturedOut?.flush()
+            }
             if (stderr.isNotEmpty()) {
                 capturedErr?.write(stderr.toByteArray(Charsets.UTF_8))
                 capturedErr?.flush()
@@ -475,20 +563,165 @@ class CliUploaderTest {
         return f
     }
 
-    private fun runUploadMapping(exec: ExecOperations, cli: File): CliUploadResult =
+    private fun runUploadMapping(
+        exec: ExecOperations,
+        cli: File,
+        logger: org.gradle.api.logging.Logger = Logging.getLogger("test"),
+    ): CliUploadResult =
         CliUploader.uploadMapping(
             execOps = exec,
             cliBinary = cli,
             mappingFile = mappingFile,
             iconFile = null,
-            appToken = "tok",
+            appToken = envToken,
             endpoint = "https://api.bugsee.com",
             version = "1.0",
             build = "1",
             uuid = "00000000-0000-0000-0000-000000000000",
-            logger = Logging.getLogger("test"),
+            logger = logger,
             debug = false,
         )
+
+    private class ThrowingExec : ExecOperations {
+        override fun exec(action: Action<in ExecSpec>): ExecResult = throw RuntimeException("exec boom")
+        override fun javaexec(action: Action<in JavaExecSpec>): ExecResult = throw AssertionError("no javaexec")
+    }
+
+    /** A [org.gradle.api.logging.Logger] proxy that records every `warn(String)` message. */
+    private fun recordingLogger(warns: MutableList<String>): org.gradle.api.logging.Logger =
+        java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { _, method, args ->
+            if (method.name == "warn" && args?.firstOrNull() is String) warns += args[0] as String
+            when (method.name) {
+                "hashCode" -> System.identityHashCode(this)
+                "equals" -> false
+                "toString" -> "RecordingLogger"
+                else -> if (method.returnType == java.lang.Boolean.TYPE) false else null
+            }
+        } as org.gradle.api.logging.Logger
+
+    private fun withInterruptFlag(interrupted: Boolean, body: () -> Unit) {
+        if (interrupted) Thread.currentThread().interrupt()
+        try { body() } finally { Thread.interrupted() }
+    }
+
+    @Test fun `exec failure logs the fall back warning when not interrupted`() {
+        val warns = mutableListOf<String>()
+        val r = runUploadMapping(ThrowingExec(), executableCliStub(), recordingLogger(warns))
+        assertEquals("exec-failed", r.fallbackReason)
+        assertTrue(warns.any { "will fall back to the Kotlin uploader" in it }, "warns=$warns")
+    }
+
+    @Test fun `exec failure logs no fall back warning when the thread is interrupted`() {
+        val warns = mutableListOf<String>()
+        val cli = executableCliStub()
+        withInterruptFlag(true) {
+            val r = runUploadMapping(ThrowingExec(), cli, recordingLogger(warns))
+            assertEquals("exec-failed", r.fallbackReason) // semantics unchanged
+            assertTrue(Thread.currentThread().isInterrupted, "flag must stay set for the caller to rethrow")
+        }
+        assertTrue(warns.none { "fall back" in it }, "warns=$warns")
+    }
+
+    @Test fun `pack exec failure warns only when not interrupted`() {
+        val cli = executableCliStub()
+        for (interrupted in listOf(false, true)) {
+            val warns = mutableListOf<String>()
+            withInterruptFlag(interrupted) {
+                val ok = CliUploader.packUploadZip(
+                    ThrowingExec(), cli, File("/tmp/app.apk"), null,
+                    File("/tmp/out.zip"), recordingLogger(warns), debug = false,
+                )
+                assertFalse(ok)
+            }
+            assertEquals(
+                !interrupted, warns.any { "using the native packer" in it }, "interrupted=$interrupted warns=$warns",
+            )
+        }
+    }
+
+    @Test fun `non-zero exit warns about fallback only when not interrupted`() {
+        val cli = executableCliStub()
+        // 143 = killed by signal (fallback); 3 = substantive failure (no fallback).
+        for ((code, marker) in listOf(143 to "falling back", 3 to "substantive failure")) {
+            for (interrupted in listOf(false, true)) {
+                val warns = mutableListOf<String>()
+                withInterruptFlag(interrupted) {
+                    val r = runUploadMapping(FakeExec(cliExitValue = code), cli, recordingLogger(warns))
+                    assertEquals(code, r.exitCode) // classification unchanged
+                    assertEquals(code == 143, r.shouldFallback)
+                    assertEquals(interrupted, Thread.currentThread().isInterrupted, "flag must stay set for the caller")
+                }
+                assertEquals(
+                    !interrupted, warns.any { marker in it }, "code=$code interrupted=$interrupted warns=$warns",
+                )
+            }
+        }
+    }
+
+    @Test fun `pack non-zero exit warns only when not interrupted`() {
+        val cli = executableCliStub()
+        for (interrupted in listOf(false, true)) {
+            val warns = mutableListOf<String>()
+            withInterruptFlag(interrupted) {
+                val ok = CliUploader.packUploadZip(
+                    FakeExec(cliExitValue = 143), cli, File("/tmp/app.apk"), null,
+                    File("/tmp/out-134.zip"), recordingLogger(warns), debug = false,
+                )
+                assertFalse(ok)
+                assertEquals(interrupted, Thread.currentThread().isInterrupted, "flag must stay set for the caller")
+            }
+            assertEquals(
+                !interrupted, warns.any { "using the native packer" in it }, "interrupted=$interrupted warns=$warns",
+            )
+        }
+    }
+
+    // ── the app token goes in the environment, never on the command line ──
+
+    private val envToken = "tok_SECRET_0123456789abcdef"
+
+    @Test fun `uploadMapping passes the token via BUGSEE_APP_TOKEN and not on argv`() {
+        val exec = FakeExec(cliExitValue = 0)
+        CliUploader.uploadMapping(
+            execOps = exec, cliBinary = executableCliStub(), mappingFile = mappingFile, iconFile = null,
+            appToken = envToken, endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = Logging.getLogger("test"), debug = false,
+        )
+        assertEquals(1, exec.execCount)
+        assertEquals(envToken, exec.recordedEnv["BUGSEE_APP_TOKEN"])
+        assertFalse(exec.recordedArgs.any { it.contains(envToken) }, "token must not be on argv: ${exec.recordedArgs}")
+        assertFalse(exec.recordedArgs.contains("--app-token"), "no --app-token flag: ${exec.recordedArgs}")
+        assertTrue(exec.recordedArgs.containsAll(listOf("--endpoint", "https://api.bugsee.com", "debug-files", "upload")))
+    }
+
+    @Test fun `uploadElf passes the token via BUGSEE_APP_TOKEN and not on argv`() {
+        val exec = FakeExec(cliExitValue = 0)
+        CliUploader.uploadElf(
+            execOps = exec, cliBinary = executableCliStub(), symbolsZip = symbolsZip, appToken = envToken,
+            endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = Logging.getLogger("test"), debug = false,
+        )
+        assertEquals(envToken, exec.recordedEnv["BUGSEE_APP_TOKEN"])
+        // Prove argv was actually recorded, so the "not on argv" checks below cannot pass vacuously.
+        assertTrue(exec.recordedArgs.containsAll(listOf("--endpoint", "https://api.bugsee.com", "--type", "elf")), "argv=${exec.recordedArgs}")
+        assertFalse(exec.recordedArgs.any { it.contains(envToken) }, "token must not be on argv: ${exec.recordedArgs}")
+        assertFalse(exec.recordedArgs.contains("--app-token"), "no --app-token flag: ${exec.recordedArgs}")
+    }
+
+    @Test fun `uploadBuild passes the token via BUGSEE_APP_TOKEN and not on argv`() {
+        val exec = FakeExec(cliExitValue = 0)
+        CliUploader.uploadBuild(
+            execOps = exec, cliBinary = executableCliStub(), endpoint = "https://api.bugsee.com", appToken = envToken,
+            payloadJsonFile = File("/tmp/payload.json"), artifactFile = File("/tmp/app.aab"), mappingFile = null,
+            depsJsonFile = null, timingsJsonFile = null, chunked = false, logger = Logging.getLogger("test"), debug = false,
+        )
+        assertEquals(envToken, exec.recordedEnv["BUGSEE_APP_TOKEN"])
+        assertFalse(exec.recordedArgs.any { it.contains(envToken) }, "token must not be on argv: ${exec.recordedArgs}")
+        assertTrue(exec.recordedArgs.containsAll(listOf("upload", "build")), "argv=${exec.recordedArgs}")
+    }
 
     @Test fun `verifyAndExec maps exit 0 to success with no fallback`() {
         val result = runUploadMapping(FakeExec(cliExitValue = 0), executableCliStub())
@@ -512,6 +745,67 @@ class CliUploaderTest {
         assertEquals(2, result.exitCode)
         assertTrue(result.shouldFallback, "exit 2 (Usage) → structural fallback")
         assertEquals("exit-2", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 127 to fallback with not-runnable reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 127), executableCliStub())
+        assertFalse(result.success)
+        assertEquals(127, result.exitCode)
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-127-not-runnable", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec maps exit 137 to fallback with signal reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 137), executableCliStub())
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-137-signal-9", result.fallbackReason)
+    }
+
+    @Test fun `verifyAndExec renders a negative exit code as unsigned hex in the reason`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = -1073741819), executableCliStub())
+        assertTrue(result.shouldFallback)
+        assertEquals("exit-0xC0000005-not-runnable", result.fallbackReason)
+    }
+
+    @Test fun `fallbackReason formats every fallback bucket`() {
+        assertEquals("exit-1", CliUploader.fallbackReason(1))
+        assertEquals("exit-2", CliUploader.fallbackReason(2))
+        assertEquals("exit-126-not-runnable", CliUploader.fallbackReason(126))
+        assertEquals("exit-128-not-runnable", CliUploader.fallbackReason(128))
+        assertEquals("exit-129-signal-1", CliUploader.fallbackReason(129))
+        assertEquals("exit-139-signal-11", CliUploader.fallbackReason(139))
+        assertEquals("exit-0xFFFFFFFF-not-runnable", CliUploader.fallbackReason(-1))
+    }
+
+    @Test fun `signal exit falls back for symbols but not for build registration`() {
+        val r = runUploadMapping(FakeExec(cliExitValue = 137), executableCliStub())
+        assertTrue(r.shouldFallback, "symbols are idempotent: fall back")
+        assertFalse(r.shouldFallbackForBuildRegistration, "build registration state unknown: no second attempt")
+    }
+
+    @Test fun `windows crash status falls back for symbols but not for build registration`() {
+        val r = runUploadMapping(FakeExec(cliExitValue = -1073741819), executableCliStub())
+        assertTrue(r.shouldFallback)
+        assertFalse(r.shouldFallbackForBuildRegistration)
+    }
+
+    @Test fun `not-runnable exits fall back for both symbols and build registration`() {
+        for (code in listOf(126, 127, 128, -1, -1073741515, -1073741701, -1073741511, -1073741502)) {
+            val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertTrue(r.shouldFallback, "exit $code symbols")
+            assertTrue(r.shouldFallbackForBuildRegistration, "exit $code build registration")
+        }
+        for (code in listOf(1, 2)) {
+            val r = runUploadMapping(FakeExec(cliExitValue = code), executableCliStub())
+            assertTrue(r.shouldFallbackForBuildRegistration, "structural exit $code keeps build fallback")
+        }
+    }
+
+    @Test fun `verifyAndExec maps exit 3 to no-fallback failure`() {
+        val result = runUploadMapping(FakeExec(cliExitValue = 3), executableCliStub())
+        assertFalse(result.success)
+        assertFalse(result.shouldFallback)
+        assertEquals(null, result.fallbackReason)
     }
 
     @Test fun `verifyAndExec maps substantive exit codes to no-fallback failures`() {
@@ -552,5 +846,528 @@ class CliUploaderTest {
         assertEquals(-1, result.exitCode)
         assertTrue(result.shouldFallback)
         assertEquals("exec-failed", result.fallbackReason)
+    }
+
+    // ── CLI stderr/stdout is scrubbed before it reaches any log level (#109) ──
+
+    /** A [org.gradle.api.logging.Logger] proxy recording every message (and argument) at every level. */
+    private class AllLevelsLogger {
+        val lines = mutableListOf<Pair<String, String>>()
+        val logger: org.gradle.api.logging.Logger = java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader,
+            arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { proxy, method, args ->
+            val level = method.name
+            if (level in setOf("trace", "debug", "info", "lifecycle", "quiet", "warn", "error", "log")) {
+                lines += level to (args ?: emptyArray()).joinToString(" ") { it.toString() }
+            }
+            when {
+                method.name.startsWith("is") && method.returnType == java.lang.Boolean.TYPE -> true
+                method.name == "hashCode" -> System.identityHashCode(proxy)
+                method.name == "equals" -> proxy === args[0]
+                method.name == "toString" -> "AllLevelsLogger"
+                method.name == "getName" -> "all-levels"
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
+        fun all(): String = lines.joinToString("\n") { "${it.first}: ${it.second}" }
+    }
+
+    private val presigned = "https://bucket.s3.amazonaws.com/builds/abc.zst?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+        "&X-Amz-Credential=AKIAEXAMPLEKEY%2F20260101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=deadbeefcafe0123456789"
+    private val s3Error = "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIAEXAMPLEKEY</AWSAccessKeyId>" +
+        "<StringToSign>AWS4-HMAC-SHA256\n20260101T000000Z</StringToSign><SignatureProvided>deadbeefcafe0123456789</SignatureProvided></Error>"
+
+    private fun assertNoSecrets(text: String) {
+        for (secret in listOf(envToken, "deadbeefcafe0123456789", "AKIAEXAMPLEKEY", "20260101T000000Z", "SECRETSESSION")) {
+            assertFalse(text.contains(secret), "'$secret' leaked into the log:\n$text")
+        }
+    }
+
+    private val noisyStderr = "upload failed: PUT $presigned\n" +
+        "for https://api.bugsee.com/v2/apps/$envToken/builds status=403 body=$s3Error\n" +
+        "response {\"error\":\"bad\",\"X-Amz-Security-Token\":\"SECRETSESSION\"}\n" +
+        "Authorization: Bearer $envToken\n" +
+        "StringToSign: AWS4-HMAC-SHA256 20260101T000000Z\n"
+
+    @Test fun `failure stderr and stdout never leak the presigned URL signature or app token at any level`() {
+        val log = AllLevelsLogger()
+        val result = CliUploader.uploadMapping(
+            execOps = FakeExec(cliExitValue = 31, stderr = noisyStderr, stdout = noisyStderr),
+            cliBinary = executableCliStub(), mappingFile = mappingFile, iconFile = null, appToken = envToken,
+            endpoint = "https://api.bugsee.com", version = "1.0", build = "1",
+            uuid = "00000000-0000-0000-0000-000000000000", logger = log.logger, debug = true,
+        )
+        assertNoSecrets(log.all())
+        // Diagnostic value is kept: exit code, the failing host/path and the S3 error code.
+        assertTrue(log.all().contains("exit 31"), log.all())
+        assertTrue(log.all().contains("bucket.s3.amazonaws.com/builds/abc.zst"), log.all())
+        assertTrue(log.all().contains("SignatureDoesNotMatch"), log.all())
+        // Semantics unchanged.
+        assertFalse(result.success); assertFalse(result.shouldFallback); assertEquals(31, result.exitCode)
+    }
+
+    @Test fun `success and fallback exits scrub too and keep their result`() {
+        for (code in listOf(0, 1)) {
+            val log = AllLevelsLogger()
+            val result = runUploadMapping(FakeExec(cliExitValue = code, stderr = noisyStderr, stdout = noisyStderr), executableCliStub(), log.logger)
+            assertNoSecrets(log.all())
+            assertEquals(code == 0, result.success)
+            assertEquals(code == 1, result.shouldFallback)
+        }
+    }
+
+    @Test fun `packUploadZip scrubs the CLI output`() {
+        val log = AllLevelsLogger()
+        val out = File.createTempFile("pack", ".zip").also { it.deleteOnExit() }
+        CliUploader.packUploadZip(
+            execOps = FakeExec(cliExitValue = 1, stderr = noisyStderr, stdout = noisyStderr),
+            cliBinary = executableCliStub(), artifactFile = mappingFile, mappingFile = null, outZip = out,
+            logger = log.logger, debug = true,
+        )
+        for (s in listOf("AKIAEXAMPLEKEY", "20260101T000000Z", "SECRETSESSION")) assertFalse(log.all().contains(s), log.all())
+        assertFalse(log.all().contains("deadbeefcafe0123456789"), log.all())
+    }
+
+    @Test fun `stdout is forwarded scrubbed at lifecycle level, independent of stderr`() {
+        val log = AllLevelsLogger()
+        runUploadMapping(FakeExec(cliExitValue = 0, stdout = "build_id=42 $presigned"), executableCliStub(), log.logger)
+        val lifecycle = log.lines.filter { it.first == "lifecycle" }.joinToString("\n") { it.second }
+        assertTrue(lifecycle.contains("build_id=42"), log.all())
+        assertNoSecrets(log.all())
+    }
+
+    @Test fun `a truncated unterminated secret JSON value and a huge value neither leak nor overflow the stack`() {
+        val truncated = "body={\"upload_token\":\"" + "S".repeat(3000) + "\n" + "retry warn\n".repeat(30) + "error: \"Service Unavailable\""
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(truncated) }, "small-stack", 256 * 1024)
+        t.start(); t.join()
+        assertFalse(out.contains("SSSS"), out)
+        assertTrue(out.contains("Service Unavailable"), out)
+    }
+
+    @Test fun `ANSI colour codes and underscored token keys do not defeat the scrubber`() {
+        val out = CliUploader.scrubCliOutput("\u001B[3mtoken\u001B[0m=ANSISECRET upload_token=UNDERSECRET")
+        assertFalse(out.contains("ANSISECRET") || out.contains("UNDERSECRET"), out)
+    }
+
+    @Test fun `escaped-quote JSON bodies and colon-delimited SGR codes are scrubbed`() {
+        val escaped = CliUploader.scrubCliOutput("body=\"{\\\"upload_token\\\":\\\"ESCSECRET\\\"}\" status=403")
+        assertFalse(escaped.contains("ESCSECRET"), escaped)
+        val sgr = CliUploader.scrubCliOutput("token\u001B[38:5:1m=COLONSECRET")
+        assertFalse(sgr.contains("COLONSECRET"), sgr)
+    }
+
+    @Test fun `escape-heavy secret value does not overflow a small stack`() {
+        val nasty = "{\"upload_token\":\"" + "\\\"".repeat(1900) + "\"}\nerror: done"
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-2", 64 * 1024)
+        t.start(); t.join()
+        assertTrue(out.contains("<redacted>"), out)
+    }
+
+    @Test fun `non-SGR escape sequences glued to a key do not defeat the scrubber`() {
+        val out = CliUploader.scrubCliOutput("\u001B[2Ktoken=KSECRET")
+        assertFalse(out.contains("KSECRET"), out)
+    }
+
+    @Test fun `quoted tracing-style field values and other credential-named keys are scrubbed`() {
+        val out = CliUploader.scrubCliOutput(
+            "WARN upload_token=\"QSECRET\" signature=\"deadbeef\" client_secret=CSECRET password=hunter2 api_key=k1 retries=3",
+        )
+        for (s in listOf("QSECRET", "deadbeef", "CSECRET", "hunter2", "k1 ")) assertFalse(out.contains(s), out)
+        assertTrue(out.contains("retries=3"), out)
+    }
+
+    @Test fun `Debug-struct, single-quoted, escaped-quote and digit-bearing credential fields are scrubbed`() {
+        val out = CliUploader.scrubCliOutput(
+            "Resp { upload_url: \"https://x\", upload_token: \"DBGSECRET\" } password='hunter2' " +
+                "client_secret=\"abc\\\"RESTSECRET\" oauth2_access_token=OSECRET error: token expired",
+        )
+        for (s in listOf("DBGSECRET", "hunter2", "RESTSECRET", "OSECRET")) assertFalse(out.contains(s), out)
+        val wrapped = CliUploader.scrubCliOutput(
+            "Resp { upload_token: Some(\"OPTSECRET\"), session_secret: Secret(\"WRAP\") } " +
+                "${"a".repeat(40)}_api_key=LONGKEY api_key_${"a".repeat(40)}=LONGKEY2",
+        )
+        for (s in listOf("OPTSECRET", "WRAP", "LONGKEY")) assertFalse(wrapped.contains(s), wrapped)
+        assertTrue(out.contains("error: token expired"), out)
+    }
+
+    @Test fun `quoted credential value with long escape run does not overflow a small stack`() {
+        val nasty = "client_secret=\"" + "\\\"".repeat(950) + "\nx password: '" + "\\'".repeat(950)
+        var out = ""
+        val t = Thread(null, { out = CliUploader.scrubCliOutput(nasty) }, "small-stack-3", 64 * 1024)
+        t.start(); t.join()
+        assertTrue(out.contains("<redacted>"), out)
+    }
+
+    @Test fun `a long run of credential-looking word characters scrubs in bounded time`() {
+        // Each input is < 4000 chars with no newline, so head+tail trimming keeps it and the key regex runs.
+        for (nasty in listOf("token".repeat(790), "-key".repeat(990), "-token".repeat(660), "key_".repeat(990) + "=x")) {
+            val start = System.nanoTime()
+            val out = CliUploader.scrubCliOutput(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 2000, "scrub took too long for ${nasty.take(12)}")
+            assertFalse(out.contains("output truncated"), "input must survive trimming")
+        }
+        val eqWrapped = CliUploader.scrubCliOutput("upload_token=Some(\"EQSECRET\") x=1")
+        assertFalse(eqWrapped.contains("EQSECRET"), eqWrapped)
+        // A secret nested inside a non-credential quoted value is still found.
+        val nested = CliUploader.scrubCliOutput("msg=\"retry token=NESTEDSECRET later\"")
+        assertFalse(nested.contains("NESTEDSECRET"), nested)
+    }
+
+    @Test fun `scrubCliOutput is bounded-time on adversarial 1 MB inputs`() {
+        val mb = 1_000_000
+        val inputs = listOf(
+            "token".repeat(mb / 5), "-key".repeat(mb / 4), "?a=".repeat(mb / 3), "\\\"".repeat(mb / 2),
+            "\"token\":\"".repeat(mb / 9), "<StringToSign>".repeat(mb / 14), "Bearer ".repeat(mb / 7),
+            "\u001B[".repeat(mb / 2), "token=\"".repeat(mb / 7), "line with token=x\n".repeat(mb / 18),
+            "a".repeat(mb),
+        )
+        for (nasty in inputs) {
+            val start = System.nanoTime()
+            CliUploader.scrubCliOutput(nasty)
+            val ms = (System.nanoTime() - start) / 1_000_000
+            assertTrue(ms < 10_000, "scrub took ${ms}ms for ${nasty.take(12)}")
+        }
+    }
+
+    @Test fun `S3 CanonicalRequestBytes element is redacted`() {
+        val out = CliUploader.scrubCliOutput("<Error><CanonicalRequestBytes>41 4b 49 41 53 45 43</CanonicalRequestBytes></Error>")
+        assertFalse(out.contains("41 4b 49"), out)
+    }
+
+    @Test fun `long output keeps head and tail so the final error line survives`() {
+        val text = "first line\n" + "retrying request\n".repeat(1000) + "error: upload rejected (403)"
+        val out = CliUploader.scrubCliOutput(text)
+        assertTrue(out.startsWith("first line"), out)
+        assertTrue(out.endsWith("error: upload rejected (403)"), out)
+        assertTrue(out.length < 4300, "len=${out.length}")
+    }
+
+    @Test fun `scrubCliOutput bounds the length and keeps short plain text`() {
+        assertEquals("connection refused (os error 111)", CliUploader.scrubCliOutput("connection refused (os error 111)\n"))
+        assertTrue(CliUploader.scrubCliOutput("x".repeat(100_000)).length <= 4100)
+        assertEquals("", CliUploader.scrubCliOutput("  \n"))
+    }
+
+    private val s3ExpiredToken = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>ExpiredToken</Code>" +
+        "<Message>The provided token has expired.</Message><Token-0>FwoGZXIvYXdzEJr//SESSIONSECRET</Token-0>" +
+        "<RequestId>4442587FB7D0A2F9</RequestId><HostId>HOSTID123abc</HostId></Error>"
+
+    @Test fun `S3 ExpiredToken body redacts Token-0 but keeps benign elements`() {
+        val out = CliUploader.scrubCliOutput("error: " + s3ExpiredToken)
+        assertFalse(out.contains("SESSIONSECRET"), out)
+        assertTrue(out.contains("<Token-0><redacted></Token-0>"), out)
+        for (keep in listOf("<Code>ExpiredToken</Code>", "<Message>The provided token has expired.</Message>",
+            "<RequestId>4442587FB7D0A2F9</RequestId>", "<HostId>HOSTID123abc</HostId>")) {
+            assertTrue(out.contains(keep), "lost $keep in $out")
+        }
+    }
+
+    @Test fun `generalised XML secret tags cover suffixes namespaces attributes and unknown names`() {
+        val cases = listOf(
+            "<Token-1>S1</Token-1>", "<x:SessionToken>S2</x:SessionToken>", "<SecurityToken>S3</SecurityToken>",
+            "<ClientSecret>S4</ClientSecret>", "<Password>S5</Password>", "<ApiKey>S6</ApiKey>",
+            "<SecretAccessKey>S7</SecretAccessKey>", "<AWSAccessKeyId>S8</AWSAccessKeyId>",
+            "<Token-0 type=\"x\">S9</Token-0>", "<token>S10</token>", "<Credential>S11</Credential>",
+            "<Token-0>S12", "<Token-0 a=\"b\">S13", "<private_key>S14</private_key>", "<signing-key>S15</signing-key>",
+            "<Token><![CDATA[S16]]></Token>", "<Token>S17<!-- c --></Token>", "<Token value=\"S18\"/>", "<Item token=\"S19\">x</Item>",
+        )
+        for (c in cases) {
+            val out = CliUploader.scrubCliOutput("<Error>$c<Code>X</Code></Error>")
+            assertFalse(Regex("S\\d+").containsMatchIn(out), "leaked in $out")
+            assertTrue(out.contains("<Code>X</Code>"), out)
+        }
+    }
+
+    @Test fun `benign XML elements are untouched`() {
+        val benign = "<Error><Code>AccessDenied</Code><Message>Request has expired</Message><RequestId>R1</RequestId>" +
+            "<HostId>H1</HostId><Resource>/bucket/obj</Resource><Expires>2026-01-01T00:00:00Z</Expires>" +
+            "<Key>some/object</Key><KeyCount>3</KeyCount><Empty/><Token /><Tokenless/></Error>"
+        assertEquals(benign, CliUploader.scrubCliOutput(benign))
+    }
+
+    @Test fun `prose and CLI usage with token-like placeholders is unchanged`() {
+        val usage = "Usage: bugsee-cli upload --app-token <APP_TOKEN> --type <TYPE>\n\nFor more information try --help"
+        assertEquals(usage, CliUploader.scrubCliOutput(usage))
+        val msg = "expected List<AccessToken> but got null at Foo.kt:12 (caused by bar)"
+        assertEquals(msg, BundleUploader.scrubForLog(msg))
+        val benignKeys = "<Error><NextKeyMarker>m</NextKeyMarker><PolicyName>p</PolicyName><Monkey>x</Monkey></Error>"
+        assertEquals(benignKeys, BundleUploader.scrubForLog(benignKeys))
+    }
+
+    @Test fun `truncated or oversized secret elements are redacted to the next tag`() {
+        val cases = mapOf(
+            "<Error><CanonicalRequestBytes>50 55 54 0a X-Amz-Security-Token=FwoGLEAK1 41 42" to "LEAK1",
+            "<Error><CanonicalRequest>PUT\n/b/k\nX-Amz-Security-Token=FwoGLEAK2" to "LEAK2",
+            "<Error><StringToSign>AWS4-HMAC-SHA256 20260101T000000Z LEAK3" to "LEAK3",
+            "<Error><Code>X</Code>\n  <SessionToken>\n    LEAK4" to "LEAK4",
+            // MAX_XML_ELEMENT_TEXT == MAX_SCRUBBED_TEXT_CHARS (4096), so the window only affects cosmetics here: the
+            // marker comes first and the body is asserted below, which fails on main (element text kept verbatim).
+            "<Token>LEAK5" + "C".repeat(4096) + "</Token>" to "LEAK5",
+            "<SessionToken>LEAK6" + "A".repeat(5000) + "</SessionToken>" to "LEAK6",
+            "<Policy>{\"c\": [\"LEAK7\"]}" + " ".repeat(4100) + "</Policy>" to "LEAK7",
+            "<Token-0>abc LEAK8</Token-0 >" to "LEAK8",
+            "<Error><ArgumentName>x-amz-security-token</ArgumentName><ArgumentValue>FwoGLEAK9</ArgumentValue></Error>" to "LEAK9",
+        )
+        for ((input, leak) in cases) {
+            val out = BundleUploader.scrubForLog(input)
+            assertFalse(out.contains(leak), "scrubForLog leaked $leak")
+            assertFalse(out.contains("CCCC") || out.contains("AAAAAAAA"), "element body kept for $leak")
+        }
+    }
+
+    @Test fun `scrubForLog redacts credential attributes and keeps clap-style prose`() {
+        assertFalse(BundleUploader.scrubForLog("<Item token=\"SECRETA\">x</Item>").contains("SECRETA"))
+        assertFalse(BundleUploader.scrubForLog("<Token value='SECRETB'/>").contains("SECRETB"))
+        for (prose in listOf(
+            "error: a value is required for '--app-token <APP_TOKEN>' but none was supplied",
+            "invalid value 'x' for '--app-token <APP_TOKEN>': too short",
+            "Set BUGSEE_APP_TOKEN=<your-token>.",
+            "got (<Token>)",
+        )) {
+            assertEquals(prose, BundleUploader.scrubForLog(prose))
+        }
+    }
+
+    @Test fun `legacy S3 secret elements still redact`() {
+        val body = "<Error><Code>SignatureDoesNotMatch</Code><AWSAccessKeyId>AKIAXX</AWSAccessKeyId>" +
+            "<StringToSign>AWS4\n2026</StringToSign><SignatureProvided>abc123</SignatureProvided>" +
+            "<CanonicalRequestBytes>41 4b</CanonicalRequestBytes><Policy>p</Policy></Error>"
+        val out = BundleUploader.scrubForLog(body)
+        for (leak in listOf("AKIAXX", "AWS4", "abc123", "41 4b", ">p<")) assertFalse(out.contains(leak), out)
+        assertTrue(out.contains("<Code>SignatureDoesNotMatch</Code>"), out)
+    }
+
+    @Test fun `self-closing secret tag does not swallow following text and the window limit is honoured`() {
+        assertEquals("<Token a=\"<redacted>\"/>keep me<Code>X</Code>", BundleUploader.scrubForLog("<Token a=\"b\"/>keep me<Code>X</Code>"))
+        val inside = "<Token>" + "x".repeat(4000) + "<![CDATA[IN]]></Token>"
+        assertFalse(BundleUploader.scrubForLog(inside).contains("IN]]"), "close tag inside the window must redact the CDATA")
+        val outside = "<Token>" + "x".repeat(4100) + "<b>AFTER</b></Token>"
+        val out = BundleUploader.scrubForLog(outside)
+        assertTrue(out.contains("<b>AFTER</b>"), "text after a nested tag beyond the window is the accepted limit")
+        assertFalse(out.contains("xxxx"), out)
+    }
+
+    @Test fun `new credential names and line-start placeholders`() {
+        val body = "<Error><AccountKey>S1</AccountKey><SharedKey>S2</SharedKey><Passphrase>S3</Passphrase><Cookie>S4</Cookie></Error>"
+        assertFalse(Regex("S\\d").containsMatchIn(BundleUploader.scrubForLog(body)))
+        val help = "Arguments:\n  <TOKEN>  Bugsee app token\n\nOptions:\n  -h <HELP>"
+        assertEquals(help, BundleUploader.scrubForLog(help))
+    }
+
+    @Test fun `redactBodyForLog JSON string values are scrubbed`() {
+        val out = BundleUploader.redactBodyForLog("{\"detail\":\"<Token-0>JSONSECRET</Token-0> failed\",\"n\":1}")
+        assertFalse(out.contains("JSONSECRET"), out)
+    }
+
+    @Test(timeout = 120_000) fun `XML scrub time scales linearly`() {
+        // Distinct names defeat the failed-search memo, so only the 4096-char window keeps that shape linear.
+        fun time(input: String): Long {
+            BundleUploader.scrubForLog(input)
+            return (1..3).minOf { val s = System.nanoTime(); BundleUploader.scrubForLog(input); System.nanoTime() - s }
+        }
+        fun distinct(n: Int) = buildString { for (i in 0 until n) append("<Token").append(i).append(">") }
+        fun same(n: Int) = "<Token>".repeat(n)
+        fun sectioned(n: Int) = buildString { for (i in 0 until n / 20) { repeat(19) { append("<Token>") }; append("<!---->") } }
+        for (gen in listOf(::distinct, ::same, ::sectioned)) {
+            time(gen(5_000))
+            val small = time(gen(20_000)); val big = time(gen(40_000))
+            // Doubling n makes a quadratic scan ~4x slower; 3.5x plus slack keeps shared CI runners from flaking.
+            assertTrue(small < 2_000_000 || big < small * 3.5 + 5_000_000, "small=$small big=$big")
+        }
+    }
+
+    @Test fun `close tag quoted inside CDATA or a comment does not end the element`() {
+        val cases = listOf(
+            "<Error><Token><![CDATA[</Token>]]>CDSECRET</Token><Code>X</Code></Error>",
+            "<Error><Token><!-- </Token> -->CMSECRET</Token><Code>X</Code></Error>",
+            "<Error><Signature><![CDATA[</Signature>]]>SGSECRET</Signature></Error>",
+            "error: <SessionToken>CASESECRET</sessiontoken> was rejected",
+        )
+        for (c in cases) {
+            val out = BundleUploader.scrubForLog(c)
+            assertFalse(out.contains("SECRET"), out)
+        }
+        assertTrue(BundleUploader.scrubForLog(cases[0]).contains("<Code>X</Code>"))
+        // A far terminator must not make the close-tag search unbounded.
+        val far = ("x: <TokN><![CDATA[" + "y".repeat(5000)).repeat(200) + "]]>"
+        val start = System.nanoTime()
+        BundleUploader.scrubForLog(far)
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 10_000)
+    }
+
+    @Test fun `multi-line secret element opened in the trimmed middle does not leak at the tail start`() {
+        val text = "w\n".repeat(1500) + "<Error><Policy>\nAAAA\nSECRETLINE\nBBBB\n</Policy></Error>\n" + "y".repeat(1948) + "\nerror: failed\n"
+        assertFalse(CliUploader.scrubCliOutput(text).contains("SECRETLINE"))
+    }
+
+    @Test fun `escaped-quote attribute values on credential names are redacted`() {
+        val out = BundleUploader.scrubForLog("body: \"<Item token=\\\"ESCSECRET\\\"></Item>\"")
+        assertFalse(out.contains("ESCSECRET"), out)
+    }
+
+    @Test fun `unclosed secret element with CDATA or comment is redacted past it`() {
+        for (c in listOf("<Error><Token><![CDATA[CDSECRET]]>", "<Error><Token><!-- c -->CMSECRET", "<Error><StringToSign><![CDATA[CDSECRET]]>")) {
+            assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+        }
+    }
+
+    @Test fun `failed close-tag search through an unterminated CDATA does not hide a later element`() {
+        for (c in listOf("x <Token><![CDATA[ junk <Token>MEMOSECRET</Token> tail", "x <Token><!-- junk <Token>MEMOSECRET</Token> tail")) {
+            assertFalse(BundleUploader.scrubForLog(c).contains("MEMOSECRET"), c)
+        }
+    }
+
+    @Test fun `memo does not cover a skipped CDATA or comment section holding a same-name element`() {
+        val cases = listOf(
+            "x<SessionToken>a" + "<![CDATA[<SessionToken>SECRET2</SessionToken>]]>",
+            "x<Token>a<![CDATA[<Token>SECRET1</Token>]]>",
+            "x<Token>a<!-- <Token>SECRET3</Token> -->",
+        )
+        for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
+    @Test fun `strict scan half of the union and its memo stay covered`() {
+        val cases = listOf(
+            "<TOKEN><Policy>a</Token>SECRET</Policy>",
+            "<SIGNATURE><Signature><b/></signature>SECRET</Signature>",
+            "<TOKEN><Token><b/></token>SECRET</Token>",
+        )
+        for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
+    @Test fun `touching redacted spans are merged into one marker`() {
+        assertEquals("<TOKEN><redacted></SessionToken>", BundleUploader.scrubForLog("<TOKEN><SessionToken></Token></SessionToken>"))
+    }
+
+    @Test(timeout = 120_000) fun `unterminated CDATA and comment openers stay linear`() {
+        for (nasty in listOf(
+            buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><!--") },
+            buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><!--<!--<!--<!--") },
+            buildString { for (i in 0 until 20_000) append("x<Token").append(i).append("><![CDATA[") },
+        )) {
+            val start = System.nanoTime()
+            BundleUploader.scrubForLog(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 10_000, "slow on ${nasty.take(20)}")
+        }
+    }
+
+    @Test fun `close tag quoted in an unterminated or unmatched section never ends the element`() {
+        val cases = listOf(
+            "<Token><![CDATA[ </Token> SECRET1",
+            "<Error><SessionToken>a<!-- </SessionToken> SECRET2",
+            "<Error><Signature><![CDATA[ </Signature> SECRET3",
+            "<Error><SessionToken>a<![CDATA[x]]><![CDATA[ </SessionToken> SECRET4",
+            "<Token>a<![CDATA[</Token>]]>SECRET11",
+        )
+        for (c in cases) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+        // A section that starts inside one tag's window and ends after it must not make the memo skip a close tag.
+        val straddle = "<Error><Token>a" + "f".repeat(4040) + "<Token>b<![CDATA[" + "c".repeat(100) + "</Token>]]>SEC</Token></Error>"
+        assertFalse(BundleUploader.scrubForLog(straddle).contains("SEC<"), "straddling section")
+    }
+
+    @Test fun `escaped newline boundary numbered token window size and case-insensitive close are pinned`() {
+        assertFalse(BundleUploader.scrubForLog("body: \"<Error>\\n  <SessionToken>SEC1").contains("SEC1"))
+        assertFalse(BundleUploader.scrubForLog("got <Token-0>SEC2 and more").contains("SEC2"))
+        assertFalse(BundleUploader.scrubForLog("<Token>a<b>SEC3</b>" + "x".repeat(300) + "</Token>").contains("SEC3"))
+        assertFalse(BundleUploader.scrubForLog("x <SessionToken>SEC4</sessiontoken> y").contains("SEC4"))
+        assertEquals("a<Policy><redacted></Policy>b<Signature><redacted>", BundleUploader.scrubForLog("a<Policy></Policy>b<Signature>SEC5"))
+    }
+
+    @Test fun `comment opener followed by gt is not a complete comment`() {
+        for (c in listOf(
+            "<Error><Token><!--> </Token> SECRET1 --></Token><Code>X</Code></Error>",
+            "<Error><SessionToken><!---> </SessionToken> SECRET2 --></SessionToken></Error>",
+            "<Error><Signature><!--> </Signature> SECRET3 --></Signature></Error>",
+        )) assertFalse(BundleUploader.scrubForLog(c).contains("SECRET"), c)
+    }
+
+    @Test fun `window edges memo distance and attributes on Policy are pinned`() {
+        assertFalse(BundleUploader.scrubForLog("x<Token>a<![CDATA[<TOKEN>SECRET1</token>]]>").contains("SECRET1"))
+        // "SECRET" + 4090 chars is exactly the 4096-char window: the close tag must still be found at its edge.
+        assertFalse(BundleUploader.scrubForLog("x <Token>SECRET" + "a".repeat(4090) + "</Token>").contains("SECRET"))
+        assertFalse(BundleUploader.scrubForLog("x <Token>" + "a".repeat(93) + "x <Token>SECRET3" + "b".repeat(4040) + "</Token>").contains("SECRET3"))
+        assertFalse(BundleUploader.scrubForLog("x <Token>SECRET4" + "a".repeat(2000) + "</Token>").contains("SECRET4"))
+        assertFalse(BundleUploader.scrubForLog("<Policy version=\"SECRET5\">p</Policy>").contains("SECRET5"))
+        assertEquals("<Error><Token><Code>", BundleUploader.scrubForLog("<Error><Token><Code>"))
+    }
+
+    @Test fun `gt inside a quoted attribute value does not end the tag`() {
+        for (c in listOf("<Error password=\"a>SECRET1\"><Code>X</Code></Error>", "<Item token='x>SECRET2'>v</Item>", "<Token a=\"b>c\">SECRET3</Token>", "<Item token=\"SEC>RET4\" other=\"1\">")) {
+            assertFalse(BundleUploader.scrubForLog(c).contains("SECRET") || BundleUploader.scrubForLog(c).contains("RET4"), c)
+        }
+        assertEquals("<Error a=\"x>y\"><Code>X</Code></Error>", BundleUploader.scrubForLog("<Error a=\"x>y\"><Code>X</Code></Error>"))
+        assertEquals("<a x=\"foo>bar", BundleUploader.scrubForLog("<a x=\"foo>bar"))
+        assertFalse(BundleUploader.scrubForLog("<Item note=O'Brien password=\"hunter2\">Don't</Item>").contains("hunter2"))
+        assertFalse(BundleUploader.scrubForLog("<Item note=O'Brien api_key=\"hunter3\">Don't</Item>").contains("hunter3"))
+        for ((c, secret) in listOf(
+            "<Item api_key=\"K1\" a='q password=\"S2\">y' b=\"c\">" to "S2",
+            "<Error><Item token=\"T1\" note='secret=\"S4\" >'/></Error>" to "S4",
+            "<Item token=\"T1\">body</Item>" to "T1",
+            "<Token a=\"SECRETPART>x\">v</Token>" to "SECRETPART",
+            "<Token password=\"LEFT>RIGHT\">v</Token>" to "LEFT",
+        )) {
+            assertFalse(BundleUploader.scrubForLog(c).contains(secret), c)
+        }
+    }
+
+    @Test fun `comment terminator search starts after the opener and the exact-case close tag wins`() {
+        assertFalse(BundleUploader.scrubForLog("<Error><Token><!--> <x>M6SECRET</x> --><Code>X</Code></Error>").contains("M6SECRET"))
+        assertFalse(BundleUploader.scrubForLog("<Token>a</TOKEN>b<![CDATA[</Token>]]>M19SECRET</Token>").contains("M19SECRET"))
+    }
+
+    @Test fun `legacy S3 names keep redacting and the changed output bytes are pinned`() {
+        assertEquals("List<Signature><redacted>", BundleUploader.scrubForLog("List<Signature>abc"))
+        assertEquals("<Signature><redacted></SIGNATURE>", BundleUploader.scrubForLog("<Signature>abc</SIGNATURE>"))
+        assertEquals("<Error><Policy><redacted></Policy></Error>", BundleUploader.scrubForLog("<Error><Policy>p</Policy></Error>"))
+    }
+
+    @Test fun `over-redaction of credential-looking but benign names is intended`() {
+        for (tag in listOf("NextContinuationToken", "SSEKMSKeyId", "SignatureVersion", "Tokenizer", "CookieJar", "partition_key")) {
+            val out = BundleUploader.scrubForLog("<$tag>v</$tag>")
+            assertEquals("<$tag><redacted></$tag>", out)
+        }
+        val ns = "<Error xmlns=\"u\"><Code>X</Code></Error>"
+        assertEquals(ns, BundleUploader.scrubForLog(ns))
+    }
+
+    @Test fun `no input redacted by the old fixed-tag regex leaks now`() {
+        val old = Regex("<(StringToSign|StringToSignBytes|SignatureProvided|AWSAccessKeyId|CanonicalRequest|CanonicalRequestBytes|Signature|Credential|Policy)>[^<]*(?:</\\1>)?")
+        val frags = listOf("<Signature>", "</Signature>", "<Policy>", "</Policy>", "<StringToSign>", "</StringToSign>", "<Credential>", "<AWSAccessKeyId>",
+            "<CanonicalRequest>", "</CanonicalRequest>", "<![CDATA[", "]]>", "<!--", "-->", "<Code>", "</Code>", "\n", " ", "x", "<", ">", "<Token>", "</Token>",
+            "<SIGNATURE>", "</signature>", "<TOKEN>", "</token>", "<b/>")
+        val rnd = java.util.Random(131)
+        repeat(4000) {
+            var k = 0
+            val input = buildString {
+                repeat(1 + rnd.nextInt(14)) {
+                    when (val r = rnd.nextInt(frags.size + 2)) {
+                        frags.size -> append("S#").append(k++).append("#")
+                        frags.size + 1 -> append("f".repeat(1500 + rnd.nextInt(3000)))
+                        else -> append(frags[r])
+                    }
+                }
+            }
+            val before = old.replace(input, "<\$1><redacted></\$1>")
+            // redactSecretXml directly: scrubForLog's 4096-char cap would make secrets past it trivially absent.
+            val after = BundleUploader.redactSecretXml(input)
+            for (n in 0 until k) if (!before.contains("S#$n#")) assertFalse(after.contains("S#$n#"), "S#$n# leaks: ${input.take(300)}")
+        }
+    }
+
+    @Test(timeout = 120_000) fun `XML tag scrub is bounded-time on adversarial input`() {
+        for (nasty in listOf("<" + "a".repeat(1_000_000), "<a ".repeat(300_000), "<Token" + "-".repeat(1_000_000), "<a>".repeat(300_000),
+            "<Token>".repeat(150_000), "<Token>x".repeat(150_000), "<a token=\"".repeat(100_000), "<a x=\"y\" ".repeat(80_000), "<Token a=\"".repeat(100_000), "<Token a='".repeat(100_000),
+            buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><![CDATA[") },
+            buildString { for (i in 0 until 40_000) append("<Token").append(i).append("><!--") },
+            buildString { for (i in 0 until 15_000) append("<Token").append(i).append(">").append("<".repeat(50)) },
+            "<a " + "key_".repeat(125) + ">", ("<a " + "key_".repeat(125) + ">").repeat(2000), ("<a " + "b".repeat(500) + ">").repeat(2000),
+            ("<token " + "b".repeat(500) + ">").repeat(2000), ("<_key>" + "<".repeat(1000)).repeat(1000))) {
+            val start = System.nanoTime()
+            BundleUploader.scrubForLog(nasty)
+            assertTrue((System.nanoTime() - start) / 1_000_000 < 10_000, "slow on ${nasty.take(20)}")
+        }
     }
 }

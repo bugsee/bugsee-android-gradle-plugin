@@ -168,6 +168,65 @@ class NativeMergedLibsE2ETest {
         }
     }
 
+    @Test
+    fun `a debuggable variant uploads nothing by default`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            val dry = fx.buildTasks(
+                listOf(":app:assembleDebug", "--dry-run"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli",
+            )
+            assertFalse("no native upload task in the debug graph", dry.output.contains("uploadBugseeDebugNative"))
+            fx.buildTasks(
+                listOf(":app:assembleDebug"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli",
+            )
+            assertTrue(server.symbolPosts.isEmpty())
+            val releaseDry = fx.buildTasks(
+                listOf(":app:assembleRelease", "--dry-run"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli",
+            )
+            assertTrue(releaseDry.output.contains("uploadBugseeReleaseNative"))
+        }
+    }
+
+    @Test
+    fun `ndk allBuildTypes opts a debuggable variant in`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            val dry = fx.buildTasks(
+                listOf(":app:assembleDebug", "--dry-run"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli", "-PbugseeE2eAllBuildTypes=true",
+            )
+            assertTrue(dry.output.contains("uploadBugseeDebugNative"))
+            fx.buildTasks(
+                listOf(":app:assembleDebug"), null,
+                "-PbugseeE2eEndpoint=${server.url}", "-PbugseeE2eCli=$cli", "-PbugseeE2eAllBuildTypes=true",
+            )
+            assertEquals(1, server.symbolPosts.size)
+        }
+    }
+
+    @Test
+    fun `an unchanged second build skips the CLI, a changed library and --force do not`() {
+        MockSymbolServer().use { server ->
+            val fx = fixture()
+            assemble(fx, server)
+            assertEquals(1, server.symbolPosts.size)
+
+            assemble(fx, server)
+            assertEquals("unchanged libraries: no CLI run, no request", 1, server.symbolPosts.size)
+
+            val source = fx.projectDir.resolve("app/src/main/cpp/native.c")
+            source.appendText("\nint bugsee_fixture_extra(void) { return 42; }\n")
+            assemble(fx, server)
+            assertEquals("a changed library invalidates the marker", 2, server.symbolPosts.size)
+
+            assemble(fx, server, extra = arrayOf("-PbugseeE2eForce=true"))
+            assertEquals("force bypasses it", 3, server.symbolPosts.size)
+        }
+    }
+
     private fun shim(exitCode: Int): File = temp.newFile("bugsee-cli-shim-$exitCode").apply {
         // Answers `exitCode` for a directory input and delegates everything else to the real CLI.
         writeText(
@@ -200,6 +259,72 @@ class NativeMergedLibsE2ETest {
     fun `falls back to AGP symbols when the CLI cannot take the directory (exit 11)`() =
         assertFallsBackToZip(11)
 
+    /** A CLI that answers `exitCode` to every invocation, for any input. */
+    private fun constantShim(exitCode: Int): File = temp.newFile("bugsee-cli-const-$exitCode").apply {
+        writeText("#!/bin/sh\necho 'shim: nothing to upload' >&2\nexit $exitCode\n")
+        setExecutable(true)
+    }
+
+    private fun assembleFailingOnUploadError(cliPath: String, vararg extra: String): Pair<Boolean, String> =
+        MockSymbolServer().use { server ->
+            fixture().runTasksAllowingFailure(
+                listOf(":app:assembleRelease"),
+                "-PbugseeE2eEndpoint=${server.url}",
+                "-PbugseeE2eCli=$cliPath",
+                "-PbugseeE2eFailOnUploadError=true",
+                *extra,
+            )
+        }
+
+    @Test
+    fun `failOnUploadError does not fail on directory exit 10 when there is no AGP source`() {
+        // debugSymbolLevel NONE: AGP produces no symbols, so exit 10 on the directory is the whole story.
+        val (ok, out) = assembleFailingOnUploadError(constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
+        assertTrue("exit 10 is 'nothing to upload', not a failure:\n$out", ok)
+        assertTrue("the directory upload ran:\n$out", out.contains("Uploading unstripped native libraries"))
+        assertTrue("the CLI answered 10:\n$out", out.contains("(bugsee-cli exit 10)"))
+        assertTrue("no AGP source exists:\n$out", out.contains("no native symbols found"))
+        assertFalse(out.contains("Native symbols file found"))
+        assertFalse(out.contains("Intermediate symbols folder found"))
+    }
+
+    @Test
+    fun `failOnUploadError fails on directory exit 11 when there is no AGP source`() {
+        val (ok, out) = assembleFailingOnUploadError(constantShim(11).absolutePath, "-PbugseeE2eSymbolLevel=NONE")
+        assertTrue("a failed directory upload with nothing else uploaded must fail:\n$out", !ok)
+        assertTrue("the CLI answered 11:\n$out", out.contains("(bugsee-cli exit 11)"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native libraries for variant release was not uploaded"),
+        )
+    }
+
+    @Test
+    fun `failOnUploadError still fails on exit 10 from the AGP zip (missing input, not an empty archive)`() {
+        val (ok, out) = assembleFailingOnUploadError(
+            constantShim(10).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
+        )
+        assertTrue("zip exit 10 is a real failure:\n$out", !ok)
+        assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native symbols for variant release was not uploaded"),
+        )
+    }
+
+    @Test
+    fun `failOnUploadError fails on a substantive CLI failure for the AGP zip`() {
+        val (ok, out) = assembleFailingOnUploadError(
+            constantShim(21).absolutePath, "-PbugseeE2eSymbolLevel=FULL", "-PbugseeE2eUseMerged=false",
+        )
+        assertTrue("a real CLI failure must fail the build:\n$out", !ok)
+        assertTrue("the zip path ran:\n$out", out.contains("Native symbols file found"))
+        assertTrue(
+            "the native task failed:\n$out",
+            out.contains("the native symbols for variant release was not uploaded"),
+        )
+    }
+
     @Test
     fun `a substantive CLI failure on the directory does not retry through the zip`() {
         MockSymbolServer().use { server ->
@@ -227,7 +352,7 @@ class NativeMergedLibsE2ETest {
     }
 
     @Test
-    fun `works with the configuration cache and re-uploads on a cache hit`() {
+    fun `works with the configuration cache and skips the upload on a cache hit`() {
         MockSymbolServer().use { server ->
             val fx = fixture()
             val first = assemble(fx, server, extra = arrayOf("--configuration-cache"))
@@ -235,7 +360,7 @@ class NativeMergedLibsE2ETest {
             val second = assemble(fx, server, extra = arrayOf("--configuration-cache"))
             assertTrue(second.output.contains("Reusing configuration cache"))
             assertFalse(second.output.contains("configuration cache problems"))
-            assertEquals("each build registers the library; the server dedups", 2, server.symbolPosts.size)
+            assertEquals("the second build finds the libraries unchanged and skips the CLI", 1, server.symbolPosts.size)
         }
     }
 }

@@ -5,7 +5,18 @@ import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.URI
+import java.nio.channels.ClosedByInterruptException
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.FileLockInterruptionException
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 import java.security.MessageDigest
 
 /**
@@ -64,6 +75,10 @@ internal object CliBinaryResolver {
      * earlier release uploaded. (Needs the appserver support, bugsee-appserver#65-#67;
      * against an older server the CLI behaves as 0.8.0.)
      *
+     * `0.9.0` is the current release. The plugin uses none of its new surface
+     * (Unity portable-pdb upload); it ships for the Windows `update` cleanup and
+     * the panic exit-code mapping (1 before any request, 50 after one: no fallback).
+     *
      * This is the version the plugin downloads. Keeping the CLI current is
      * the CLI's own job: once a binary is on disk, the plugin invokes
      * `bugsee-cli update --max-age 12h`, which discovers the newest
@@ -71,7 +86,7 @@ internal object CliBinaryResolver {
      * verifies, and self-replaces in place — all throttled and best-effort.
      * The plugin no longer re-implements any version discovery.
      */
-    const val DEFAULT_VERSION: String = "0.8.1"
+    const val DEFAULT_VERSION: String = "0.9.0"
 
     /** Lowest CLI whose `debug-files upload --type elf` accepts a directory of libraries. */
     const val ELF_DIRECTORY_MIN_VERSION: String = "0.8.0"
@@ -142,6 +157,10 @@ internal object CliBinaryResolver {
      * Returns an executable `bugsee-cli` binary, or `null` if none could
      * be obtained. Side effect: may write into [gradleUserHome] under
      * `caches/bugsee-cli/`.
+     *
+     * Build cancellation is never downgraded to `null`: an interrupt (lock
+     * wait, download, or self-update exec) is rethrown as
+     * [InterruptedException] with the thread's interrupt flag set.
      */
     fun resolve(
         cliVersion: String?,
@@ -208,21 +227,34 @@ internal object CliBinaryResolver {
             // under the same per-triple lock the download path uses —
             // otherwise two parallel tasks (or builds) can self-replace the
             // same file while a third execs it. See [withTripleLock].
-            return withTripleLock(lockFile) {
+            return withTripleLock(lockFile, logger) {
                 maybeSelfUpdate(cachedBinary, autoUpdate, execOps, logger, debug)
             }
         }
 
         return try {
-            withTripleLock(lockFile) {
+            withTripleLock(lockFile, logger) {
                 val binary = downloadAndExtract(
                     version, triple, cacheRoot, binaryName, logger, debug,
-                ) { execOps.exec(it) }
-                maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+                    exec = { execOps.exec(it) },
+                )
+                val resolved = maybeSelfUpdate(binary, autoUpdate, execOps, logger, debug)
+                // Cancellation that landed during the (non-interruptible)
+                // download must not hand a binary to a cancelled thread.
+                if (Thread.currentThread().isInterrupted) {
+                    throw InterruptedException("bugsee-cli resolution cancelled")
+                }
+                resolved
             }
+        } catch (e: InterruptedException) {
+            // Build cancellation is not a download failure: do not fall back
+            // to the Kotlin uploader on a cancelled thread.
+            Thread.currentThread().interrupt()
+            throw e
         } catch (e: Throwable) {
+            if (isInterrupt(e)) throw cancelled(e)
             logger.warn(
-                "Bugsee: failed to download bugsee-cli v$version for $triple: ${e.message}; " +
+                "Bugsee: failed to download bugsee-cli v$version for $triple: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
                     "using the Kotlin uploader.",
             )
             null
@@ -242,33 +274,136 @@ internal object CliBinaryResolver {
     }
 
     /**
+     * In-JVM mutexes keyed by canonical lock path. `FileChannel.lock` is a
+     * cross-PROCESS lock: a second lock on the same file from the same JVM
+     * throws [OverlappingFileLockException] instead of blocking, so tasks
+     * sharing one Gradle daemon must be serialized here first.
+     */
+    private val jvmLocks = java.util.concurrent.ConcurrentHashMap<String, ReentrantLock>()
+
+    /** Poll interval while another holder in this JVM owns the file lock. */
+    private const val OVERLAP_RETRY_MS = 50L
+
+    /** Log once if the file lock is still held by someone else after this long. */
+    private const val LOCK_WAIT_LOG_MS = 30_000L
+
+    /**
      * Runs [body] while holding the exclusive lock on [lockFile]. The lock
      * serializes all cache mutation for one triple (download + self-replace)
      * across parallel tasks in one JVM and across separate builds sharing
      * the per-user cache root. A second entrant blocks here, then re-checks
      * the cache inside [body].
      *
-     * Lock acquisition is itself best-effort: if the lock file can't be
-     * opened/locked (e.g. a read-only or exotic filesystem where
-     * `FileChannel.lock` is unsupported), [body] still runs UNLOCKED rather
-     * than failing resolution — an un-serialized self-update is degraded but
+     * Two layers: an in-JVM mutex keyed by the canonical lock path (so
+     * parallel tasks in one daemon queue up), then the cross-process
+     * `FileChannel` lock. [OverlappingFileLockException] means another holder
+     * in this JVM (e.g. a copy of this class from a different plugin
+     * classloader) owns the file lock — that is "wait and retry", never "run
+     * unlocked".
+     *
+     * Acquiring the FILE lock is best-effort: if it can't be opened/locked
+     * for any other reason (e.g. a read-only or exotic filesystem where
+     * `FileChannel.lock` is unsupported), [body] still runs, protected by the
+     * in-JVM mutex only — cross-process serialization is degraded but
      * acceptable, and the CLI's own `--max-age` throttle still collapses the
      * redundant work.
      */
-    private fun <T> withTripleLock(lockFile: File, body: () -> T): T {
+    internal fun <T> withTripleLock(lockFile: File, logger: Logger? = null, body: () -> T): T {
         lockFile.parentFile?.mkdirs()
-        val raf = try {
-            java.io.RandomAccessFile(lockFile, "rw")
-        } catch (e: Throwable) {
-            return body()
+        val key = try {
+            lockFile.canonicalPath
+        } catch (e: IOException) {
+            lockFile.absolutePath
         }
-        raf.use {
-            val lock = try {
-                it.channel.lock()
+        val jvmLock = jvmLocks.computeIfAbsent(key) { ReentrantLock() }
+        // Re-entrant call on a thread that already holds the lock: the file
+        // lock is held too, and a second FileChannel lock would only ever
+        // throw OverlappingFileLockException.
+        if (jvmLock.isHeldByCurrentThread) return body()
+        // Interruptible so queued tasks respond to build cancellation.
+        try {
+            jvmLock.lockInterruptibly()
+        } catch (e: InterruptedException) {
+            throw interrupted(e)
+        }
+        try {
+            val raf = try {
+                RandomAccessFile(lockFile, "rw")
             } catch (e: Throwable) {
                 return body()
             }
-            lock.use { return body() }
+            raf.use {
+                val lock = acquireFileLock(it.channel, logger) ?: return body()
+                lock.use { return body() }
+            }
+        } finally {
+            jvmLock.unlock()
+        }
+    }
+
+    /**
+     * Takes the exclusive file lock, or returns null if locking is
+     * unsupported. An interrupt while waiting is NOT "unsupported": it is
+     * surfaced as [InterruptedException] (flag restored) so the body never
+     * runs without a lock another process may still hold.
+     */
+    private fun acquireFileLock(channel: FileChannel, logger: Logger?): FileLock? {
+        val started = System.nanoTime()
+        var logged = false
+        while (true) {
+            try {
+                return channel.lock()
+            } catch (e: OverlappingFileLockException) {
+                if (!logged && (System.nanoTime() - started) / 1_000_000 >= LOCK_WAIT_LOG_MS) {
+                    logged = true
+                    logger?.warn(
+                        "Bugsee: still waiting for the bugsee-cli cache lock held by another " +
+                            "plugin copy or build in this JVM.",
+                    )
+                }
+                try {
+                    Thread.sleep(OVERLAP_RETRY_MS)
+                } catch (ie: InterruptedException) {
+                    throw interrupted(ie)
+                }
+            } catch (e: FileLockInterruptionException) {
+                throw interrupted(e)
+            } catch (e: ClosedByInterruptException) {
+                throw interrupted(e)
+            } catch (e: Throwable) {
+                return null
+            }
+        }
+    }
+
+    /**
+     * True when [e] is a build-cancellation interrupt: an [InterruptedException]
+     * anywhere in the cause chain, or the thread's interrupt flag set. Gradle's
+     * `exec` kills the process and rethrows an interrupt as an unchecked
+     * wrapper (flag restored), so a bare `catch (InterruptedException)` never
+     * sees it.
+     */
+    private fun isInterrupt(e: Throwable): Boolean {
+        if (Thread.currentThread().isInterrupted) return true
+        var t: Throwable? = e
+        var depth = 0
+        while (t != null && depth++ < 16) {
+            if (t is InterruptedException) return true
+            t = t.cause
+        }
+        return false
+    }
+
+    private fun cancelled(e: Throwable): InterruptedException {
+        Thread.currentThread().interrupt()
+        return e as? InterruptedException
+            ?: InterruptedException("bugsee-cli resolution cancelled").also { it.initCause(e) }
+    }
+
+    private fun interrupted(cause: Throwable): InterruptedException {
+        Thread.currentThread().interrupt()
+        return InterruptedException("interrupted while waiting for the bugsee-cli cache lock").also {
+            it.initCause(cause)
         }
     }
 
@@ -288,7 +423,9 @@ internal object CliBinaryResolver {
      * best-effort / self-replace semantics, the plugin just invokes it. The
      * call is wrapped so it can NEVER fail resolution: a thrown exec error
      * (e.g. the binary went away mid-build) is swallowed at DEBUG and the
-     * original [binary] is still returned.
+     * original [binary] is still returned. A build-cancellation interrupt
+     * (bare or wrapped by Gradle's exec) is NOT swallowed: it propagates as
+     * [InterruptedException] with the thread's flag restored.
      */
     private fun maybeSelfUpdate(
         binary: File,
@@ -302,16 +439,24 @@ internal object CliBinaryResolver {
             if (debug) {
                 logger.warn("Bugsee: bugsee-cli self-update check (${binary.absolutePath} update --max-age 12h)")
             }
-            execOps.exec { spec ->
+            // Captured (not inherited) so the CLI's diagnostics are scrubbed like every other CLI run (#109).
+            val stdout = java.io.ByteArrayOutputStream()
+            val stderr = java.io.ByteArrayOutputStream()
+            val result = execOps.exec { spec ->
                 spec.executable = binary.absolutePath
                 spec.args = listOf("update", "--max-age", "12h")
+                spec.environment(proxyEnvForCli())
+                spec.standardOutput = stdout
+                spec.errorOutput = stderr
                 spec.isIgnoreExitValue = true
             }
+            CliUploader.forwardCliOutput(logger, stdout, stderr, result.exitValue, appToken = null, quietStdout = true)
         } catch (e: Throwable) {
+            if (isInterrupt(e)) throw cancelled(e)
             // Self-update is strictly best-effort — never let it break
             // resolution. DEBUG only so quiet/offline builds stay quiet.
             if (debug) {
-                logger.warn("Bugsee: bugsee-cli self-update check failed: ${e.message}")
+                logger.warn("Bugsee: bugsee-cli self-update check failed: ${BundleUploader.scrubForLog(e.message ?: "")}")
             }
         }
         return binary
@@ -363,7 +508,7 @@ internal object CliBinaryResolver {
      * subsequent self-update self-replace of the same binary. [exec] is the
      * lock-free shim used to run `tar`.
      */
-    private fun downloadAndExtract(
+    internal fun downloadAndExtract(
         version: String,
         triple: String,
         cacheRoot: File,
@@ -371,6 +516,8 @@ internal object CliBinaryResolver {
         logger: Logger,
         debug: Boolean,
         exec: (org.gradle.api.Action<in org.gradle.process.ExecSpec>) -> org.gradle.process.ExecResult,
+        fetchFile: (url: String, dest: File) -> Unit = ::downloadToFile,
+        fetchString: (url: String) -> String = ::downloadAsString,
     ): File {
         cacheRoot.mkdirs()
 
@@ -382,53 +529,84 @@ internal object CliBinaryResolver {
             return cachedBinary
         }
 
+        // Leftovers of a previous run that was killed mid-download/extract.
+        // Safe to remove: we hold the per-triple lock.
+        cacheRoot.listFiles { f -> f.name.startsWith(TMP_PREFIX) }?.forEach { it.deleteRecursively() }
+
         val artifactUrl = artifactUrl(version, triple)
         val sha256Url = "$artifactUrl.sha256"
         val tarballName = artifactUrl.substringAfterLast('/')
-        val tarballFile = File(cacheRoot, tarballName)
+        // Download and extract in a private temp dir, then move the result
+        // into place: a failed or killed tar can never leave a (partial)
+        // executable at `cachedBinary`, which both cache checks would accept
+        // forever.
+        val tmpDir = File(cacheRoot, TMP_PREFIX + UUID.randomUUID())
+        tmpDir.mkdirs()
+        try {
+            val tarballFile = File(tmpDir, tarballName)
 
-        logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
-        downloadToFile(artifactUrl, tarballFile)
+            logger.warn("Bugsee: downloading bugsee-cli v$version for $triple from $artifactUrl")
+            fetchFile(artifactUrl, tarballFile)
 
-        val expectedSha = parseSha256Sidecar(downloadAsString(sha256Url))
-        val actualSha = sha256Hex(tarballFile)
-        if (!expectedSha.equals(actualSha, ignoreCase = true)) {
-            tarballFile.delete()
-            throw IOException(
-                "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
-            )
+            val expectedSha = parseSha256Sidecar(fetchString(sha256Url))
+            val actualSha = sha256Hex(tarballFile)
+            if (!expectedSha.equals(actualSha, ignoreCase = true)) {
+                throw IOException(
+                    "SHA-256 mismatch for $tarballName: expected $expectedSha, got $actualSha",
+                )
+            }
+
+            // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
+            // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
+            // (`bugsee-cli-<triple>/...`) so the binary lands directly in the temp dir.
+            val extractDir = File(tmpDir, "extract")
+            extractDir.mkdirs()
+            val extractResult = exec { spec ->
+                spec.executable = "tar"
+                spec.args = listOf(
+                    "-xf",
+                    tarballFile.absolutePath,
+                    "-C",
+                    extractDir.absolutePath,
+                    "--strip-components=1",
+                )
+                spec.isIgnoreExitValue = true
+            }
+            if (extractResult.exitValue != 0) {
+                throw IOException(
+                    "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
+                )
+            }
+
+            val extractedBinary = File(extractDir, binaryName)
+            if (!extractedBinary.isFile) {
+                throw IOException(
+                    "extraction completed but $binaryName not found in the archive",
+                )
+            }
+            extractedBinary.setExecutable(true)
+            // Companion files first, the binary LAST: the cache checks key on it.
+            extractDir.listFiles()?.filter { it != extractedBinary }?.forEach {
+                moveIntoPlace(it, File(cacheRoot, it.name))
+            }
+            moveIntoPlace(extractedBinary, cachedBinary)
+        } finally {
+            tmpDir.deleteRecursively()
         }
-
-        // Extract via system `tar` — handles tar.xz on macOS/Linux and zip on
-        // Windows 10+ (libarchive-based bsdtar). Strip the wrapper directory
-        // (`bugsee-cli-<triple>/...`) so the binary lands directly in cacheRoot.
-        val extractResult = exec { spec ->
-            spec.executable = "tar"
-            spec.args = listOf(
-                "-xf",
-                tarballFile.absolutePath,
-                "-C",
-                cacheRoot.absolutePath,
-                "--strip-components=1",
-            )
-            spec.isIgnoreExitValue = true
-        }
-        if (extractResult.exitValue != 0) {
-            throw IOException(
-                "tar -xf $tarballName failed with exit code ${extractResult.exitValue}",
-            )
-        }
-
-        tarballFile.delete()
-
-        if (!cachedBinary.isFile) {
-            throw IOException(
-                "extraction completed but $binaryName not found in $cacheRoot",
-            )
-        }
-        cachedBinary.setExecutable(true)
         logger.warn("Bugsee: bugsee-cli v$version installed at ${cachedBinary.absolutePath}")
         return cachedBinary
+    }
+
+    /** Prefix of the per-attempt extraction directory under the cache root. */
+    private const val TMP_PREFIX = ".tmp-"
+
+    private fun moveIntoPlace(src: File, dest: File) {
+        if (dest.isDirectory) dest.deleteRecursively()
+        try {
+            Files.move(src.toPath(), dest.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(src.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     /**
@@ -475,7 +653,18 @@ internal object CliBinaryResolver {
         conn.instanceFollowRedirects = true
         conn.requestMethod = "GET"
         if (conn.responseCode !in 200..299) {
-            val body = conn.errorStream?.bufferedReader()?.readText()?.take(200).orEmpty()
+            // Read a bounded prefix only: an error page can be arbitrarily large.
+            val raw = conn.errorStream?.bufferedReader()?.use { r ->
+                val buf = CharArray(4096)
+                var len = 0
+                while (len < buf.size) {
+                    val n = r.read(buf, len, buf.size - len)
+                    if (n < 0) break
+                    len += n
+                }
+                String(buf, 0, len)
+            }
+            val body = BundleUploader.redactBodyForLog(raw)
             throw IOException("GET $url returned ${conn.responseCode}: $body")
         }
         return conn

@@ -41,7 +41,7 @@ internal object BundleUploader {
      * access to a project's builds so they must not land verbatim in
      * CI logs / exception messages / bug reports.
      */
-    private fun maskAppToken(token: String): String =
+    internal fun maskAppToken(token: String): String =
         if (token.length <= 8) "****" else "${token.take(4)}…${token.takeLast(4)}"
 
     /**
@@ -52,9 +52,312 @@ internal object BundleUploader {
      * exposing the 7-day-valid PUT credential. Returns the input
      * verbatim when there's no `?` separator.
      */
-    private fun redactPresignedUrl(url: String): String {
+    internal fun redactPresignedUrl(url: String): String {
         val q = url.indexOf('?')
         return if (q >= 0) url.substring(0, q) + "?…<redacted>" else url
+    }
+
+    private const val MAX_LOGGED_BODY_CHARS = 500
+    private const val MAX_SCRUBBED_TEXT_CHARS = 4096
+    private const val MAX_PARSED_BODY_CHARS = 65_536
+    private const val MAX_PLAIN_TEXT_CHARS = 120
+
+    // `?` is excluded from the character classes so a run of `?` cannot be rescanned per position (O(n^2)).
+    private val QUERY_WITH_PARAMS = Regex("\\?[^\\s\"'<>?]*=[^\\s\"'<>?]*")
+    internal const val SENSITIVE_KEY_PATTERN = "signature|secret|token|credential|authoriz|password|x-amz|key|stringtosign|canonicalrequest|policy"
+    private val SENSITIVE_JSON_KEY = Regex(SENSITIVE_KEY_PATTERN, RegexOption.IGNORE_CASE)
+    private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
+    private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
+    private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
+    // Opening (or self-closing) tag candidates. Quote-aware: a `>` inside a quoted attribute value does not end the tag.
+    // Every alternative is possessive and none can cross a `<`, so a start position scans at most up to the next `<`
+    // (linear overall); an unmatched quote is taken literally.
+    private val XML_OPEN_TAG = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s(?:[^<>\"']++|\"[^\"<]*+\"|'[^'<]*+'|[\"'])*+)?>")
+
+    // Tag matcher of the strict baseline scan (not quote-aware, attributes bounded): kept as it was so the baseline
+    // keeps redacting everything it ever redacted.
+    private val XML_OPEN_TAG_STRICT = Regex("<([A-Za-z_][\\w.:\\-]{0,79})(\\s[^<>]{0,512})?>")
+    // Deliberately narrower than SENSITIVE_KEY_PATTERN (JSON keys): no bare `key`, `x-amz` or `policy` (exact-name
+    // only, see isSecretXmlTag), because element names like <Key>, <KeyCount> or <PolicyName> are benign S3 fields.
+    private val SECRET_NAME_PATTERN =
+        "token|secret|credential|signature|password|passwd|authoriz|stringtosign|canonicalrequest|argumentvalue" +
+            "|passphrase|cookie|accesskey|accountkey|sharedkey|masterkey|storagekey|apikey|privatekey|signingkey|sessionkey|encryptionkey|authkey|[_.\\-]key|key[_.\\-]?id"
+    private val SECRET_XML_TAG_NAME = Regex(SECRET_NAME_PATTERN, RegexOption.IGNORE_CASE)
+
+    // Element names the scrubber has always redacted (S3 error bodies); these keep the original "to the next
+    // tag" behaviour wherever they appear. Other credential-named elements need an XML-looking position.
+    private val LEGACY_SECRET_XML_NAMES = setOf(
+        "stringtosign", "stringtosignbytes", "signatureprovided", "awsaccesskeyid", "canonicalrequest",
+        "canonicalrequestbytes", "signature", "credential", "policy",
+    )
+
+    // S3's session-token echo (`<Token-0>`): the numbered form is specific enough to redact wherever it appears.
+    private val NUMBERED_TOKEN_TAG = Regex("(?i)token-\\d{1,3}")
+
+    // Possessive, anchored name so each attribute is tried once per tag (no O(L^2) rescans).
+    private val XML_ATTR = Regex("(?<![\\w.:\\-])([\\w.:\\-]{1,80}+)(\\s*=\\s*)(\\\\?\"[^\"]*\"|'[^']*')")
+    private const val MAX_XML_ELEMENT_TEXT = 4096
+
+    private fun localName(name: String) = name.substringAfterLast(':').lowercase()
+
+    private const val NOT_FOUND = -1
+    private const val NOT_FOUND_SKIPPED = -2
+
+    // One bounded window scan (never past [limit]; an unbounded indexOf per opening tag would be quadratic).
+    // With [skipSections], a CDATA section or comment that terminates within the window is jumped over, so a close
+    // tag quoted inside it does not end the element; an unterminated one is scanned as plain text.
+    private class CloseScan(var exact: Int = -1, var caseInsensitive: Int = -1, var skipped: Boolean = false, var unterminated: Boolean = false)
+
+    private fun scanForClose(text: String, closeTag: String, from: Int, limit: Int, skipSections: Boolean): CloseScan {
+        val r = CloseScan()
+        var i = text.indexOf('<', from)
+        while (i in 0..limit) {
+            val term = if (!skipSections) null else when {
+                text.startsWith("<![CDATA[", i) -> "]]>"
+                text.startsWith("<!--", i) -> "-->"
+                else -> null
+            }
+            if (term != null) {
+                // The terminator search starts after the opener: `<!-->` and `<!--->` do not close a comment.
+                var j = i + (if (term == "-->") 4 else 9)
+                while (j <= limit && !text.startsWith(term, j)) j++
+                if (j > limit) {
+                    // A section that does not end in the window: whatever follows may be quoted text, so no later
+                    // close tag counts (the unclosed-element rule covers the rest).
+                    r.unterminated = true
+                    return r
+                }
+                r.skipped = true
+                i = text.indexOf('<', j + term.length)
+                continue
+            }
+            if (text.startsWith(closeTag, i)) { r.exact = i; return r }
+            if (r.caseInsensitive < 0 && text.regionMatches(i, closeTag, 0, closeTag.length, ignoreCase = true)) r.caseInsensitive = i
+            i = text.indexOf('<', i + 1)
+        }
+        return r
+    }
+
+    // The strict baseline: first exact-case close tag in the window, sections not skipped.
+    private fun findStrictClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
+        val r = scanForClose(text, closeTag, from, limit, skipSections = false)
+        return CloseHit(if (r.exact >= 0) r.exact else NOT_FOUND)
+    }
+
+    private class CloseHit(val pos: Int)
+
+    // Refined close-tag choice: the first exact-case close tag outside CDATA/comments, else the first
+    // differently-cased one outside them. A close tag quoted inside a section never counts (the strict scan, unioned
+    // by the caller, still covers the baseline). Returns [NOT_FOUND] when the window has none and nothing was skipped
+    // or cut off (safe to memoise), [NOT_FOUND_SKIPPED] otherwise: the caller's scan loop does not skip sections,
+    // so a same-name tag inside one must search for itself.
+    private fun findClosingTag(text: String, closeTag: String, from: Int, limit: Int): CloseHit {
+        val r = scanForClose(text, closeTag, from, limit, skipSections = true)
+        return when {
+            r.exact >= 0 -> CloseHit(r.exact)
+            r.caseInsensitive >= 0 -> CloseHit(r.caseInsensitive)
+            else -> CloseHit(if (r.skipped || r.unterminated) NOT_FOUND_SKIPPED else NOT_FOUND)
+        }
+    }
+
+    // True when the tag sits where an XML sibling would: start of text or right after a '>' (whitespace skipped,
+    // including the escaped `\n`/`\r`/`\t` of a Debug- or JSON-rendered body).
+    private fun atXmlBoundary(text: String, tagStart: Int): Boolean {
+        var i = tagStart - 1
+        while (i >= 0) {
+            val c = text[i]
+            if (c.isWhitespace()) i--
+            else if (i >= 1 && text[i - 1] == '\\' && (c == 'n' || c == 'r' || c == 't')) i -= 2
+            else break
+        }
+        return i < 0 || text[i] == '>'
+    }
+
+    // End of an unclosed element's text: the next tag, skipping CDATA sections and comments (an unterminated one
+    // runs to the end of the text).
+    // The strict baseline ([refined] false) searches a terminator from the opener itself, so `<!-->` counts as a
+    // complete comment, exactly as before; the refined scan starts after the opener (XML semantics).
+    private fun unclosedEnd(text: String, from: Int, refined: Boolean): Int {
+        var nextLt = text.indexOf('<', from)
+        while (nextLt >= 0) {
+            val term = when {
+                text.startsWith("<![CDATA[", nextLt) -> "]]>"
+                text.startsWith("<!--", nextLt) -> "-->"
+                else -> break
+            }
+            val t = text.indexOf(term, if (refined) nextLt + (if (term == "-->") 4 else 9) else nextLt)
+            nextLt = if (t < 0) -1 else text.indexOf('<', t + term.length)
+        }
+        return if (nextLt < 0) text.length else nextLt
+    }
+
+    /**
+     * Redact the text of credential-named XML elements (`<Token-0>`, `<x:SessionToken>`, `<ClientSecret>`, ...)
+     * and the values of credential-named attributes. An element is redacted up to its closing tag when that
+     * tag is within [MAX_XML_ELEMENT_TEXT] chars. Otherwise (truncated body, odd closing tag, huge element)
+     * the text up to the next tag is redacted, but for names outside the legacy S3 list only when the tag sits
+     * where an XML sibling would (see [atXmlBoundary]), so prose such as `'--app-token <APP_TOKEN>' but`,
+     * `List<AccessToken> but` or `=<your-token>.` is left alone.
+     *
+     * Two scans are unioned: a strict one (first exact-case close tag, sections not skipped) and a refined one
+     * (skips terminated CDATA/comments, differently-cased close tags), so nothing the strict one redacts can leak.
+     * Not idempotent: the inserted `<redacted>` ends in `>`, so a second pass can only redact more.
+     */
+    internal fun redactSecretXml(text: String): String {
+        if (text.indexOf('<') < 0) return text
+        // Two scans whose redacted spans are unioned: the strict scan (first exact-case close tag, no section
+        // skipping) is the baseline behaviour, so nothing it redacts can leak; the refined scan only adds coverage
+        // (a close tag quoted in CDATA/comments does not end the element, differently-cased close tags).
+        // Credential-named attribute values are found on the whole original text (both tag matchers), so a span that
+        // starts inside a tag's quoted value cannot hide the rest of that value; everything is merged and applied once.
+        val reds = ArrayList<Redaction>()
+        for (sp in collectSecretSpans(text, refined = false) + collectSecretSpans(text, refined = true)) reds.add(Redaction(sp.first, sp.last, true))
+        collectAttrRedactions(text, reds)
+        reds.sortWith(compareBy({ it.start }, { it.end }))
+        val out = StringBuilder(text.length)
+        var pos = 0
+        var i = 0
+        while (i < reds.size) {
+            var start = reds[i].start
+            var end = reds[i].end
+            var span = reds[i].isSpan
+            i++
+            while (i < reds.size && reds[i].start <= end) {
+                if (reds[i].end > end) end = reds[i].end
+                span = span || reds[i].isSpan
+                i++
+            }
+            out.append(text, pos, start).append(if (span) "<redacted>" else "\"<redacted>\"")
+            pos = end
+        }
+        out.append(text, pos, text.length)
+        return out.toString()
+    }
+
+    // [start, end) of text to replace: an element's text (span) or a quoted attribute value.
+    private class Redaction(val start: Int, val end: Int, val isSpan: Boolean)
+
+    private fun collectAttrRedactions(text: String, into: MutableList<Redaction>) {
+        for (rx in listOf(XML_OPEN_TAG, XML_OPEN_TAG_STRICT)) {
+            for (m in rx.findAll(text)) {
+                if (m.groupValues[2].isEmpty()) continue
+                val name = m.groupValues[1]
+                val allSecret = localName(name) == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
+                for (a in XML_ATTR.findAll(m.value)) {
+                    if (allSecret || SECRET_XML_TAG_NAME.containsMatchIn(a.groupValues[1])) {
+                        val v = a.groups[3]!!.range
+                        into.add(Redaction(m.range.first + v.first, m.range.first + v.last + 1, false))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun collectSecretSpans(text: String, refined: Boolean): List<IntRange> {
+        val spans = ArrayList<IntRange>()
+        var pos = 0
+        // Per close tag: scanned-through position of a failed search, so dense unclosed tags do not rescan the same window.
+        val searchedTo = HashMap<String, Int>()
+        val tagRegex = if (refined) XML_OPEN_TAG else XML_OPEN_TAG_STRICT
+        var m = tagRegex.find(text, pos)
+        while (m != null) {
+            val start = m.range.first
+            val afterOpen = m.range.last + 1
+            var end = afterOpen
+            val name = m.groupValues[1]
+            val attrs = m.groupValues[2]
+            val local = localName(name)
+            val secretTag = local == "policy" || SECRET_XML_TAG_NAME.containsMatchIn(name)
+            if (secretTag && !attrs.endsWith("/")) {
+                // The strict scan matches exact case, so its memo key must too; the refined scan ignores case.
+                val closeKey = if (refined) "</${name.lowercase()}>" else "</$name>"
+                val limit = minOf(text.length, afterOpen + MAX_XML_ELEMENT_TEXT)
+                val from = maxOf(afterOpen, searchedTo[closeKey] ?: 0)
+                val hit = if (refined) findClosingTag(text, "</$name>", from, limit) else findStrictClosingTag(text, "</$name>", from, limit)
+                val close = hit.pos
+                val unclosedEligible = local in LEGACY_SECRET_XML_NAMES || NUMBERED_TOKEN_TAG.matches(local) || atXmlBoundary(text, start)
+                if (close >= 0) {
+                    end = close
+                    spans.add(afterOpen..end)
+                } else {
+                    if (close == NOT_FOUND) searchedTo[closeKey] = limit + 1
+                    if (unclosedEligible) {
+                        end = unclosedEnd(text, afterOpen, refined)
+                        if (end > afterOpen) spans.add(afterOpen..end)
+                    }
+                }
+            }
+            pos = end
+            m = tagRegex.find(text, pos)
+        }
+        return spans
+    }
+
+    private val XML_ERROR_CODE = Regex("<Code>([A-Za-z0-9_.\\-]{1,64})</Code>")
+    private val HTML_TITLE = Regex("<title>([^<]{1,100})</title>", RegexOption.IGNORE_CASE)
+
+    /**
+     * Mask [appToken] and drop credentials from free text such as an exception message or a JSON string
+     * value: `?name=value` query strings (a presigned URL's query is a write credential), SigV4-style
+     * `Signature=`/`Credential=` pairs, `Bearer`/`Basic` tokens, `Authorization`/`Cookie`/`X-Amz-*` header
+     * lines and the text of credential-named XML elements (`<Token-0>`, `<StringToSign>`, ...; see [redactSecretXml]). Input is capped at [MAX_SCRUBBED_TEXT_CHARS].
+     */
+    internal fun scrubForLog(text: String, appToken: String? = null): String {
+        // Mask first: truncating first could cut the token in half so the exact match no longer fires.
+        val masked = if (!appToken.isNullOrEmpty()) text.replace(appToken, maskAppToken(appToken)) else text
+        val unxml = redactSecretXml(masked)
+        val bounded = if (unxml.length > MAX_SCRUBBED_TEXT_CHARS) unxml.take(MAX_SCRUBBED_TEXT_CHARS) + "…" else unxml
+        return bounded
+            .replace(QUERY_WITH_PARAMS, "?<redacted>")
+            .replace(SIGV4_PAIR, "$1=<redacted>")
+            .replace(BEARER, "$1 <redacted>")
+            .replace(SECRET_HEADER, "$1: <redacted>")
+    }
+
+    /**
+     * Log-safe rendering of an HTTP response body from a failed upload step. Raw bodies can echo
+     * credentials: an S3 `SignatureDoesNotMatch` XML body carries the signature, string-to-sign and access
+     * key id, and a proxy page can echo the request URL with its presigned query.
+     *
+     *  - a JSON object or array keeps its structure: values under credential-looking keys (signature,
+     *    secret, token, ...) are replaced, keys and string values go through [scrubForLog];
+     *  - an HTML/XML body is reduced to its length plus the S3-style `<Code>` or HTML `<title>` when present;
+     *  - plain text (no markup) keeps a short [scrubForLog]ged prefix, so gateway errors such as
+     *    "Request Entity Too Large" stay diagnosable;
+     *  - the result is capped at [MAX_LOGGED_BODY_CHARS].
+     */
+    internal fun redactBodyForLog(body: String?, appToken: String? = null): String {
+        if (body.isNullOrBlank()) return ""
+        fun walk(value: Any?): Any? = when (value) {
+            is org.json.JSONObject -> org.json.JSONObject().also { out ->
+                for (key in value.keySet()) {
+                    out.put(
+                        scrubForLog(key, appToken),
+                        if (SENSITIVE_JSON_KEY.containsMatchIn(key)) "<redacted>" else walk(value.opt(key)),
+                    )
+                }
+            }
+            is org.json.JSONArray -> org.json.JSONArray().also { out ->
+                for (i in 0 until value.length()) out.put(walk(value.opt(i)))
+            }
+            is String -> scrubForLog(value, appToken)
+            else -> value
+        }
+        val rendered = try {
+            if (body.length > MAX_PARSED_BODY_CHARS) throw IllegalArgumentException("too large to parse")
+            val trimmed = body.trimStart()
+            val json: Any = if (trimmed.startsWith("[")) org.json.JSONArray(trimmed) else org.json.JSONObject(trimmed)
+            walk(json).toString()
+        } catch (e: Exception) {
+            val code = XML_ERROR_CODE.find(body)?.groupValues?.get(1)
+            val title = HTML_TITLE.find(body)?.groupValues?.get(1)?.trim()
+            val plain = if ('<' !in body && '{' !in body) scrubForLog(body.trim(), appToken).take(MAX_PLAIN_TEXT_CHARS) else null
+            "<non-JSON body, ${body.length} chars" +
+                (if (code != null) ", code=$code" else "") +
+                (if (title != null) ", title=${scrubForLog(title, appToken)}" else "") +
+                (if (plain != null) ": $plain" else "") + ">"
+        }
+        return if (rendered.length > MAX_LOGGED_BODY_CHARS) rendered.take(MAX_LOGGED_BODY_CHARS) + "…" else rendered
     }
 
     /**
@@ -98,6 +401,8 @@ internal object BundleUploader {
      *             (build-info-only). When `true` it's an error.
      * @param logger Gradle logger.
      * @param debug Whether debug logging is enabled.
+     * @return `false` when the artefact PUT (size-analysis path) did not complete; it is only logged
+     *         here, so the caller can apply `failOnUploadError`. Registration failures throw.
      */
     fun uploadData(
         file: File,
@@ -120,7 +425,8 @@ internal object BundleUploader {
         depsJsonFile: File? = null,
         timingsJsonFile: File? = null,
         legacyBuildInfoGzip: Boolean = false,
-    ) {
+        retryPolicy: HttpRetry.RetryPolicy = HttpRetry.RetryPolicy(),
+    ): Boolean {
         if (debug) logger.warn("Bugsee: Starting bundle upload. Body: $json")
 
         val httpPost = HttpPost(ApiEndpoint.buildsUrl(endpoint, appToken))
@@ -140,28 +446,29 @@ internal object BundleUploader {
             .build()
 
         val httpClient = HttpClients.custom()
+            .useSystemProperties()
             .setDefaultRequestConfig(requestConfig)
             .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
             .setRetryHandler(StandardHttpRequestRetryHandler())
             .build()
 
-        httpClient.use { client ->
-            val response = client.execute(httpPost)
-            val statusCode = response.statusLine.statusCode
+        return httpClient.use { client ->
+            var artifactUploaded = true
+            // The registration POST creates a record, so only the statuses that mean "not processed"
+            // (429/502/503) are retried; see HttpRetry.
+            val reply = HttpRetry.execute(client, httpPost, "bundle upload step 1", logger, retryPolicy, idempotent = false)
+            val statusCode = reply.status
 
             // 2xx is success; some reverse proxies normalise to 201/204.
             // Anything outside that is a hard failure — surface it rather
             // than quietly returning and letting the Gradle task report
             // green while the backend never saw the build.
             if (statusCode !in 200..299) {
-                val body = EntityUtils.toString(response.entity, "utf-8")
-                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): $body")
+                throw RuntimeException("Bugsee bundle upload step 1 failed (status=$statusCode): ${redactBodyForLog(reply.body, appToken)}")
             }
 
-            val resEntity = response.entity
+            val contentText = reply.body
                 ?: throw RuntimeException("Bugsee bundle upload step 1: no response body")
-
-            val contentText = EntityUtils.toString(resEntity, "utf-8")
             // NEVER log `contentText` verbatim — the response contains
             // presigned PUT URLs that grant 7-day arbitrary-write
             // access to known S3 keys. See `redactedResponseSummary`.
@@ -172,7 +479,7 @@ internal object BundleUploader {
             val responseBody = try {
                 JSONObject(contentText)
             } catch (e: Exception) {
-                throw RuntimeException("Bugsee bundle upload step 1: non-JSON response: ${contentText.take(200)}")
+                throw RuntimeException("Bugsee bundle upload step 1: non-JSON response: ${redactBodyForLog(contentText, appToken)}")
             }
             val payload = ApiEndpoint.unwrapResult(responseBody)
             if (debug) logger.warn(
@@ -213,7 +520,7 @@ internal object BundleUploader {
                             "Bugsee: App token is invalid: ${maskAppToken(appToken)}"
                         )
                     }
-                    throw RuntimeException("Bugsee build-info upload failed: $error")
+                    throw RuntimeException("Bugsee build-info upload failed: ${redactBodyForLog(error.toString(), appToken)}")
                 }
                 if (presignedEndpoint.isNotEmpty()) {
                     // Server returned a URL we didn't ask for. Treat
@@ -237,7 +544,7 @@ internal object BundleUploader {
                                 "Bugsee: App token is invalid: ${maskAppToken(appToken)}"
                             )
                         }
-                        throw RuntimeException("Bugsee bundle upload failed: $error")
+                        throw RuntimeException("Bugsee bundle upload failed: ${redactBodyForLog(error.toString(), appToken)}")
                     }
                     throw RuntimeException("Bugsee bundle upload failed: server returned no endpoint")
                 }
@@ -257,19 +564,39 @@ internal object BundleUploader {
                     )
                     val httpPut = HttpPut(presignedEndpoint)
                     httpPut.entity = FileEntity(file)
-                    val putResponse = client.execute(httpPut)
+                    // A PUT to a fixed presigned URL is safe to repeat (FileEntity is repeatable). HttpRetry owns
+                    // the retries, so it runs on a client without automatic retries (the shared one would
+                    // multiply the attempts of a large body).
+                    val putReply = HttpClients.custom()
+                        .useSystemProperties()
+                        .setDefaultRequestConfig(requestConfig)
+                        .setSSLHostnameVerifier(DefaultHostnameVerifier(null))
+                        .disableAutomaticRetries()
+                        .build()
+                        .use { putClient -> HttpRetry.execute(putClient, httpPut, "bundle upload step 2", logger, retryPolicy) }
 
-                    if (putResponse.statusLine.statusCode !in 200..299) {
-                        val body = EntityUtils.toString(putResponse.entity, "utf-8")
+                    if (putReply.status !in 200..299) {
+                        artifactUploaded = false
                         logger.warn(
                             "Bugsee: bundle upload step 2 failed " +
-                            "(status=${putResponse.statusLine.statusCode}): $body"
+                            "(status=${putReply.status}): ${redactBodyForLog(putReply.body, appToken)}"
                         )
                     } else if (debug) {
                         logger.warn("Bugsee: Bundle upload complete.")
                     }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                } catch (e: java.io.IOException) {
+                    if (HttpRetry.isInterruption(e)) {
+                        Thread.currentThread().interrupt()
+                        throw e
+                    }
+                    artifactUploaded = false
+                    logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 } catch (e: Exception) {
-                    logger.warn("Bugsee: bundle upload step 2 failed: ${e.message}")
+                    artifactUploaded = false
+                    logger.warn("Bugsee: bundle upload step 2 failed: ${scrubForLog(e.message ?: "", appToken)}")
                 }
             }
 
@@ -297,6 +624,7 @@ internal object BundleUploader {
                 logger = logger,
                 debug = debug,
             )
+            artifactUploaded
         }
     }
 
@@ -343,6 +671,8 @@ internal object BundleUploader {
         logger: Logger,
         debug: Boolean,
     ) {
+        // A cancelled build (e.g. after a failed artifact PUT) must not start the auxiliary uploads.
+        HttpRetry.throwIfInterrupted()
         if (shouldAttemptBundle(
                 buildInfoUploadEndpoint = buildInfoUploadEndpoint,
                 legacyBuildInfoGzip = legacyBuildInfoGzip,
@@ -367,6 +697,8 @@ internal object BundleUploader {
                     if (debug) logger.warn("Bugsee: build-info bundle uploaded via bugsee-cli.")
                     return
                 }
+                // A cancelled build must not fall back to the legacy PUTs.
+                HttpRetry.throwIfInterrupted()
                 // Any failure → fall back to the independent legacy PUTs.
                 logger.warn(
                     "Bugsee: build-info bundle upload failed " +
@@ -374,6 +706,7 @@ internal object BundleUploader {
                         "falling back to legacy per-blob upload.",
                 )
             } else {
+                HttpRetry.throwIfInterrupted()
                 logger.warn(
                     "Bugsee: build-info bundle offered but bugsee-cli could not be " +
                         "resolved; falling back to legacy per-blob upload.",
@@ -436,6 +769,8 @@ internal object BundleUploader {
         debug: Boolean,
     ) {
         if (gzFile == null) return
+        // Raw client.execute ignores the interrupt flag: stop before each legacy blob PUT.
+        HttpRetry.throwIfInterrupted()
         if (presignedUrl.isEmpty()) {
             logger.warn(
                 "Bugsee: $label blob ready but server did not return a presigned URL — skipping."
@@ -459,13 +794,19 @@ internal object BundleUploader {
                 val body = EntityUtils.toString(resp.entity, "utf-8")
                 logger.warn(
                     "Bugsee: $label upload failed " +
-                    "(status=${resp.statusLine.statusCode}): $body"
+                    "(status=${resp.statusLine.statusCode}): ${redactBodyForLog(body)}"
                 )
             } else if (debug) {
                 logger.warn("Bugsee: $label upload complete.")
             }
+        } catch (e: java.io.IOException) {
+            if (HttpRetry.isInterruption(e)) {
+                Thread.currentThread().interrupt()
+                throw e
+            }
+            logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         } catch (e: Exception) {
-            logger.warn("Bugsee: $label upload failed: ${e.message}")
+            logger.warn("Bugsee: $label upload failed: ${scrubForLog(e.message ?: "")}")
         }
     }
 }

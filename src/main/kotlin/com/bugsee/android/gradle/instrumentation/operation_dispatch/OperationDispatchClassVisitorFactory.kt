@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.instrumentation.operation_dispatch
 
+import com.bugsee.android.gradle.instrumentation.util.FrameFallbackLane
 import com.bugsee.android.gradle.instrumentation.util.MinifiedClassSkip
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
@@ -37,10 +38,14 @@ abstract class OperationDispatchClassVisitorFactory :
         // is transformed on a classpath that cannot see the consumer's :library dep,
         // so the probe spuriously returns null and silently skips guarded I/O call
         // sites inside those JARs. (Same fix as ComposeInput / AppStartupTracing.)
-        return OperationDispatchClassVisitor(
-            nextClassVisitor,
-            classContext.currentClassData.className,
-        )
+        //
+        // This lane buffers every method, so it is wrapped in the per-method fallback: a method
+        // whose transformed form cannot have its frames computed is left uninstrumented rather
+        // than failing the build. See FrameFallbackContext.
+        val className = classContext.currentClassData.className
+        return FrameFallbackLane.install(nextClassVisitor, className) { next ->
+            OperationDispatchClassVisitor(next, className)
+        }
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {

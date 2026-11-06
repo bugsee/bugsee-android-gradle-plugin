@@ -162,6 +162,45 @@ class ChunkedBundleUploaderHttpTest {
         assertTrue(ex.message!!.contains("/builds/chunked"), "actual: ${ex.message}")
     }
 
+    private fun uploadWithFastRetry(zip: File): String = ChunkedBundleUploader.upload(
+        uploadZip = zip, metadata = JSONObject().put("package_id", "com.x"),
+        appToken = appToken, endpoint = server.baseUrl,
+        logger = logger, debug = false,
+        retryPolicy = HttpRetry.RetryPolicy(backoffMs = 0),
+    )
+
+    @Test fun `503 then success on the submit POST is retried and registers the build once`() {
+        server.overrideTimes("POST", "/v2/apps/$appToken/builds/chunked", 503, count = 2)
+        val buildId = uploadWithFastRetry(tempZipOfSize(1024))
+        assertEquals("build-from-mock", buildId)
+        assertEquals(3, server.recordedRequests().countMatching("POST", "/builds/chunked"))
+    }
+
+    @Test fun `persistent 502 on the submit POST stops after three attempts`() {
+        server.overrideAlways("POST", "/v2/apps/$appToken/builds/chunked", 502)
+        val ex = assertFailsWith<RuntimeException> { uploadWithFastRetry(tempZipOfSize(1024)) }
+        assertTrue(ex.message!!.contains("/builds/chunked"), "actual: ${ex.message}")
+        assertEquals(3, server.recordedRequests().countMatching("POST", "/builds/chunked"))
+    }
+
+    @Test fun `500 on the submit POST is not retried since the build may already be registered`() {
+        server.overrideAlways("POST", "/v2/apps/$appToken/builds/chunked", 500)
+        assertFailsWith<RuntimeException> { uploadWithFastRetry(tempZipOfSize(1024)) }
+        assertEquals(1, server.recordedRequests().countMatching("POST", "/builds/chunked"))
+    }
+
+    @Test fun `4xx on the submit POST is not retried`() {
+        server.overrideAlways("POST", "/v2/apps/$appToken/builds/chunked", 403)
+        assertFailsWith<RuntimeException> { uploadWithFastRetry(tempZipOfSize(1024)) }
+        assertEquals(1, server.recordedRequests().countMatching("POST", "/builds/chunked"))
+    }
+
+    @Test fun `429 then success on chunks slash check is retried`() {
+        server.overrideTimes("POST", "/v2/apps/$appToken/builds/chunks/check", 429)
+        assertEquals("build-from-mock", uploadWithFastRetry(tempZipOfSize(1024)))
+        assertEquals(2, server.recordedRequests().countMatching("POST", "/builds/chunks/check"))
+    }
+
     @Test fun `2xx on builds slash chunked without build_id throws (fallback signal)`() {
         // A 200 with no build_id means the worker pipeline has no key
         // — the uploader must fail loud so the caller falls back to

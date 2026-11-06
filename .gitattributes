@@ -1,0 +1,7 @@
+# Narrow on purpose: only files whose line endings are load-bearing. Everything else keeps the
+# checkout's default handling. Without this, Git for Windows (core.autocrlf=true, as on the
+# windows-latest runner) checks gradlew and the scripts out with CRLF, and bash fails with
+# "$'\r': command not found".
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf

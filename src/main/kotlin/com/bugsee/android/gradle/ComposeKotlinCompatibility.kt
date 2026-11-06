@@ -18,6 +18,25 @@ package com.bugsee.android.gradle
  * | 2.4         | `bugsee-compose-compiler-plugin-k24`  | 2.4 moved registration to `ExtensionPointDescriptor` and removed `valueParameters` |
  * | 2.5+, 3.x   | none — instrumentation stands down    | unverified; Kotlin moves these APIs with no deprecation cycle |
  *
+ * ### Kotlin 1.9: registration order decides omitted-`modifier` tagging
+ *
+ * The androidx Compose compiler 1.5.x releases that register through the legacy `ComponentRegistrar`
+ * service (verified: 1.5.15; 1.5.0 does not) are run by the 1.9 compiler ahead of every
+ * `CompilerPluginRegistrar`. The k21 artifact therefore registers
+ * through `ComponentRegistrar` on a Kotlin 1.9 compiler (and through `CompilerPluginRegistrar` only on
+ * 2.0+, exactly one of the two per compiler), so its position follows the plugin classpath order.
+ * Ahead of Compose it sees the call sites as written and tags a composable that omits `modifier`;
+ * behind it, Compose's default-argument lowering has already turned every OMITTED `modifier` into a
+ * `DEFAULT_VALUE` composite, which we skip on purpose because the callee's `$default` fixup would
+ * overwrite anything injected there (issues #119, #138). On this path an omitted `modifier` is also only
+ * rewritten when the callee's own default is the bare `Modifier`, since the injected chain replaces it
+ * (with a modern-registering Compose compiler such as 1.5.0 that means same-module callees only; library
+ * callees, whose default is not visible, used to be tagged there and are now skipped).
+ * The Kotlin Gradle plugin lists our artifact
+ * ahead of the Compose compiler AGP adds (`ComposePluginOrderTest`), so the first case is the normal one.
+ * Verified through 1.9.25 with Compose compiler 1.5.15 by `Kotlin19ComposePipelineTest`, which executes
+ * the compiled call paths under the JVM verifier in both orders.
+ *
  * Strict on anything unrecognised. The guarded failure is an unrecoverable abort of the consumer's
  * build, so an unverified or undeterminable version must not be assumed safe — the opposite of the
  * SDK symbol probe, where an unknown answer costs only a capture feature.
@@ -43,7 +62,8 @@ internal object ComposeKotlinCompatibility {
         val parsed = parse(version) ?: return null
         val (major, minor) = parsed
         val suffix = when {
-            // 1.9 and older predate the IR changes entirely; verified on 1.9.22.
+            // 1.9 and older predate the IR changes entirely; verified on 1.9.22 and 1.9.25 (see the KDoc:
+            // registration order decides omitted-modifier tagging with the real Compose 1.5 compiler).
             major < SUPPORTED_MAJOR -> ""
             major > SUPPORTED_MAJOR -> return null
             minor <= 1 -> ""

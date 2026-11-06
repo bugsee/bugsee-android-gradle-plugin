@@ -224,8 +224,8 @@ class CliBinaryResolverTest {
 
     // ── floor bump ───────────────────────────────────────────────────
 
-    @Test fun `default floor version is 0_8_1`() {
-        // The pinned download floor — must be >= 0.8.1: it replaces a stored symbol
+    @Test fun `default floor version is 0_9_0`() {
+        // The pinned download floor — must be >= 0.8.1 (now 0.9.0): it replaces a stored symbol
         // table with DWARF without --force (bugsee-cli#78), on top of 0.8.0 (the first
         // CLI whose `--type elf` takes a directory, merged_native_libs, bugsee-cli#69),
         // and covers 0.7.12, which uploads AGP SYMBOL_TABLE `.so.sym` NDK symbols
@@ -234,7 +234,7 @@ class CliBinaryResolverTest {
         // is rolled back, the pack / upload-build gate tests above shift with
         // it — this pins the intended floor explicitly. Keeping the CLI current
         // beyond this floor is delegated to the CLI's own `update --max-age 12h`.
-        assertEquals("0.8.1", CliBinaryResolver.DEFAULT_VERSION)
+        assertEquals("0.9.0", CliBinaryResolver.DEFAULT_VERSION)
     }
 
     @Test fun `elf directory support follows the pinned version, trusting a custom cliPath`() {
@@ -285,6 +285,58 @@ class CliBinaryResolverTest {
         )
     }
 
+    @Test fun `self-update output is scrubbed before it reaches any log level`() {
+        val home = gradleHomeWithCachedBinary()
+        val secretLine = "update failed: GET https://dl.example/x?X-Amz-Signature=SIGSECRET status=403 token=TOKSECRET"
+        val exec = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult {
+                var out: java.io.OutputStream? = null
+                var err: java.io.OutputStream? = null
+                val spec = java.lang.reflect.Proxy.newProxyInstance(
+                    ExecSpec::class.java.classLoader, arrayOf(ExecSpec::class.java),
+                ) { proxy, method, args ->
+                    when (method.name) {
+                        "setStandardOutput" -> { out = args[0] as java.io.OutputStream; proxy }
+                        "setErrorOutput" -> { err = args[0] as java.io.OutputStream; proxy }
+                        "hashCode" -> System.identityHashCode(proxy)
+                        "equals" -> proxy === args[0]
+                        else -> if (method.returnType == java.lang.Boolean.TYPE) false else proxy
+                    }
+                } as ExecSpec
+                action.execute(spec)
+                out?.write(secretLine.toByteArray())
+                err?.write(secretLine.toByteArray())
+                return object : ExecResult {
+                    override fun getExitValue(): Int = 0
+                    override fun assertNormalExitValue(): ExecResult = this
+                    override fun rethrowFailure(): ExecResult = this
+                }
+            }
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+        val logged = StringBuilder()
+        val recordingLogger = java.lang.reflect.Proxy.newProxyInstance(
+            org.gradle.api.logging.Logger::class.java.classLoader, arrayOf(org.gradle.api.logging.Logger::class.java),
+        ) { proxy, method, args ->
+            logged.append(method.name).append(": ").append((args ?: emptyArray()).joinToString(" ")).append('\n')
+            when {
+                method.returnType == java.lang.Boolean.TYPE -> true
+                method.name == "hashCode" -> System.identityHashCode(proxy)
+                method.name == "equals" -> proxy === args[0]
+                else -> null
+            }
+        } as org.gradle.api.logging.Logger
+
+        CliBinaryResolver.resolve(
+            cliVersion = null, cliPath = null, execOps = exec, gradleUserHome = home,
+            logger = recordingLogger, debug = true, autoUpdate = true,
+        )
+
+        assertTrue(logged.contains("update failed"), "diagnostic text must still be logged: $logged")
+        assertFalse(logged.contains("SIGSECRET") || logged.contains("TOKSECRET"), "secret leaked: $logged")
+    }
+
     @Test fun `resolve with autoUpdate false does NOT invoke update`() {
         // Opt-out path: a user who disabled cliAutoUpdate must never have the
         // binary self-replace. The cached binary is still returned verbatim.
@@ -328,6 +380,99 @@ class CliBinaryResolverTest {
         )
 
         assertNotNull(resolved, "a thrown self-update exec must NOT break resolution")
+    }
+
+    // ── build cancellation (interrupt) must not be swallowed ───────────
+
+    @Test fun `resolve rethrows an interrupt entering the lock on a cache miss instead of falling back`() {
+        org.junit.Assume.assumeNotNull(CliBinaryResolver.detectHostTriple())
+        val home = tmp.newFolder("empty-gradle-home")
+        val rec = RecordingExecOps()
+        Thread.currentThread().interrupt()
+        try {
+            val thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = rec,
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            assertTrue(thrown is InterruptedException, "got $thrown")
+            assertTrue(Thread.currentThread().isInterrupted, "interrupt flag must be preserved")
+            assertTrue(rec.specs.isEmpty(), "no download/exec may run on a cancelled thread")
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun `resolve rethrows an interrupt entering the lock on a cache hit`() {
+        val home = gradleHomeWithCachedBinary()
+        Thread.currentThread().interrupt()
+        try {
+            val thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = RecordingExecOps(),
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            assertTrue(thrown is InterruptedException, "got $thrown")
+            assertTrue(Thread.currentThread().isInterrupted)
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun `an InterruptedException thrown by the self-update exec propagates`() {
+        val home = gradleHomeWithCachedBinary()
+        val interrupting = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult =
+                throw InterruptedException("cancelled")
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+        try {
+            val thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = interrupting,
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            assertTrue(thrown is InterruptedException, "got $thrown")
+            assertTrue(Thread.currentThread().isInterrupted, "flag must be restored")
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun `a Gradle-wrapped interrupt from the self-update exec propagates`() {
+        // Gradle's exec kills the process and rethrows an interrupt as an
+        // unchecked wrapper with the flag restored — never a bare
+        // InterruptedException. The same isInterrupt() check guards the
+        // download path's catch (needs network, so not exercised here).
+        val home = gradleHomeWithCachedBinary()
+        val wrapping = object : ExecOperations {
+            override fun exec(action: Action<in ExecSpec>): ExecResult {
+                Thread.currentThread().interrupt()
+                throw RuntimeException(InterruptedException("cancelled"))
+            }
+            override fun javaexec(action: Action<in JavaExecSpec>): ExecResult =
+                throw AssertionError("javaexec must not be reached")
+        }
+        var thrown: Throwable? = null
+        var flag = false
+        val t = Thread {
+            thrown = runCatching {
+                CliBinaryResolver.resolve(
+                    cliVersion = null, cliPath = null, execOps = wrapping,
+                    gradleUserHome = home, logger = logger, debug = false, autoUpdate = true,
+                )
+            }.exceptionOrNull()
+            flag = Thread.currentThread().isInterrupted
+        }
+        t.start()
+        t.join(30_000)
+        assertFalse(t.isAlive, "resolve hung past the timeout")
+        assertTrue(thrown is InterruptedException, "got $thrown")
+        assertTrue(flag, "flag must be restored")
     }
 
     // ── fixtures ─────────────────────────────────────────────────────
