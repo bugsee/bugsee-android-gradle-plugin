@@ -96,7 +96,7 @@ abstract class BugseePlugin : Plugin<Project>, KotlinCompilerPluginSupportPlugin
         internal fun noAgpMessage(projectPath: String): String =
             "Bugsee: the Android Gradle Plugin is not on the plugin classpath of project $projectPath, " +
                 "so the Bugsee plugin does nothing here. Apply 'com.bugsee.android.gradle' only to Android " +
-                "application modules, in a build where AGP (7.0 or newer) is on the same plugin classpath as Bugsee " +
+                "application modules, in a build where AGP (8.6 or newer) is on the same plugin classpath as Bugsee " +
                 "(or a parent's). The probe class is $AGP_PROBE_CLASS."
 
         internal fun agpNotVisibleMessage(projectPath: String): String =

@@ -482,6 +482,129 @@ class CliBinaryResolverTest {
 
     private val logger = Logging.getLogger("test")
 
+    // ── fallback to an already-installed CLI when the download fails ─────
+
+    /** A fake CLI under `caches/bugsee-cli/<dirVersion>/<triple>` that prints [printed] for `--version`. */
+    private fun installFakeCli(home: File, dirVersion: String, printed: String?, exitCode: Int = 0): File {
+        val triple = CliBinaryResolver.detectHostTriple() ?: error("unsupported host")
+        val dir = File(home, "caches/bugsee-cli/$dirVersion/$triple").also { it.mkdirs() }
+        val bin = File(dir, if (triple.contains("windows")) "bugsee-cli.exe" else "bugsee-cli")
+        bin.writeText("#!/bin/sh\n" + (if (printed != null) "echo \"bugsee-cli $printed\"\n" else "") + "exit $exitCode\n")
+        bin.setExecutable(true)
+        return bin
+    }
+
+    @Test fun `a pre-release binary does not stand in for a stable pin`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.6.0", "0.9.0-beta1")
+        assertNull(findCached(home, "0.9.0"))
+        assertNotNull(findCached(home, "0.9.0-beta1"))
+    }
+
+    private fun findCached(home: File, min: String): File? {
+        val triple = CliBinaryResolver.detectHostTriple() ?: error("unsupported host")
+        val name = if (triple.contains("windows")) "bugsee-cli.exe" else "bugsee-cli"
+        return CliBinaryResolver.findCompatibleCachedBinary(home, triple, name, min, null)
+    }
+
+    private fun assumeUnixShell() = org.junit.Assume.assumeFalse(
+        "fake CLIs are shell scripts",
+        (System.getProperty("os.name") ?: "").lowercase().contains("windows"),
+    )
+
+    @Test fun `a self-updated binary in an older version directory is found by what it reports`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        // Installed by the 0.8.1 pin, then self-updated in place to 0.9.0.
+        val updated = installFakeCli(home, "0.8.1", "0.9.0")
+        assertEquals(updated, findCached(home, "0.9.0"))
+    }
+
+    @Test fun `a cached CLI older than the floor is not used`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.8.1", "0.8.1")
+        assertNull(findCached(home, "0.9.0"))
+    }
+
+    @Test fun `a cached CLI on another major is not used`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.8.1", "1.2.0")
+        assertNull(findCached(home, "0.9.0"))
+    }
+
+    @Test fun `the newest compatible cached CLI wins`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.6.0", "0.9.0")
+        val newest = installFakeCli(home, "0.7.12", "0.9.4")
+        installFakeCli(home, "0.8.1", "0.9.1")
+        assertEquals(newest, findCached(home, "0.9.0"))
+    }
+
+    @Test fun `a cached CLI that fails or prints no version is skipped`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.7.12", "0.9.0", exitCode = 3)
+        installFakeCli(home, "0.8.1", null)
+        assertNull(findCached(home, "0.9.0"))
+    }
+
+    @Test fun `an empty or missing cache has no candidate`() {
+        assertNull(findCached(tmp.newFolder(), "0.9.0"))
+    }
+
+    @Test fun `resolve uses an installed compatible CLI when the pinned version cannot be downloaded`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        val installed = installFakeCli(home, "0.8.1", "0.9.0")
+        // 0.0.9 is not a published release, so the download fails whether or not the host is online.
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = "0.0.9",
+            cliPath = null,
+            execOps = RecordingExecOps(),
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = true,
+        )
+        assertEquals(installed, resolved)
+    }
+
+    @Test fun `cliAutoUpdate false means the exact pin, so no substitute binary is used`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.8.1", "0.9.0")
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = "0.0.9",
+            cliPath = null,
+            execOps = RecordingExecOps(),
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = false,
+        )
+        assertNull(resolved)
+    }
+
+    @Test fun `resolve still falls back to the Kotlin uploader when nothing installed is compatible`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.8.1", "0.8.1")
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = "0.9.0-does-not-exist",
+            cliPath = null,
+            execOps = RecordingExecOps(),
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = true,
+        )
+        assertNull(resolved)
+    }
+
     /**
      * A Gradle-user-home temp dir pre-seeded with an executable cached
      * `bugsee-cli` binary at the exact host-triple path `resolve` looks up,

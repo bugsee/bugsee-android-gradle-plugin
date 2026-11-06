@@ -21,7 +21,7 @@
 # descriptors of the compiler API it was built against; the Gradle plugin picks between them from
 # the consumer's Kotlin version.
 #
-# ALL THREE MUST BE PUBLISHED TOGETHER. The selected coordinates are added as a real dependency on
+# ALL FIVE ARTIFACTS MUST BE PUBLISHED TOGETHER (the plugin and its marker pick among the three compose artifacts). The selected coordinates are added as a real dependency on
 # the consumer's compiler-plugin classpath, so if the artifact for their Kotlin line is missing from
 # Central their build FAILS on an unresolvable dependency — it does not quietly fall back or
 # disable Compose instrumentation. A partial publish therefore breaks every consumer on the missing

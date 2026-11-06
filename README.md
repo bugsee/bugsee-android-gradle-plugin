@@ -755,6 +755,28 @@ is not loaded without AGP): do not apply the plugin to such modules. A `java-lib
 Kotlin plugin still fails earlier, because the plugin also serves as a Kotlin compiler plugin and needs the
 Kotlin Gradle plugin on the classpath.
 
+### Java-only apps
+
+The plugin is also a Kotlin compiler plugin, and AGP 8.x does not bring the Kotlin Gradle plugin with it (AGP 9 does when AGP is visible to Bugsee, so no separate Kotlin plugin declaration is needed then). An
+Android app with no Kotlin in the build (a Java-only app) therefore fails when the plugin applies:
+
+```text
+java.lang.NoClassDefFoundError: org/jetbrains/kotlin/gradle/plugin/KotlinCompilerPluginSupportPlugin
+```
+
+Put the Kotlin Gradle plugin on the build's plugin classpath without applying it, in the root
+`build.gradle.kts` (use your Kotlin version):
+
+```kotlin
+plugins {
+    id("com.android.application") version "8.6.0" apply false
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false   // classpath only; :app stays Java
+    id("com.bugsee.android.gradle") version "<plugin version>" apply false
+}
+```
+
+The `:app` module keeps listing only `com.android.application` and `com.bugsee.android.gradle`.
+
 If `com.android.application` IS applied in the module but AGP is not visible to Bugsee (Bugsee declared in
 the root project's `plugins {}` with `apply false` while AGP is declared only in the app module), the build
 fails with a message saying so, rather than building an app with nothing wired. Declare AGP in the root
