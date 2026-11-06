@@ -1126,10 +1126,15 @@ class CliUploaderTest {
             "tunnel via socks5://svc:LEAKPASS4@10.0.0.1:1080;" to "LEAKPASS4",
             "HTTPS_PROXY=http://alice:p@ssLEAKPASS6@proxy.corp:8080" to "LEAKPASS6",
             "connect to http://alice:pa'LEAKPASS7@proxy.corp:8080 failed" to "LEAKPASS7",
+            // A JSON-escaped body (`\/` for `/`) as a CLI might print it.
+            "{\"detail\":\"http:\\/\\/alice:LEAKPASS8@proxy.corp:8080\"}" to "LEAKPASS8",
+            // A long token used as the password (JWT / access token) must not slip past a length cap.
+            "HTTPS_PROXY=http://user:" + "A".repeat(600) + "LEAKPASS9@proxy.corp:8080" to "LEAKPASS9",
         )
         for ((input, leak) in cases) {
             val out = BundleUploader.scrubForLog(input)
             assertFalse(out.contains(leak), "scrubForLog leaked $leak: $out")
+            assertFalse(out.contains("AAAAAAAAAA"), "long userinfo kept: $out")
             assertTrue(out.contains("proxy") || out.contains("10.0.0.1"), "host lost: $out")
         }
         // Not credentials: no userinfo, an @ later in the path, or an e-mail address.

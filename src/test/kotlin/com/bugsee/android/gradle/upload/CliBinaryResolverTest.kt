@@ -600,7 +600,7 @@ class CliBinaryResolverTest {
             gradleUserHome = home,
             logger = logger,
             debug = false,
-            autoUpdate = false,
+            autoUpdate = true,
         )
         assertNull(resolved)
     }
