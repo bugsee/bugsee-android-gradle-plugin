@@ -231,6 +231,47 @@ val launcher17Provider = javaToolchains.launcherFor {
 // Where the pre-built plugin is published for fixtures on a non-default Gradle (see the publishing block).
 val integrationTestPluginRepoDir = layout.buildDirectory.dir("integrationTest/plugin-repo")
 
+// CI runs the integration suite as parallel jobs (.github/workflows/pr.yml). `-Pbugsee.it.shard=K` runs shard K of
+// `integrationShardCount`. Shards 1 .. count-1 run exactly the tests listed here (a class, or one method for a class
+// too big for one shard). The LAST shard runs everything NOT listed, so a new test class or method lands in CI by
+// default and can never fall out of every shard. Rebalance by moving entries between the lists; each CI job prints
+// its per-class times. Unset runs the whole suite (local runs, the release build).
+val integrationShards: List<List<String>> = listOf(
+    listOf(
+        "com.bugsee.android.gradle.integration.AppStartupTracingTierMatrixTest",
+        "com.bugsee.android.gradle.integration.BugseeManifestE2ETest",
+        "com.bugsee.android.gradle.integration.BugseeModuleTypesTest",
+        "com.bugsee.android.gradle.integration.BundleUploadConfigCacheTest",
+        "com.bugsee.android.gradle.integration.ComposePluginOrderTest.kotlin_2_1_bugsee_applied_first_tags_omitted_modifier_sites",
+        "com.bugsee.android.gradle.integration.FlutterAssetsOrderingE2ETest",
+        "com.bugsee.android.gradle.integration.PerVariantSettingsIntegrationTest",
+    ),
+    listOf(
+        "com.bugsee.android.gradle.integration.AppStartupTracingFailureModeTest",
+        "com.bugsee.android.gradle.integration.BugseeExtensionConsolidationTest",
+        "com.bugsee.android.gradle.integration.BugseeNoAgpTest",
+        "com.bugsee.android.gradle.integration.EarlyReadDslTimingTest",
+        "com.bugsee.android.gradle.integration.IsolatedProjectsIntegrationTest",
+        "com.bugsee.android.gradle.integration.MinimumVersionsIntegrationTest",
+        "com.bugsee.android.gradle.integration.NonMinifiedVariantWarningsTest",
+        "com.bugsee.android.gradle.integration.ReleaseMinifiedGatingTest",
+    ),
+    listOf(
+        "com.bugsee.android.gradle.integration.AppStartupTracingConfigCacheTest",
+        "com.bugsee.android.gradle.integration.BugseeKmpLibraryTest",
+        "com.bugsee.android.gradle.integration.BugseeLibraryVariantGatingTest",
+        "com.bugsee.android.gradle.integration.BugseeManifestOptimizeExtensionsTest",
+        "com.bugsee.android.gradle.integration.BuildTypeGatingTest",
+        "com.bugsee.android.gradle.integration.ComposePluginOrderTest.kotlin_2_1_compose_applied_first_skips_omitted_modifier_sites",
+        "com.bugsee.android.gradle.integration.ComposePluginOrderTest.kotlin_2_2_compose_applied_first_skips_omitted_modifier_sites",
+        "com.bugsee.android.gradle.integration.InstrumentationFallbackIntegrationTest",
+        "com.bugsee.android.gradle.integration.NativeMergedLibsE2ETest",
+        "com.bugsee.android.gradle.integration.ToolchainMatrixTest",
+        "com.bugsee.android.gradle.integration.UploadFailOnErrorTest",
+    ),
+)
+val integrationShardCount = integrationShards.size + 1
+
 tasks.register<Test>("integrationTest") {
     description = "TestKit-driven build-time integration tests for the Bugsee Android Gradle plugin."
     group = "verification"
@@ -252,6 +293,25 @@ tasks.register<Test>("integrationTest") {
     inputs.files(fileTree(layout.projectDirectory.dir("compose-compiler-plugin/build/integrationTest/compose-plugin-repo")) { include("**/*.jar") })
         .withPropertyName("composePluginJars").withPathSensitivity(PathSensitivity.NONE)
     useJUnit()
+    providers.gradleProperty("bugsee.it.shard").orNull?.takeIf { it.isNotBlank() }?.let { raw ->
+        val shard = raw.toIntOrNull()?.takeIf { it in 1..integrationShardCount }
+            ?: throw GradleException("-Pbugsee.it.shard must be an integer from 1 to $integrationShardCount, got '$raw'")
+        if (shard < integrationShardCount) integrationShards[shard - 1].forEach { filter.includeTestsMatching(it) }
+        else integrationShards.flatten().forEach { filter.excludeTestsMatching(it) }
+        // The workflow passes its matrix size. If it differs from the shards defined above, the catch-all (last) shard
+        // would not run, or would run twice: tests would silently drop out of CI. Refuse instead.
+        providers.gradleProperty("bugsee.it.shardCount").orNull?.let { declared ->
+            if (declared.toIntOrNull() != integrationShardCount) {
+                throw GradleException(
+                    "The PR workflow runs $declared integration shard(s) but build.gradle.kts defines " +
+                        "$integrationShardCount (the integrationShards lists plus the catch-all). Make the `integration` " +
+                        "matrix in .github/workflows/pr.yml list shards 1..$integrationShardCount."
+                )
+            }
+        }
+        // A different shard is different work: never reuse another shard's up-to-date result.
+        inputs.property("bugsee.it.shard", raw)
+    }
     // Forward the local stub-SDK Maven repo path so the fixture's
     // `settings.gradle.kts` can wire it via
     // `repositoriesMode { … repositories { maven { url = … } } }`.
