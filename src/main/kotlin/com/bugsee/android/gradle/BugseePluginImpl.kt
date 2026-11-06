@@ -110,7 +110,7 @@ internal class BugseePluginImpl(
 
     fun apply(project: Project) {
         // First thing: a readable failure on an unsupported AGP/Gradle (issue #60), before any
-        // other Gradle/AGP API is touched. AGP not yet applied: the AGP half is skipped.
+        // other Gradle/AGP API is touched. AGP not yet applied: the AGP half is skipped here and re-run once the Android plugin applies.
         MinimumVersions.checkProject(project)
 
         val extension = project.extensions.create(PLUGIN_NAME, BugseePluginExtension::class.java)
@@ -240,6 +240,10 @@ internal class BugseePluginImpl(
             project.pluginManager.withPlugin(androidPluginId) {
                 if (androidWired) return@withPlugin // defensive: run once
                 androidWired = true
+                // The check in apply() skips its AGP half when Bugsee is listed before the Android
+                // plugin (no `android` extension yet). Run it again now that AGP is applied, so the
+                // readable message (#60) covers both orders instead of a linkage error in wiring.
+                MinimumVersions.checkProject(project)
                 wireAndroidComponents(project)
             }
         }
