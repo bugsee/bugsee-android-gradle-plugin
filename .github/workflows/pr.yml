@@ -1,7 +1,7 @@
 name: PR
 
-# DIAGNOSTIC, DO NOT MERGE. Reproduces the 4.1.1 production-deploy failure (ComposePluginOrderTest, RELEASE=true)
-# on a hosted runner and keeps the reports, which the production workflow does not upload.
+# DIAGNOSTIC, DO NOT MERGE. Runs the exact production Build step (RELEASE=true) WITH the harness fix from the
+# fix/forward-release-to-fixture-builds branch merged in, and keeps the reports.
 on:
   pull_request:
     branches: [main, release]
@@ -10,35 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  # The integration shards with RELEASE=true: which of them fails shows which tests run before the failing
-  # Compose tests in the same TestKit home.
-  shard:
-    name: diag shard ${{ matrix.shard }} RELEASE=true
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    env:
-      RELEASE: "true"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-build
-      - name: TestKit shard with RELEASE=true
-        continue-on-error: true
-        run: bash -xe ./scripts/build.sh --integration ${{ matrix.shard }} 4
-      - name: Keep the evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: diag-shard-${{ matrix.shard }}
-          path: build/test-results/integrationTest/
-          retention-days: 2
-
   # Exactly what the production Build step runs.
   production-build:
-    name: diag production Build step (build.sh --full, RELEASE=true)
+    name: diag production Build step WITH the fix (build.sh --full, RELEASE=true)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -53,6 +27,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: diag-production-build
+          name: diag-production-build-with-fix
           path: build/test-results/integrationTest/
           retention-days: 2
