@@ -7,7 +7,7 @@ secrets and the release gate follow the same conventions as
 
 | Workflow | Trigger | Environment | `RELEASE` | What it does |
 |---|---|---|---|---|
-| `pr.yml` | PR → `main` / `release` | — | `false` | `scripts/build.sh --full` — unit + TestKit integration tests + Compose variant matrix |
+| `pr.yml` (`unit`, `compose`, `integration shard n/N`, `build.sh --full`) | PR → `main` / `release` | — | `false` | `scripts/build.sh --full` as parallel jobs: `unit` (`--unit`: root build + buildSrc tests, then the real-binary CLI contract tests), `compose` (`--compose`: Compose variant matrix) and the TestKit suite in `integration` shards (`--integration <n>`). The `build.sh --full` job is their aggregate and keeps the check name; it fails unless every piece succeeded |
 | `codeql.yml` | PR / push `main`, `release`; weekly | — | — | CodeQL advanced setup: `java-kotlin` (manual `gradlew assemble -x test`), `actions`, `c-cpp`. Replaces the default setup, which must be turned off |
 | `pr.yml` (`integration (gradle …, agp …, kotlin …)`) | PR → `main` / `release` | — | `false` | The TestKit suite on newer toolchains, one job per row of the `toolchain` matrix (Gradle 9.0.0 / AGP 8.13.2 / Kotlin 2.2.20, Gradle 9.8.0 / AGP 9.4.1 / Kotlin 2.3.20) |
 | `pr.yml` (`windows`) | PR → `main` / `release` | — | `false` | On `windows-latest`: `CliBinaryResolverTest`, `CliUploaderTest`, and `BuildTypeGatingTest` + `ToolchainMatrixTest` as the TestKit smoke (pre-built plugin jar, no `clean`). Not run off Windows, so do not make it a required check until it has been seen green |
@@ -16,6 +16,29 @@ secrets and the release gate follow the same conventions as
 | `deploy-production.yml` | manual dispatch | `production` | `true` | `build.sh --full` + `deploy.sh` — signed release into a closed Central staging deployment |
 | `claude-review.yml` | PR opened / updated / ready / labeled | — | — | Claude PR review (`CLAUDE_CODE_OAUTH_TOKEN`), posted as review comments |
 | `bugseeai.yml` | issue / PR comment, PR review, issue opened or assigned | — | — | Thin caller: all logic lives in `bugsee/control-repo` |
+
+## Parallel pieces of `build.sh --full`
+
+`build.sh --full` takes about 35 minutes on one hosted runner: the TestKit suite alone is about 24, the Compose
+variant matrix about 6, the rest unit tests, compilation and the real-binary contract tests. `pr.yml` therefore
+runs it as parallel jobs (each pays about 4 minutes of checkout, setup and compilation first, which is why the
+suite is cut into four shards and not two):
+
+| Job | `scripts/build.sh` | Covers |
+|---|---|---|
+| `unit tests + buildSrc + CLI contract` | `--unit` | root `build` (unit tests, plugin validation, docs jar) + `-p buildSrc test`, then `CliUploaderRealBinaryTest` / `CliNoProxyContractTest` against the real CLI |
+| `compose-compiler-plugin variants` | `--compose` | `:compose-compiler-plugin:build` (the variant matrix) |
+| `integration shard n/N` | `--integration <n> <N>` | shard `n` of the TestKit suite on the declared minimums |
+| `build.sh --full` | — | aggregate of the three above (`needs`, `if: always()`); the old single check, same name |
+
+`integrationShards` in `build.gradle.kts` lists, per shard, the test classes (or single methods, for a class too big
+for one shard such as `ComposePluginOrderTest`) it runs; `-Pbugsee.it.shard=K` selects shard K. The LAST shard
+runs everything that is not listed, so a new test class or method runs in CI without anyone placing it. Each shard
+job prints its per-class times (step "Test timings"): when a shard drifts, move entries between the lists. The
+`integration` matrix in `pr.yml` must list every shard 1..N; `--integration <n> <N>` passes the matrix size and the
+build refuses to run when it differs from the number of shards in `build.gradle.kts`, so a missing job cannot
+quietly drop the catch-all shard. Without `-Pbugsee.it.shard` (local runs, `build.sh --full`, the production
+release build) the whole suite runs as before.
 
 ## Toolchain matrix
 
@@ -37,14 +60,14 @@ secrets and the release gate follow the same conventions as
 - `ToolchainMatrixTest` asserts the build really ran on the requested versions (exact resolved
   version, so a request bumped by conflict resolution, `2.2.0 -> 2.2.10`, fails).
 - The legs fetch the pinned `bugsee-cli` through `.github/actions/fetch-bugsee-cli` (shared with the
-  `test` job) and fail if `NativeMergedLibsE2ETest` was skipped.
+  `unit` job) and fail if `NativeMergedLibsE2ETest` was skipped.
 - `.gitattributes` pins `gradlew` and `*.sh` to LF (and `*.bat` to CRLF): Git for Windows would
   otherwise check them out with CRLF and bash would fail on `gradlew`.
 
 **Cost.** Each leg is a full TestKit suite plus its own dependency downloads: the TestKit Gradle home
 lives under `build/tmp/` (about 3.5 GB of caches), outside what `setup-gradle` caches, so it is
 re-downloaded on every run and too large to cache usefully. The two legs run in parallel with the
-`test` job, so wall time barely moves, but the minutes are billed. There is deliberately no
+pieces of `build.sh --full`, so wall time barely moves, but the minutes are billed. There is deliberately no
 `paths-ignore` on `pr.yml`: a workflow skipped by path filters leaves its required checks pending
 forever.
 
