@@ -24,19 +24,25 @@ internal data class ExtensionSpec(
     val registerMethodName: String,
     /** The init-provider FQN this spec replaces. Kept for diagnostics. */
     val initProviderFqn: String,
+    /**
+     * The `com.bugsee:<artifactId>` module that ships the provider (and the facade). Verified against the
+     * published 7.5.0 AARs: each extension artifact carries exactly this one provider, so a module on the
+     * variant's runtime classpath says which providers the manifest will contain, without the manifest.
+     */
+    val artifactId: String,
 ) {
     companion object {
         /** Every SDK extension whose provider the plugin may consolidate. */
         val KNOWN: List<ExtensionSpec> = listOf(
-            known("com.bugsee.library.BugseeFeedbackInitProvider", "Feedback"),
-            known("com.bugsee.library.BugseeRemotingInitProvider", "Remoting"),
-            known("com.bugsee.library.compose.BugseeComposeInitProvider", "Compose"),
-            known("com.bugsee.library.BugseeNdkInitProvider", "Ndk"),
-            known("com.bugsee.library.BugseeOkHttpInitProvider", "OkHttp"),
-            known("com.bugsee.library.BugseeKtor2InitProvider", "Ktor2"),
-            known("com.bugsee.library.BugseeKtor3InitProvider", "Ktor3"),
-            known("com.bugsee.library.BugseeCronetInitProvider", "Cronet"),
-            known("com.bugsee.library.BugseeLeakInitProvider", "Leak"),
+            known("com.bugsee.library.BugseeFeedbackInitProvider", "Feedback", "bugsee-android-feedback"),
+            known("com.bugsee.library.BugseeRemotingInitProvider", "Remoting", "bugsee-android-remoting"),
+            known("com.bugsee.library.compose.BugseeComposeInitProvider", "Compose", "bugsee-android-compose"),
+            known("com.bugsee.library.BugseeNdkInitProvider", "Ndk", "bugsee-android-ndk"),
+            known("com.bugsee.library.BugseeOkHttpInitProvider", "OkHttp", "bugsee-android-okhttp"),
+            known("com.bugsee.library.BugseeKtor2InitProvider", "Ktor2", "bugsee-android-ktor-2"),
+            known("com.bugsee.library.BugseeKtor3InitProvider", "Ktor3", "bugsee-android-ktor-3"),
+            known("com.bugsee.library.BugseeCronetInitProvider", "Cronet", "bugsee-android-cronet"),
+            known("com.bugsee.library.BugseeLeakInitProvider", "Leak", "bugsee-android-leak"),
         )
 
         private val BY_INIT_PROVIDER: Map<String, ExtensionSpec> =
@@ -46,10 +52,11 @@ internal data class ExtensionSpec(
         fun fromInitProviderFqn(fqn: String): ExtensionSpec? = BY_INIT_PROVIDER[fqn]
 
         /** The facade always lives in `com.bugsee.library`, whatever package holds the provider. */
-        private fun known(initProviderFqn: String, name: String) = ExtensionSpec(
+        private fun known(initProviderFqn: String, name: String, artifactId: String) = ExtensionSpec(
             facadeInternalName = "com/bugsee/library/Bugsee$name",
             registerMethodName = "register${name}Extension",
             initProviderFqn = initProviderFqn,
+            artifactId = artifactId,
         )
     }
 }

@@ -228,6 +228,7 @@ class ExtensionsInitClassVisitorTest {
         facadeInternalName = recordingRegisterInternal,
         registerMethodName = registerMethodName,
         initProviderFqn = "test.fake.$registerMethodName.Provider",
+        artifactId = "test-fake-$registerMethodName",
     )
 
     /** Collects names of all INVOKESTATIC calls to the recording register inside `initializeExtensions()`. */

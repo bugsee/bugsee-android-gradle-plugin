@@ -1,5 +1,6 @@
 package com.bugsee.android.gradle.integration
 
+import com.bugsee.android.gradle.integration.harness.FakeBugseeRepo
 import com.bugsee.android.gradle.integration.harness.FixtureProject
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.Assert.assertEquals
@@ -38,6 +39,10 @@ class BugseeManifestOptimizeExtensionsTest {
     @get:Rule
     val temp = TemporaryFolder()
 
+    /** Fake extension modules (feedback + remoting) on the runtime classpath: what the plugin consolidates. */
+    private val fakeRepo by lazy { FakeBugseeRepo.create(temp.newFolder("fake-repo"), version = "99.0.0", withCore = false) }
+    private fun extensions() = arrayOf("-PbugseeFixtureExtensions=feedback,remoting", "-PbugseeFakeSdkRepo=${fakeRepo.absolutePath}")
+
     private val feedbackProviderFqn = "com.bugsee.library.BugseeFeedbackInitProvider"
     private val remotingProviderFqn = "com.bugsee.library.BugseeRemotingInitProvider"
 
@@ -55,6 +60,7 @@ class BugseeManifestOptimizeExtensionsTest {
         val result = fixture.buildTasks(
             tasks = listOf(":app:assembleDebug"),
             tier = "STANDARD",
+            *extensions(),
             // No `bugseeFixtureOptimizeExtensions` override → DSL
             // default kicks in (true).
         )
@@ -92,6 +98,7 @@ class BugseeManifestOptimizeExtensionsTest {
         val result = fixture.buildTasks(
             tasks = listOf(":app:assembleDebug"),
             tier = "STANDARD",
+            *extensions(),
             "-PbugseeFixtureOptimizeExtensions=false",
         )
         assertTrue(
@@ -140,6 +147,7 @@ class BugseeManifestOptimizeExtensionsTest {
         val result = fixture.buildTasks(
             tasks = listOf(":app:assembleDebug"),
             tier = "STANDARD",
+            *extensions(),
         )
         assertTrue(
             "build must succeed",
@@ -213,6 +221,7 @@ class BugseeManifestOptimizeExtensionsTest {
         val result = fixture.buildTasks(
             tasks = listOf(":app:assembleDebug"),
             tier = "STANDARD",
+            *extensions(),
             "-PbugseeFixtureInitProvider=hook",
         )
         assertEquals(TaskOutcome.SUCCESS, result.task(":app:assembleDebug")?.outcome)
@@ -240,7 +249,7 @@ class BugseeManifestOptimizeExtensionsTest {
     fun build_fails_naming_the_providers_when_the_hook_is_missing() {
         val dir = temp.newFolder("no-hook")
         val fixture = FixtureProject.materialize("app-startup-tracing", dir)
-        val result = fixture.buildAndFail("STANDARD", "-PbugseeFixtureInitProvider=nohook")
+        val result = fixture.buildAndFail("STANDARD", *extensions(), "-PbugseeFixtureInitProvider=nohook")
 
         assertTrue(result.output, result.output.contains("has no initializeExtensions()V"))
         assertTrue(result.output, result.output.contains(feedbackProviderFqn))
