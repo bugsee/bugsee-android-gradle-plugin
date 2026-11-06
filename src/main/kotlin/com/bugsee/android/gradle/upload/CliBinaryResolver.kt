@@ -75,6 +75,10 @@ internal object CliBinaryResolver {
      * earlier release uploaded. (Needs the appserver support, bugsee-appserver#65-#67;
      * against an older server the CLI behaves as 0.8.0.)
      *
+     * `0.9.0` is the current release. The plugin uses none of its new surface
+     * (Unity portable-pdb upload); it ships for the Windows `update` cleanup and
+     * the panic exit-code mapping (1 before any request, 50 after one: no fallback).
+     *
      * This is the version the plugin downloads. Keeping the CLI current is
      * the CLI's own job: once a binary is on disk, the plugin invokes
      * `bugsee-cli update --max-age 12h`, which discovers the newest
@@ -82,7 +86,7 @@ internal object CliBinaryResolver {
      * verifies, and self-replaces in place — all throttled and best-effort.
      * The plugin no longer re-implements any version discovery.
      */
-    const val DEFAULT_VERSION: String = "0.8.1"
+    const val DEFAULT_VERSION: String = "0.9.0"
 
     /** Lowest CLI whose `debug-files upload --type elf` accepts a directory of libraries. */
     const val ELF_DIRECTORY_MIN_VERSION: String = "0.8.0"
