@@ -224,8 +224,8 @@ class CliBinaryResolverTest {
 
     // ── floor bump ───────────────────────────────────────────────────
 
-    @Test fun `default floor version is 0_8_1`() {
-        // The pinned download floor — must be >= 0.8.1: it replaces a stored symbol
+    @Test fun `default floor version is 0_9_0`() {
+        // The pinned download floor — must be >= 0.8.1 (now 0.9.0): it replaces a stored symbol
         // table with DWARF without --force (bugsee-cli#78), on top of 0.8.0 (the first
         // CLI whose `--type elf` takes a directory, merged_native_libs, bugsee-cli#69),
         // and covers 0.7.12, which uploads AGP SYMBOL_TABLE `.so.sym` NDK symbols
@@ -234,7 +234,7 @@ class CliBinaryResolverTest {
         // is rolled back, the pack / upload-build gate tests above shift with
         // it — this pins the intended floor explicitly. Keeping the CLI current
         // beyond this floor is delegated to the CLI's own `update --max-age 12h`.
-        assertEquals("0.8.1", CliBinaryResolver.DEFAULT_VERSION)
+        assertEquals("0.9.0", CliBinaryResolver.DEFAULT_VERSION)
     }
 
     @Test fun `elf directory support follows the pinned version, trusting a custom cliPath`() {
