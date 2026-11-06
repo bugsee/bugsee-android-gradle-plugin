@@ -14,7 +14,8 @@ secrets and the release gate follow the same conventions as
 | `scheduled.yml` | weekly + manual | — | `false` | Compose variant matrix on the newest stable patch of each claimed Kotlin line (2.1 - 2.4) and the newest stable overall (`-Pbugsee.matrix.extraKotlin`); fails for a Kotlin line no variant claims, or when a lookup finds nothing |
 | `deploy-staging.yml` | push to `main` | `staging` | `false` | `build.sh` + `deploy.sh` — `<version>-SNAPSHOT` to the Central snapshot repository, unsigned |
 | `deploy-production.yml` | manual dispatch | `production` | `true` | `build.sh --full` + `deploy.sh` — signed release into a closed Central staging deployment |
-| `claude.yml` | `@claude` mention | — | — | Claude answers on the issue or PR |
+| `claude-review.yml` | PR opened / updated / ready / labeled | — | — | Claude PR review (`CLAUDE_CODE_OAUTH_TOKEN`), posted as review comments |
+| `bugseeai.yml` | issue / PR comment, PR review, issue opened or assigned | — | — | Thin caller: all logic lives in `bugsee/control-repo` |
 
 ## Toolchain matrix
 
@@ -129,7 +130,7 @@ Staging has no signing secrets because SNAPSHOT builds are never signed.
 
 | Name | Purpose |
 |---|---|
-| `CLAUDE_CODE_OAUTH_TOKEN` | Used by `claude.yml`. Inherited from the `bugsee` org secret (visibility: all repositories). Do not add a repository-level copy: it would shadow the org value and go stale when the org token is rotated. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Used by `claude-review.yml`. Inherited from the `bugsee` org secret (visibility: all repositories). Do not add a repository-level copy: it would shadow the org value and go stale when the org token is rotated. |
 
 ### What goes in `SIGNING_KEY`
 
@@ -157,9 +158,5 @@ present.
 
 ## Known gaps
 
-- **The real-binary uploader lane is not in CI.** `scripts/integration-test.sh`
-  builds `bugsee-cli` from a sibling checkout with `cargo`, and the workflows
-  provision neither. `CliUploaderRealBinaryTest` `Assume`-skips without a
-  binary, so CI is green but does not exercise it.
 - **`release-3`** (the 3.x line, last at 3.6) has no workflows. Run
   `scripts/deploy.sh` locally if it ever needs another release.
