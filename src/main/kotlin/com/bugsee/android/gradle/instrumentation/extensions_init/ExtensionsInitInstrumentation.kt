@@ -6,9 +6,8 @@ import com.android.build.api.variant.Variant
 import com.bugsee.android.gradle.BugseePluginExtension
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
 import com.bugsee.android.gradle.instrumentation.Instrumentation
-import com.bugsee.android.gradle.manifest.BugseeManifestTask
 import org.gradle.api.Project
-import org.gradle.api.tasks.TaskProvider
+import org.gradle.api.provider.Provider
 
 /**
  * Bytecode instrumentation that rewrites `BugseeInitProvider.initializeExtensions()`
@@ -19,14 +18,13 @@ import org.gradle.api.tasks.TaskProvider
  *   1. Presence of the core Bugsee SDK dependency.
  *   2. `bugsee { optimizeExtensionsLoading = true }` (default: `true`).
  *
- * The instrumentation reads the detected-extensions file produced by
- * [BugseeManifestTask] — the [TaskProvider] is passed in at construction
- * time by [com.bugsee.android.gradle.BugseePluginImpl] so the visitor's
- * parameter property carries the correct task dependency.
+ * The set of extensions comes from the variant's runtime classpath
+ * ([ExtensionsOnClasspath]), the same provider the manifest task strips by, so the two agree
+ * and no ordering between them is needed.
  */
 internal class ExtensionsInitInstrumentation(
     private val pluginExtension: BugseePluginExtension,
-    private val manifestTaskProvider: TaskProvider<BugseeManifestTask>,
+    private val extensionProviders: Provider<Set<String>>,
 ) : Instrumentation {
 
     override val name: String = "ExtensionsInit"
@@ -49,9 +47,7 @@ internal class ExtensionsInitInstrumentation(
             ExtensionsInitClassVisitorFactory::class.java,
             InstrumentationScope.ALL,
         ) { params ->
-            params.detectedExtensionsFile.set(
-                manifestTaskProvider.flatMap { it.detectedExtensions }
-            )
+            params.providers.set(extensionProviders)
             params.excludes.set(excludes)
         }
         // The injected try/catch blocks introduce new stack frames, so
