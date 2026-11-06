@@ -34,7 +34,7 @@ abstract class ExtensionsInitClassVisitorFactory :
     //
     // `isInstrumentable` filters to a single class (`BugseeInitProvider`),
     // so `createClassVisitor` runs at most once per build — re-reading
-    // the detection file there is essentially free.
+    // the provider set there is essentially free.
 
     override fun createClassVisitor(
         classContext: ClassContext,
@@ -63,16 +63,8 @@ abstract class ExtensionsInitClassVisitorFactory :
     }
 
     private fun loadSpecs(): List<ExtensionSpec> {
-        val fileProvider = parameters.get().detectedExtensionsFile
-        if (!fileProvider.isPresent) return emptyList()
-        val file = fileProvider.get().asFile
-        if (!file.isFile) return emptyList()
-        return file.readLines()
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .mapNotNull { ExtensionSpec.fromInitProviderFqn(it) }
-            .toList()
+        val wanted = parameters.get().providers.getOrElse(emptySet())
+        return ExtensionSpec.KNOWN.filter { it.initProviderFqn in wanted }
     }
 
     companion object {

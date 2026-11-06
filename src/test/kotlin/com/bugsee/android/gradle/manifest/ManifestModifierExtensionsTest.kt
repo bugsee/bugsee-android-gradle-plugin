@@ -241,4 +241,45 @@ class ManifestModifierExtensionsTest {
         f.writeText(content)
         return f
     }
+
+    @Test
+    fun `with an only-set, strips just those providers and leaves the other known ones in place`() {
+        val manifest = writeManifest("""
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application>
+                    <provider android:name="com.bugsee.library.BugseeFeedbackInitProvider"
+                        android:authorities="a.feedback" android:exported="false" />
+                    <provider android:name="com.bugsee.library.BugseeNdkInitProvider"
+                        android:authorities="a.ndk" android:exported="false" />
+                </application>
+            </manifest>
+        """.trimIndent())
+
+        val removed = ManifestModifier.removeExtensionInitProviders(
+            manifest,
+            only = setOf("com.bugsee.library.BugseeNdkInitProvider"),
+        )
+
+        assertEquals(listOf("com.bugsee.library.BugseeNdkInitProvider"), removed)
+        val updated = manifest.readText()
+        assertFalse("the named provider is stripped", updated.contains("BugseeNdkInitProvider"))
+        assertTrue("an unnamed known provider stays and registers itself", updated.contains("BugseeFeedbackInitProvider"))
+    }
+
+    @Test
+    fun `with an empty only-set nothing is stripped`() {
+        val manifest = writeManifest("""
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                <application>
+                    <provider android:name="com.bugsee.library.BugseeNdkInitProvider"
+                        android:authorities="a.ndk" android:exported="false" />
+                </application>
+            </manifest>
+        """.trimIndent())
+
+        assertEquals(emptyList<String>(), ManifestModifier.removeExtensionInitProviders(manifest, only = emptySet()))
+        assertTrue(manifest.readText().contains("BugseeNdkInitProvider"))
+    }
 }

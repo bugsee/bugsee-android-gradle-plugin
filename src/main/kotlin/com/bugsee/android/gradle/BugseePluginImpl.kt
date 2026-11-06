@@ -17,6 +17,7 @@ import com.bugsee.android.gradle.instrumentation.warnIfProjectDependenciesNotIns
 import com.bugsee.android.gradle.instrumentation.InstrumentationRegistrar
 import com.bugsee.android.gradle.instrumentation.Instrumentation
 import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsInitInstrumentation
+import com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionsOnClasspath
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
 import com.bugsee.android.gradle.instrumentation.SdkVersionAlignment
 import com.bugsee.android.gradle.instrumentation.DependencyDetector
@@ -547,7 +548,13 @@ internal class BugseePluginImpl(
             // before the manifest task, so provider-stripping and the
             // ExtensionsInit injection share one gate.)
             if (instrumentationGloballyEnabled) {
-                val extensionsInit = ExtensionsInitInstrumentation(effective, manifestTaskProvider)
+                // One provider set drives both the strip and the injection (see ExtensionsOnClasspath).
+                // Below the SDK's initializeExtensions() floor the set is empty: the strip is disarmed there, and the
+                // rewrite, which would otherwise fail on a BugseeInitProvider without the hook, must be too.
+                val extensionProviders = ExtensionsOnClasspath.providersFor(variant.runtimeConfiguration)
+                    .map { ExtensionStripGate.consolidatable(it, declaredSdkVersion) }
+                manifestTaskProvider.configure { it.consolidatedProviders.set(extensionProviders) }
+                val extensionsInit = ExtensionsInitInstrumentation(effective, extensionProviders)
                 val extras = listOf<Instrumentation>(extensionsInit)
                 // Core-only instrumentations must also apply when the plugin
                 // is going to auto-add the core SDK: at this point that

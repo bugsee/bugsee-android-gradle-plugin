@@ -52,6 +52,17 @@ dependencyResolutionManagement {
                 }
             }
         }
+        // Fake, published-shape Bugsee AARs (FakeBugseeRepo): the extension modules whose providers the plugin consolidates.
+        val fakeRepo = settings.providers.gradleProperty("bugseeFakeSdkRepo").orNull
+        if (fakeRepo != null) {
+            maven {
+                url = uri(fakeRepo)
+                metadataSources {
+                    mavenPom()
+                    artifact()
+                }
+            }
+        }
         google()
         mavenCentral()
     }

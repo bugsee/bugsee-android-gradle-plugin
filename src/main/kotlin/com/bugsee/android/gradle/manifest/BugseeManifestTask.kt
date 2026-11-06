@@ -3,6 +3,7 @@ package com.bugsee.android.gradle.manifest
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputFile
@@ -45,6 +46,15 @@ abstract class BugseeManifestTask : DefaultTask() {
      */
     @get:Input
     abstract val extensionsInitRegistered: Property<Boolean>
+
+    /**
+     * The init providers the `BugseeInitProvider.initializeExtensions()` rewrite will register, from the
+     * variant's runtime classpath. Only these are stripped; any other known provider stays in the
+     * manifest and registers itself as a ContentProvider. Empty by default: nothing is stripped unless it is told
+     * what will take over.
+     */
+    @get:Input
+    abstract val consolidatedProviders: SetProperty<String>
 
     init {
         extensionsInitRegistered.convention(false)
@@ -175,6 +185,9 @@ abstract class BugseeManifestTask : DefaultTask() {
 
         if (!ManifestModifier.addBuildUuidToManifest(outputFile, buildUUID)) {
             logger.warn("Bugsee: <application> section not found in manifest: ${outputFile.path}")
+            if (optimizeExtensionsLoading.getOrElse(true) && extensionsInitRegistered.get()) {
+                warnRegisteredWithoutProvider(emptySet())
+            }
             writeDetectedExtensions(detectedFile, emptyList())
             return
         }
@@ -182,7 +195,7 @@ abstract class BugseeManifestTask : DefaultTask() {
         val allDetected = mutableListOf<String>()
         val optimize = optimizeExtensionsLoading.getOrElse(true) && extensionsInitRegistered.get()
         if (optimize) {
-            val detected = ManifestModifier.removeExtensionInitProviders(outputFile)
+            val detected = ManifestModifier.removeExtensionInitProviders(outputFile, consolidatedProviders.get())
             if (isDebug && detected.isNotEmpty()) {
                 logger.warn(
                     "Bugsee: Stripped ${detected.size} extension provider(s) from " +
@@ -243,7 +256,7 @@ abstract class BugseeManifestTask : DefaultTask() {
                     logger.warn("Bugsee: <application> section not found in nested manifest: ${nestedManifest.path}")
                 }
                 if (optimize) {
-                    val nestedDetected = ManifestModifier.removeExtensionInitProviders(nestedManifest)
+                    val nestedDetected = ManifestModifier.removeExtensionInitProviders(nestedManifest, consolidatedProviders.get())
                     // De-duplicate across split copies: each split typically
                     // mirrors the same provider set, so we want the union of
                     // FQNs (not a list with N copies of each name).
@@ -254,9 +267,30 @@ abstract class BugseeManifestTask : DefaultTask() {
             }
         }
 
+        if (optimize) warnRegisteredWithoutProvider(allDetected.toSet())
         writeDetectedExtensions(detectedFile, allDetected)
 
         if (isDebug) logger.warn("Bugsee: Manifest task complete")
+    }
+
+    /**
+     * [consolidatedProviders] are the extensions on the variant's runtime classpath; `BugseeInitProvider` registers
+     * ALL of them (the rewrite runs before this task and cannot see the merged manifest). One whose provider is not
+     * in the merged manifest was therefore not stripped here but is registered anyway: the app removed the provider
+     * (`tools:node="remove"`), or the resolved AAR names its provider differently from [ExtensionSpec]. Registration is
+     * idempotent in the SDK, so a surviving provider does no harm; a removed one no longer keeps the extension off.
+     * Say so, with the way to get exact manifest control back.
+     */
+    private fun warnRegisteredWithoutProvider(stripped: Set<String>) {
+        val unmatched = consolidatedProviders.get().filter { it !in stripped }
+        if (unmatched.isEmpty()) return
+        logger.warn(
+            "Bugsee: variant ${variantName.get()}: the module(s) for ${unmatched.joinToString(", ")} are on the " +
+                "classpath but the provider(s) are not in the merged manifest (removed with tools:node=\"remove\"?). " +
+                "BugseeInitProvider still registers those extension(s), because the registration is decided before " +
+                "the manifest is merged. To keep one off, drop its module from the variant; to let the manifest alone " +
+                "decide, set optimizeExtensionsLoading = false in the bugsee {} block."
+        )
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.bugsee.android.gradle.manifest
 
 import com.bugsee.android.gradle.instrumentation.BugseeSdkVersion
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -194,5 +195,38 @@ class ExtensionStripGateTest {
         assertFalse(ExtensionStripGate.isBelowFloor(null))
         val msg = ExtensionStripGate.belowFloorWarning("7.0.0-beta10")
         assertTrue(msg, "7.0.0-beta10" in msg && "optimizeExtensionsLoading" in msg)
+    }
+
+    // The one provider set both the strip and the rewrite read: empty below the floor, so they are disarmed together.
+
+    private val ndk = "com.bugsee.library.BugseeNdkInitProvider"
+
+    @Test
+    fun `consolidatable is empty below the hook floor`() {
+        assertEquals(emptySet<String>(), ExtensionStripGate.consolidatable(setOf(ndk), BugseeSdkVersion.parse("7.0.0-beta10")))
+    }
+
+    @Test
+    fun `consolidatable passes the set through at or above the floor`() {
+        assertEquals(setOf(ndk), ExtensionStripGate.consolidatable(setOf(ndk), CURRENT_SDK))
+        assertEquals(
+            setOf(ndk),
+            ExtensionStripGate.consolidatable(setOf(ndk), ExtensionStripGate.MIN_SDK_VERSION_WITH_EXTENSIONS_INIT),
+        )
+    }
+
+    /** An unknown declared version does not disarm it: same deliberate trade-off as [ExtensionStripGate.shouldStrip]. */
+    @Test
+    fun `consolidatable passes the set through when the version is unknown`() {
+        assertEquals(setOf(ndk), ExtensionStripGate.consolidatable(setOf(ndk), null))
+    }
+
+    @Test
+    fun `consolidatable agrees with shouldStrip about the floor`() {
+        for (v in listOf("7.0.0-beta10", "7.0.0-beta11", "7.5.0", null)) {
+            val version = v?.let { BugseeSdkVersion.parse(it) }
+            val stripArmed = ExtensionStripGate.shouldStrip(true, true, emptySet(), version)
+            assertEquals("floor decision for $v", stripArmed, ExtensionStripGate.consolidatable(setOf(ndk), version).isNotEmpty())
+        }
     }
 }

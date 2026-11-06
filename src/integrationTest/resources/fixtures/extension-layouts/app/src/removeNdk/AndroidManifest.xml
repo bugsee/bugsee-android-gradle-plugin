@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application android:label="fixture" android:allowBackup="false">
+        <!-- The app switches the NDK extension's ContentProvider off the standard Android way. -->
+        <provider
+            android:name="com.bugsee.library.BugseeNdkInitProvider"
+            tools:node="remove" />
+    </application>
+</manifest>

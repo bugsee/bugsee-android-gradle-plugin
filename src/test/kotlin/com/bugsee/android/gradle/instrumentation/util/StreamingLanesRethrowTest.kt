@@ -89,7 +89,7 @@ class StreamingLanesRethrowTest {
 
     @Test
     fun `extensions-init lane still re-throws`() {
-        val spec = ExtensionSpec("com/bugsee/library/Facade", "register", "com.bugsee.library.XInitProvider")
+        val spec = ExtensionSpec("com/bugsee/library/Facade", "register", "com.bugsee.library.XInitProvider", "bugsee-android-x")
         assertStillFails(jsrClass("initializeExtensions", "()V", false)) {
             ExtensionsInitClassVisitor(Opcodes.ASM9, it, listOf(spec), "fixtures.Odd")
         }
