@@ -185,6 +185,9 @@ abstract class BugseeManifestTask : DefaultTask() {
 
         if (!ManifestModifier.addBuildUuidToManifest(outputFile, buildUUID)) {
             logger.warn("Bugsee: <application> section not found in manifest: ${outputFile.path}")
+            if (optimizeExtensionsLoading.getOrElse(true) && extensionsInitRegistered.get()) {
+                warnRegisteredWithoutProvider(emptySet())
+            }
             writeDetectedExtensions(detectedFile, emptyList())
             return
         }
@@ -264,9 +267,30 @@ abstract class BugseeManifestTask : DefaultTask() {
             }
         }
 
+        if (optimize) warnRegisteredWithoutProvider(allDetected.toSet())
         writeDetectedExtensions(detectedFile, allDetected)
 
         if (isDebug) logger.warn("Bugsee: Manifest task complete")
+    }
+
+    /**
+     * [consolidatedProviders] are the extensions on the variant's runtime classpath; `BugseeInitProvider` registers
+     * ALL of them (the rewrite runs before this task and cannot see the merged manifest). One whose provider is not
+     * in the merged manifest was therefore not stripped here but is registered anyway: the app removed the provider
+     * (`tools:node="remove"`), or the resolved AAR names its provider differently from [ExtensionSpec]. Registration is
+     * idempotent in the SDK, so a surviving provider does no harm; a removed one no longer keeps the extension off.
+     * Say so, with the way to get exact manifest control back.
+     */
+    private fun warnRegisteredWithoutProvider(stripped: Set<String>) {
+        val unmatched = consolidatedProviders.get().filter { it !in stripped }
+        if (unmatched.isEmpty()) return
+        logger.warn(
+            "Bugsee: variant ${variantName.get()}: the module(s) for ${unmatched.joinToString(", ")} are on the " +
+                "classpath but the provider(s) are not in the merged manifest (removed with tools:node=\"remove\"?). " +
+                "BugseeInitProvider still registers those extension(s), because the registration is decided before " +
+                "the manifest is merged. To keep one off, drop its module from the variant; to let the manifest alone " +
+                "decide, set optimizeExtensionsLoading = false in the bugsee {} block."
+        )
     }
 
     /**

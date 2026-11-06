@@ -46,16 +46,18 @@ internal object FakeBugseeRepo {
 
     /**
      * @param version the version every artifact is published under; extensions depend on the core at the same version.
+     * @param coreHook `false` publishes a core whose `BugseeInitProvider` has NO `initializeExtensions()` (an SDK older than
+     *   7.0.0-beta11, the release that introduced the hook).
      * @param withCore `false` publishes only the extensions, for a build whose core SDK comes from somewhere else
      *   (the stub SDK repo, at the same [version]).
      */
-    fun create(dir: File, version: String = VERSION, withCore: Boolean = true): File {
+    fun create(dir: File, version: String = VERSION, withCore: Boolean = true, coreHook: Boolean = true): File {
         dir.mkdirs()
         if (withCore) {
             publishAar(
                 dir, version, "bugsee-android", "com.bugsee.fake.core",
                 providers = listOf(CORE_PROVIDER),
-                classes = mapOf(CORE_PROVIDER.replace('.', '/') to coreInitProvider()),
+                classes = mapOf(CORE_PROVIDER.replace('.', '/') to coreInitProvider(coreHook)),
                 deps = emptyList(),
             )
         }
@@ -149,7 +151,7 @@ $providerXml
     }
 
     /** The core provider: the empty `initializeExtensions()V` the plugin rewrites. */
-    private fun coreInitProvider(): ByteArray = ClassWriter(0).run {
+    private fun coreInitProvider(hook: Boolean): ByteArray = ClassWriter(0).run {
         val name = CORE_PROVIDER.replace('.', '/')
         visit(Opcodes.V11, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null)
         visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
@@ -157,8 +159,10 @@ $providerXml
             visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
             visitInsn(Opcodes.RETURN); visitMaxs(1, 1); visitEnd()
         }
-        visitMethod(0, "initializeExtensions", "()V", null, null).apply {
-            visitCode(); visitInsn(Opcodes.RETURN); visitMaxs(0, 1); visitEnd()
+        if (hook) {
+            visitMethod(0, "initializeExtensions", "()V", null, null).apply {
+                visitCode(); visitInsn(Opcodes.RETURN); visitMaxs(0, 1); visitEnd()
+            }
         }
         visitEnd(); toByteArray()
     }

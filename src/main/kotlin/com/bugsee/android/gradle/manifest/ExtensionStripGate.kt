@@ -47,6 +47,18 @@ internal object ExtensionStripGate {
         sdkVersion != null && sdkVersion < MIN_SDK_VERSION_WITH_EXTENSIONS_INIT
 
     /**
+     * The extension providers the strip AND the `initializeExtensions()` rewrite may act on: [onClasspath] (the
+     * extension modules in the variant's resolved runtime classpath) unless the declared SDK is below
+     * [MIN_SDK_VERSION_WITH_EXTENSIONS_INIT], where it is EMPTY.
+     *
+     * Both halves read this one set, so the floor disarms them together. Without it only the strip knew the floor:
+     * below it the providers stayed in the manifest, but the rewrite was still handed the classpath set and failed the
+     * build because that SDK's `BugseeInitProvider` has no hook to rewrite.
+     */
+    fun consolidatable(onClasspath: Set<String>, sdkVersion: BugseeSdkVersion?): Set<String> =
+        if (isBelowFloor(sdkVersion)) emptySet() else onClasspath
+
+    /**
      * `true` when the only reason [shouldStrip] says no is the SDK being below the floor:
      * every other precondition holds, so the user would otherwise get no hint why the
      * optimisation is off.

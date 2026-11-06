@@ -60,6 +60,22 @@ class ExtensionsOnClasspathTest {
         assertEquals(emptySet<String>(), providers("com.acme:bugsee-android-ndk:1.0"))
     }
 
+    /** A constraint alone does not put a module on the classpath: it only pins the version of one that is already there. */
+    @Test
+    fun `a constraint alone is not an extension on the classpath`() {
+        publish("com.bugsee", "bugsee-android-ndk", "7.5.0")
+        val found = providers { project -> project.dependencies.constraints.add("probe", "com.bugsee:bugsee-android-ndk:7.5.0") }
+        assertEquals(emptySet<String>(), found)
+    }
+
+    /** An unresolvable dependency must not make detection throw: the other extensions are still found. */
+    @Test
+    fun `an unresolvable dependency does not break detection`() {
+        publish("com.bugsee", "bugsee-android-ndk", "7.5.0")
+        val found = providers("com.bugsee:bugsee-android-ndk:7.5.0", "com.acme:does-not-exist:1.0")
+        assertEquals(setOf(ndk), found)
+    }
+
     @Test
     fun `nothing on the classpath is nothing`() {
         assertEquals(emptySet<String>(), providers())
@@ -89,7 +105,7 @@ class ExtensionsOnClasspathTest {
         )
     }
 
-    private fun providers(vararg coordinates: String): Set<String> {
+    private fun providers(vararg coordinates: String, configure: (Project) -> Unit = {}): Set<String> {
         val project: Project = ProjectBuilder.builder().build()
         project.repositories.maven { r ->
             r.setUrl(repo.toURI())
@@ -97,6 +113,7 @@ class ExtensionsOnClasspathTest {
         }
         val config = project.configurations.create("probe")
         coordinates.forEach { project.dependencies.add("probe", it) }
+        configure(project)
         return ExtensionsOnClasspath.providersFor(config).get()
     }
 }

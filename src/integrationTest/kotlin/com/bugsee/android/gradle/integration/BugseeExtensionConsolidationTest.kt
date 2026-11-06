@@ -82,6 +82,81 @@ class BugseeExtensionConsolidationTest {
         assertTrue("Feedback is NOT registered by the rewrite (its provider is still there)", FakeBugseeRepo.registerCall(FakeBugseeRepo.FEEDBACK) !in dex)
     }
 
+    // ── the SDK floor ──────────────────────────────────────────────────
+
+    /**
+     * An SDK older than 7.0.0-beta11 has no `initializeExtensions()` to rewrite, so the strip is disarmed (with a
+     * warning) and the providers stay. The rewrite must be disarmed with it: handed the extension set anyway it would
+     * fail the build ("has no initializeExtensions()V") for a pairing the README documents as supported.
+     */
+    @Test fun an_sdk_below_the_hook_floor_keeps_its_providers_and_still_builds() {
+        val oldSdk = "7.0.0-beta10"
+        val oldRepo = FakeBugseeRepo.create(temp.newFolder("old-sdk-repo"), version = oldSdk, coreHook = false)
+        val fixture = materialize()
+        val result = fixture.buildTasks(
+            listOf(":app:assembleDebug"), null,
+            "-PbugseeLayout=library", "-PbugseeExtensions=ndk", "-PbugseeSdkVersion=$oldSdk",
+            "-PbugseeFakeSdkRepo=${oldRepo.absolutePath}",
+        )
+        assertEquals(result.output, TaskOutcome.SUCCESS, result.task(":app:assembleDebug")?.outcome)
+        assertTrue("the provider must stay: nothing will register it", manifestOf(fixture, "debug").contains(ndk.providerFqn))
+        assertTrue("nothing is injected", FakeBugseeRepo.registerCall(ndk) !in dexStrings(fixture.projectDir, "debug"))
+        assertTrue(result.output, result.output.contains("requires Bugsee SDK"))
+    }
+
+    // ── per variant ─────────────────────────────────────────────────────
+
+    /** An extension declared with `debugImplementation` is consolidated in debug only; release has no such module. */
+    @Test fun an_extension_only_in_debug_is_consolidated_only_in_debug() {
+        val fixture = materialize()
+        fixture.buildTasks(listOf(":app:assembleDebug", ":app:assembleRelease"), null, *args("debug-only", listOf(ndk)))
+        assertEquals(Observed(setOf(ndk.providerFqn), setOf(ndk.name)), observe(fixture, listOf(ndk), "debug"))
+        assertEquals(Observed(emptySet(), emptySet()), observe(fixture, emptyList(), "release"))
+        assertTrue("release must not carry the NDK provider", !manifestOf(fixture, "release").contains(ndk.providerFqn))
+    }
+
+    /** An extension declared for one product flavor is consolidated in that flavor's variant only. */
+    @Test fun an_extension_only_in_one_flavor_is_consolidated_only_there() {
+        val fixture = materialize()
+        fixture.buildTasks(listOf(":app:assembleFreeDebug", ":app:assemblePaidDebug"), null, *args("flavor", listOf(ndk)))
+        assertEquals(Observed(setOf(ndk.providerFqn), setOf(ndk.name)), observe(fixture, listOf(ndk), "freeDebug"))
+        assertEquals(Observed(emptySet(), emptySet()), observe(fixture, emptyList(), "paidDebug"))
+    }
+
+    // ── the app removes a provider ─────────────────────────────────────
+
+    /**
+     * PINS A KNOWN BEHAVIOUR CHANGE. The registration is decided from the classpath before the manifest is merged, so an
+     * extension whose provider the app removed (`tools:node="remove"`) is registered anyway while its module is on the
+     * classpath. The build says so. `optimizeExtensionsLoading = false` gives the manifest sole control again.
+     */
+    @Test fun an_extension_whose_provider_the_app_removed_is_still_registered_and_the_build_warns() {
+        val fixture = materialize()
+        val result = fixture.buildTasks(listOf(":app:assembleDebug"), null, *args("library", listOf(ndk), "-PbugseeRemoveProvider=ndk"))
+        assertTrue("the app's removal holds in the manifest", !manifestOf(fixture, "debug").contains(ndk.providerFqn))
+        assertTrue("registered by the rewrite anyway", FakeBugseeRepo.registerCall(ndk) in dexStrings(fixture.projectDir, "debug"))
+        assertTrue(result.output, result.output.contains("are not in the merged manifest"))
+        assertTrue(result.output, result.output.contains(ndk.providerFqn))
+    }
+
+    @Test fun with_the_consolidation_off_the_app_s_removal_keeps_the_extension_off_and_nothing_warns() {
+        val fixture = materialize()
+        val result = fixture.buildTasks(
+            listOf(":app:assembleDebug"), null,
+            *args("library", listOf(ndk), "-PbugseeRemoveProvider=ndk", "-PbugseeOptimize=false"),
+        )
+        assertTrue(!manifestOf(fixture, "debug").contains(ndk.providerFqn))
+        assertTrue("not registered: the manifest alone decides", FakeBugseeRepo.registerCall(ndk) !in dexStrings(fixture.projectDir, "debug"))
+        assertTrue(result.output, !result.output.contains("are not in the merged manifest"))
+    }
+
+    /** No warning in the normal case, where every consolidated provider was in the manifest. */
+    @Test fun a_normal_build_does_not_warn_about_missing_providers() {
+        val fixture = materialize()
+        val result = fixture.buildTasks(listOf(":app:assembleDebug"), null, *args("library", listOf(ndk)))
+        assertTrue(result.output, !result.output.contains("are not in the merged manifest"))
+    }
+
     // ── switches ─────────────────────────────────────────────────────────
 
     @Test fun optimization_off_keeps_every_provider_and_injects_nothing() =
@@ -98,7 +173,8 @@ class BugseeExtensionConsolidationTest {
         val args = args("library", listOf(ndk))
         fixture.buildTasks(listOf(":app:assembleDebug"), null, *args)
         val first = observe(fixture, listOf(ndk))
-        fixture.buildTasks(listOf(":app:assembleDebug"), null, *args)
+        // --rerun-tasks: every task executes again (a plain second build would mostly be UP-TO-DATE and prove little)
+        fixture.buildTasks(listOf(":app:assembleDebug"), null, *args, "--rerun-tasks")
         assertEquals(first, observe(fixture, listOf(ndk)))
         assertEquals(setOf(ndk.providerFqn) to setOf(ndk.name), first.strippedProviders to first.injected)
     }

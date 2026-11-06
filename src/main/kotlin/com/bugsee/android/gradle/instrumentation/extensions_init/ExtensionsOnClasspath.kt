@@ -17,6 +17,17 @@ import org.gradle.api.provider.Provider
  * AGP rewrites the SDK AAR through an artifact transform that Gradle runs early (e.g. when the SDK is
  * reached through a project dependency, issue #176), so the rewrite found no extensions and left
  * `initializeExtensions()` empty while the providers were already stripped.
+ *
+ * **The graph, not the artifacts.** [SdkSymbolAvailability] explains why the classpath's ARTIFACTS cannot be a
+ * transform input (the transform instruments that classpath, so its own dependencies become unresolvable for
+ * consumers with Android project dependencies). This reads only the resolved dependency GRAPH (component ids and
+ * edges), which selects no artifact variant. Checked on real AGP builds with project dependencies (library,
+ * `api`, two-hop, split layouts) on AGP 8.6, 8.13, 9.0 and 9.4.
+ *
+ * **What it sees.** External modules `com.bugsee:<artifact>`. A Bugsee extension reached as a PROJECT or composite
+ * substitution (the SDK's own repo) or under another group is not listed: its provider then stays in the manifest
+ * and registers itself, which costs only the startup optimisation. A constraint alone does not add a module to the
+ * graph, and an unresolvable dependency does not make this throw (both pinned in the unit tests).
  */
 internal object ExtensionsOnClasspath {
 
