@@ -1128,6 +1128,7 @@ class CliUploaderTest {
             "connect to http://alice:pa'LEAKPASS7@proxy.corp:8080 failed" to "LEAKPASS7",
             // A JSON-escaped body (`\/` for `/`) as a CLI might print it.
             "{\"detail\":\"http:\\/\\/alice:LEAKPASS8@proxy.corp:8080\"}" to "LEAKPASS8",
+            "body: \"{\\\"detail\\\":\\\"http:\\\\/\\\\/alice:LEAKPASS10@proxy.corp:8080\\\"}\"" to "LEAKPASS10",
             // A long token used as the password (JWT / access token) must not slip past a length cap.
             "HTTPS_PROXY=http://user:" + "A".repeat(600) + "LEAKPASS9@proxy.corp:8080" to "LEAKPASS9",
         )

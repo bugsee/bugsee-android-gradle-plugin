@@ -71,8 +71,8 @@ internal object BundleUploader {
     // `@` and `'` are allowed inside (an unencoded `p@ss` password; URL parsers split at the LAST `@` before
     // the path). Only the scheme is bounded: the userinfo run stops at the next `/`, so runs after different `://`
     // never overlap and each `://` is reachable from at most 32 starts (linear), while a long token used as the
-    // password (a JWT) is still redacted in full. `\/` (a JSON-escaped body) counts as a separator too.
-    private val URL_USERINFO = Regex("\\b([a-zA-Z][a-zA-Z0-9+.-]{0,31}:(?:\\\\?/){2})[^\\s/?#\"<>]+@")
+    // password (a JWT) is still redacted in full. `\/` or `\\/` (a JSON-escaped body, once or Debug-quoted) counts as a separator too.
+    private val URL_USERINFO = Regex("\\b([a-zA-Z][a-zA-Z0-9+.-]{0,31}:(?:\\\\{0,2}/){2})[^\\s/?#\"<>]+@")
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
     // Opening (or self-closing) tag candidates. Quote-aware: a `>` inside a quoted attribute value does not end the tag.
