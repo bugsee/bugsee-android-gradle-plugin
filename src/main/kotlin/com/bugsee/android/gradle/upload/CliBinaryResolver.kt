@@ -253,12 +253,79 @@ internal object CliBinaryResolver {
             throw e
         } catch (e: Throwable) {
             if (isInterrupt(e)) throw cancelled(e)
+            // The cache is keyed by the pinned version, but the CLI self-updates IN PLACE: after a pin
+            // bump the previous version's directory can already hold a newer binary. Prefer it over
+            // dropping to the Kotlin uploader (which cannot send what only the CLI can, e.g. DWARF).
+            val installed = findCompatibleCachedBinary(gradleUserHome, triple, binaryName, version, logger)
+            val reason = BundleUploader.scrubForLog(e.message ?: "")
+            if (installed != null) {
+                logger.warn(
+                    "Bugsee: failed to download bugsee-cli v$version for $triple: $reason; " +
+                        "using the already-installed ${installed.absolutePath}.",
+                )
+                return installed
+            }
             logger.warn(
-                "Bugsee: failed to download bugsee-cli v$version for $triple: ${BundleUploader.scrubForLog(e.message ?: "")}; " +
+                "Bugsee: failed to download bugsee-cli v$version for $triple: $reason; " +
                     "using the Kotlin uploader.",
             )
             null
         }
+    }
+
+    /**
+     * An already-installed CLI that can stand in for [minVersion] when its download fails: any
+     * `caches/bugsee-cli/<dir>/<triple>/<binary>` whose own `--version` is at least [minVersion] and
+     * on the same major (the self-updater never crosses a major either, and a new major may change
+     * the CLI contract). The directory name is only where an earlier pin installed it: the binary is
+     * replaced in place by `update`, so it is asked rather than trusted. The newest match wins;
+     * null when there is none. A cancellation while probing is rethrown, never swallowed.
+     */
+    internal fun findCompatibleCachedBinary(
+        gradleUserHome: File,
+        triple: String,
+        binaryName: String,
+        minVersion: String,
+        logger: Logger?,
+    ): File? {
+        val root = File(gradleUserHome, "caches/bugsee-cli")
+        var best: Pair<String, File>? = null
+        val dirs = root.listFiles { f -> f.isDirectory }?.sortedBy { it.name }.orEmpty()
+        for (dir in dirs) {
+            val binary = File(dir, "$triple/$binaryName")
+            if (!binary.isFile || !binary.canExecute()) continue
+            // The per-triple lock of that cache root: a self-update may be replacing this very file.
+            val found = try {
+                withTripleLock(lockFileFor(binary.parentFile, triple), logger) { probeVersion(binary) }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw e
+            } ?: continue
+            if (!versionAtLeast(found, minVersion) || major(found) != major(minVersion)) continue
+            if (best == null || !versionAtLeast(best.first, found)) best = found to binary
+        }
+        return best?.second
+    }
+
+    private fun major(v: String): Int = v.trim().takeWhile(Char::isDigit).toIntOrNull() ?: -1
+
+    /** `<binary> --version` -> the version it prints (`bugsee-cli 0.9.0`), or null if it cannot be run or read. */
+    private fun probeVersion(binary: File): String? = try {
+        val process = ProcessBuilder(binary.absolutePath, "--version")
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        process.outputStream.close()
+        if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            null
+        } else if (process.exitValue() != 0) {
+            null
+        } else {
+            Regex("""\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)""")
+                .find(process.inputStream.bufferedReader().readText())?.groupValues?.get(1)
+        }
+    } catch (e: IOException) {
+        null
     }
 
     /**
