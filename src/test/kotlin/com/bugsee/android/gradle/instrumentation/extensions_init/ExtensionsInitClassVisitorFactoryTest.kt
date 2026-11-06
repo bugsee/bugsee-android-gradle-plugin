@@ -94,10 +94,9 @@ class ExtensionsInitClassVisitorFactoryTest {
     // ── helpers ──────────────────────────────────────────────────────────
 
     private fun transform(input: ByteArray, detected: List<String>): ByteArray {
-        val detectedFile = tempFolder.newFile().apply { writeText(detected.joinToString("\n")) }
         val reader = ClassReader(input)
         val writer = ClassWriter(reader, 0)
-        val visitor = factory(detectedFile).createClassVisitor(
+        val visitor = factory(detected.toSet()).createClassVisitor(
             FakeClassContext(TARGET.replace('/', '.')),
             writer,
         )
@@ -135,10 +134,10 @@ class ExtensionsInitClassVisitorFactoryTest {
             .map { "${it.owner}.${it.name}${it.desc}" }
     }
 
-    private fun factory(detectedFile: java.io.File): ExtensionsInitClassVisitorFactory {
+    private fun factory(providers: Set<String>): ExtensionsInitClassVisitorFactory {
         val objects = ProjectBuilder.builder().build().objects
         val params = objects.newInstance(ExtensionsInitParameters::class.java)
-        params.detectedExtensionsFile.set(detectedFile)
+        params.providers.set(providers)
         params.excludes.set(emptySet<String>())
         return TestFactory(objects.property(ExtensionsInitParameters::class.java).value(params))
     }

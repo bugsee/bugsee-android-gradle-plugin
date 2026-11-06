@@ -127,6 +127,8 @@ internal object ManifestModifier {
      * Bugsee extension init provider ([ExtensionSpec.KNOWN]). Any other
      * provider, however it is named, is left alone.
      *
+     * With [only] set, restricts that to those names (the extensions the caller is going to register itself).
+     *
      * Returns the list of fully-qualified class names that were removed,
      * in document order. The caller uses this list to inline the
      * corresponding `register<Name>Extension()` calls into
@@ -136,7 +138,7 @@ internal object ManifestModifier {
      * use timestamp-driven Gradle up-to-date checks and rely on the
      * output landing at a deterministic location.
      */
-    fun removeExtensionInitProviders(manifestFile: File): List<String> {
+    fun removeExtensionInitProviders(manifestFile: File, only: Set<String>? = null): List<String> {
         if (!manifestFile.isFile) return emptyList()
 
         val docFactory = secureDocumentBuilderFactory().apply {
@@ -157,7 +159,8 @@ internal object ManifestModifier {
             val provider = providerNodes.item(i) as Element
             val name = provider.getAttributeNS(ANDROID_NS, "name")
             // Only known SDK extensions: see ExtensionSpec.KNOWN for why not a name pattern.
-            if (ExtensionSpec.fromInitProviderFqn(name) != null) {
+            // [only]: just the providers the injection will register; the rest stay and register themselves.
+            if (ExtensionSpec.fromInitProviderFqn(name) != null && (only == null || name in only)) {
                 removed.add(name)
                 toRemove.add(provider)
             }

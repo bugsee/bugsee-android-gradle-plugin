@@ -247,7 +247,7 @@ abstract class NativeUploadTask : DefaultTask() {
         val basePath = buildDirectory.get().asFile.absolutePath
         val skipCache = forceUpload.get()
         val cacheFile = File(rootProjectDirectory.get().asFile, ".gradle/bugsee/native-symbol-cache.json")
-        val cacheKey = nativeSymbolCacheKey(appToken, variantName.get())
+        val cacheKey = nativeSymbolCacheKey(appToken, variantName.get(), endpoint.get())
 
         val uploaderChoice = uploader.get()
 
@@ -514,9 +514,14 @@ abstract class NativeUploadTask : DefaultTask() {
  * The `elf-force-v1` generation is independent of the CLI floor: FULL zips cached
  * before `--force` was sent for `.so.dbg` entries never replaced SYMBOL_TABLE
  * symbols on the server, so they must be re-sent once with `--force`.
+ *
+ * The key also carries the [endpoint]: a hash says what was sent, not where, and one token
+ * works against several backends (staging, production, a region). Without it a zip uploaded to
+ * one backend would be skipped as "already uploaded" when the same build targets another.
  */
-internal fun nativeSymbolCacheKey(appToken: String, variantName: String): String =
-    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:elf-force-v1"
+internal fun nativeSymbolCacheKey(appToken: String, variantName: String, endpoint: String): String =
+    "${HashUtils.sha1Hex(appToken)}:$variantName:cli-${CliBinaryResolver.DEFAULT_VERSION}:" +
+        "ep-${HashUtils.sha1Hex(endpoint).take(12)}:elf-force-v1"
 
 /**
  * Key into [SymbolHashCache] for the unstripped-libraries directory upload. Unlike the

@@ -91,6 +91,8 @@ class BugseeManifestTaskSplitApkTest {
             t.debug.set(false)
             t.optimizeExtensionsLoading.set(optimizeExtensions)
             t.extensionsInitRegistered.set(extensionsInitRegistered)
+            // The classpath says every known extension is present: these tests are about WHERE the strip applies.
+            t.consolidatedProviders.set(com.bugsee.android.gradle.instrumentation.extensions_init.ExtensionSpec.KNOWN.map { it.initProviderFqn })
             t.variantName.set("debug")
             t.pluginVersion.set("7.0.0")
             t.mergedManifest.set(baseManifestFile)

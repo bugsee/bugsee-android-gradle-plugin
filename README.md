@@ -755,6 +755,28 @@ is not loaded without AGP): do not apply the plugin to such modules. A `java-lib
 Kotlin plugin still fails earlier, because the plugin also serves as a Kotlin compiler plugin and needs the
 Kotlin Gradle plugin on the classpath.
 
+### Java-only apps
+
+The plugin is also a Kotlin compiler plugin, and AGP 8.x does not bring the Kotlin Gradle plugin with it (AGP 9 does when AGP is visible to Bugsee, so no separate Kotlin plugin declaration is needed then). An
+Android app with no Kotlin in the build (a Java-only app) therefore fails when the plugin applies:
+
+```text
+java.lang.NoClassDefFoundError: org/jetbrains/kotlin/gradle/plugin/KotlinCompilerPluginSupportPlugin
+```
+
+Put the Kotlin Gradle plugin on the build's plugin classpath without applying it, in the root
+`build.gradle.kts` (use your Kotlin version):
+
+```kotlin
+plugins {
+    id("com.android.application") version "8.6.0" apply false
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false   // classpath only; :app stays Java
+    id("com.bugsee.android.gradle") version "<plugin version>" apply false
+}
+```
+
+The `:app` module keeps listing only `com.android.application` and `com.bugsee.android.gradle`.
+
 If `com.android.application` IS applied in the module but AGP is not visible to Bugsee (Bugsee declared in
 the root project's `plugins {}` with `apply false` while AGP is declared only in the app module), the build
 fails with a message saying so, rather than building an app with nothing wired. Declare AGP in the root
@@ -781,6 +803,7 @@ Gradle log level:
 | `variant.*` file key ignored because the DSL set the value | `warn`, once per key | See [Precedence](#precedence). |
 | Resolved `com.bugsee:*` modules on different versions (checked when the variant's runtime classpath resolves, so not on a configuration-cache hit; Maven modules only, project dependencies are not compared) | `warn`, once per variant | Mixed SDK releases can fail at runtime; the message lists each `group:name:version`. Never fails the build. |
 | Declared Bugsee SDK version (the core on a production configuration, else an extension, else a `compileOnly` core pin) older than the `initializeExtensions` floor while `optimizeExtensionsLoading` is on | `warn`, once per module | Extension providers are then left in the manifest (no strip); upgrade the SDK or turn the option off. |
+| An extension module is on the variant's runtime classpath but its provider is not in the merged manifest (e.g. removed with `tools:node="remove"`) while `optimizeExtensionsLoading` is on | `warn`, per variant | `BugseeInitProvider` registers every extension module on the classpath, decided before the manifest is merged, so the extension still runs. To keep one off, drop its module from that variant; to let the manifest alone decide, set `optimizeExtensionsLoading = false`. |
 | Auto-added extension module (`ndk`, `leak`, `feedback`, `compose`, `okhttp`, `ktor-2`, `ktor-3`, `cronet`) skipped because the SDK version auto-added modules use (the declared core pin, else a declared extension or `compileOnly` pin) is older than the module's first release (ndk `7.0.0-beta6`, leak `7.0.0-beta13`, the rest `7.0.0-beta1`) | `warn`, once per module | The coordinate would not resolve and fail the build; the module is not added. Names the module, the declared version and the first release. Ranges and unparsable versions are not checked; a module you declare yourself is never touched or warned about. |
 | Per-variant resolution, only if `plugin.debug=true` for that variant | `warn` | `Bugsee: variant <name> resolved: token=<masked or none> endpoint=<url>`; the token shows the first 4 and last 4 characters (`****` when 8 or fewer). |
 

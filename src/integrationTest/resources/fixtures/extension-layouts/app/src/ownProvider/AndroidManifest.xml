@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="fixture" android:allowBackup="false">
+        <!-- A known extension provider declared by the APP itself: no Feedback module is on the classpath. -->
+        <provider
+            android:name="com.bugsee.library.BugseeFeedbackInitProvider"
+            android:authorities="${applicationId}.bugseefeedbackinitprovider"
+            android:exported="false" />
+    </application>
+</manifest>
