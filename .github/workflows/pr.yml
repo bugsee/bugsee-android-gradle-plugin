@@ -10,31 +10,49 @@ permissions:
   contents: read
 
 jobs:
-  diag:
-    name: diag compose release (${{ matrix.variant }})
+  # The integration shards with RELEASE=true: which of them fails shows which tests run before the failing
+  # Compose tests in the same TestKit home.
+  shard:
+    name: diag shard ${{ matrix.shard }} RELEASE=true
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        variant: [test-only, build-then-test]
+        shard: [1, 2, 3, 4]
     env:
       RELEASE: "true"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-build
-      - name: Build the compose compiler plugin first (as the production build does)
-        if: matrix.variant == 'build-then-test'
-        run: ./gradlew clean :compose-compiler-plugin:build
-      - name: ComposePluginOrderTest with RELEASE=true
+      - name: TestKit shard with RELEASE=true
         continue-on-error: true
-        run: ./gradlew integrationTest --tests '*ComposePluginOrderTest*' -i 2>&1 | tee /tmp/compose-test.log
+        run: bash -xe ./scripts/build.sh --integration ${{ matrix.shard }} 4
       - name: Keep the evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: diag-${{ matrix.variant }}
-          path: |
-            /tmp/compose-test.log
-            build/test-results/integrationTest/
+          name: diag-shard-${{ matrix.shard }}
+          path: build/test-results/integrationTest/
+          retention-days: 2
+
+  # Exactly what the production Build step runs.
+  production-build:
+    name: diag production Build step (build.sh --full, RELEASE=true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RELEASE: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-build
+      - name: bash -xe ./scripts/build.sh --full
+        continue-on-error: true
+        run: bash -xe ./scripts/build.sh --full
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diag-production-build
+          path: build/test-results/integrationTest/
           retention-days: 2
