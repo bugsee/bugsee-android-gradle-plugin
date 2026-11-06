@@ -1118,6 +1118,31 @@ class CliUploaderTest {
         }
     }
 
+    @Test fun `scrubForLog redacts userinfo credentials embedded in URLs`() {
+        val cases = mapOf(
+            "proxy error: connect to http://alice:LEAKPASS1@proxy.corp:8080 failed" to "LEAKPASS1",
+            "using https://bob:p%40ss-LEAKPASS2@proxy.corp/ as proxy" to "LEAKPASS2",
+            "HTTPS_PROXY=http://LEAKTOKEN3@proxy.corp:3128" to "LEAKTOKEN3",
+            "tunnel via socks5://svc:LEAKPASS4@10.0.0.1:1080;" to "LEAKPASS4",
+        )
+        for ((input, leak) in cases) {
+            val out = BundleUploader.scrubForLog(input)
+            assertFalse(out.contains(leak), "scrubForLog leaked $leak: $out")
+            assertTrue(out.contains("proxy") || out.contains("10.0.0.1"), "host lost: $out")
+        }
+        // Not credentials: no userinfo, an @ later in the path, or an e-mail address.
+        for (benign in listOf(
+            "GET https://api.bugsee.com/apps/x/symbols failed",
+            "see https://example.com/users/@alice for details",
+            "contact support@bugsee.com",
+        )) {
+            assertEquals(benign, BundleUploader.scrubForLog(benign))
+        }
+        // A userinfo cut by the length cap must not leave a partial password behind.
+        val long = "x".repeat(4090) + " http://u:LEAKPASS5@host/"
+        assertFalse(BundleUploader.scrubForLog(long).contains("LEAKPASS5"))
+    }
+
     @Test fun `scrubForLog redacts credential attributes and keeps clap-style prose`() {
         assertFalse(BundleUploader.scrubForLog("<Item token=\"SECRETA\">x</Item>").contains("SECRETA"))
         assertFalse(BundleUploader.scrubForLog("<Token value='SECRETB'/>").contains("SECRETB"))
