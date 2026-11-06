@@ -482,12 +482,6 @@ class CliBinaryResolverTest {
 
     private val logger = Logging.getLogger("test")
 
-    /**
-     * A Gradle-user-home temp dir pre-seeded with an executable cached
-     * `bugsee-cli` binary at the exact host-triple path `resolve` looks up,
-     * so `resolve(autoUpdate=...)` takes the cache-hit fast path with no
-     * network. Returns the home dir.
-     */
     // ── fallback to an already-installed CLI when the download fails ─────
 
     /** A fake CLI under `caches/bugsee-cli/<dirVersion>/<triple>` that prints [printed] for `--version`. */
@@ -498,6 +492,14 @@ class CliBinaryResolverTest {
         bin.writeText("#!/bin/sh\n" + (if (printed != null) "echo \"bugsee-cli $printed\"\n" else "") + "exit $exitCode\n")
         bin.setExecutable(true)
         return bin
+    }
+
+    @Test fun `a pre-release binary does not stand in for a stable pin`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.6.0", "0.9.0-beta1")
+        assertNull(findCached(home, "0.9.0"))
+        assertNotNull(findCached(home, "0.9.0-beta1"))
     }
 
     private fun findCached(home: File, min: String): File? {
@@ -566,9 +568,25 @@ class CliBinaryResolverTest {
             gradleUserHome = home,
             logger = logger,
             debug = false,
-            autoUpdate = false,
+            autoUpdate = true,
         )
         assertEquals(installed, resolved)
+    }
+
+    @Test fun `cliAutoUpdate false means the exact pin, so no substitute binary is used`() {
+        assumeUnixShell()
+        val home = tmp.newFolder()
+        installFakeCli(home, "0.8.1", "0.9.0")
+        val resolved = CliBinaryResolver.resolve(
+            cliVersion = "0.0.9",
+            cliPath = null,
+            execOps = RecordingExecOps(),
+            gradleUserHome = home,
+            logger = logger,
+            debug = false,
+            autoUpdate = false,
+        )
+        assertNull(resolved)
     }
 
     @Test fun `resolve still falls back to the Kotlin uploader when nothing installed is compatible`() {
@@ -587,6 +605,12 @@ class CliBinaryResolverTest {
         assertNull(resolved)
     }
 
+    /**
+     * A Gradle-user-home temp dir pre-seeded with an executable cached
+     * `bugsee-cli` binary at the exact host-triple path `resolve` looks up,
+     * so `resolve(autoUpdate=...)` takes the cache-hit fast path with no
+     * network. Returns the home dir.
+     */
     private fun gradleHomeWithCachedBinary(): File {
         val home = tmp.newFolder()
         val triple = CliBinaryResolver.detectHostTriple()

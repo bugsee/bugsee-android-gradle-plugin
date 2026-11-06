@@ -256,7 +256,14 @@ internal object CliBinaryResolver {
             // The cache is keyed by the pinned version, but the CLI self-updates IN PLACE: after a pin
             // bump the previous version's directory can already hold a newer binary. Prefer it over
             // dropping to the Kotlin uploader (which cannot send what only the CLI can, e.g. DWARF).
-            val installed = findCompatibleCachedBinary(gradleUserHome, triple, binaryName, version, logger)
+            // Not with cliAutoUpdate=false: that documents "use this exact cliVersion", and a different
+            // binary from another directory would silently break it. Any failure while looking is "none".
+            val installed = if (!autoUpdate) null else try {
+                findCompatibleCachedBinary(gradleUserHome, triple, binaryName, version, logger)
+            } catch (t: Throwable) {
+                if (isInterrupt(t)) throw cancelled(t)
+                null
+            }
             val reason = BundleUploader.scrubForLog(e.message ?: "")
             if (installed != null) {
                 logger.warn(
@@ -302,10 +309,14 @@ internal object CliBinaryResolver {
                 throw e
             } ?: continue
             if (!versionAtLeast(found, minVersion) || major(found) != major(minVersion)) continue
+            // A pre-release (0.9.0-beta1) compares equal to 0.9.0 numerically but is not "at least" it.
+            if (isPreRelease(found) && !isPreRelease(minVersion)) continue
             if (best == null || !versionAtLeast(best.first, found)) best = found to binary
         }
         return best?.second
     }
+
+    private fun isPreRelease(v: String): Boolean = v.trim().substringBefore('+').contains('-')
 
     private fun major(v: String): Int = v.trim().takeWhile(Char::isDigit).toIntOrNull() ?: -1
 
@@ -315,7 +326,13 @@ internal object CliBinaryResolver {
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
         process.outputStream.close()
-        if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+        val finished = try {
+            process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            process.destroyForcibly() // a cancelled build must not leave a stalled CLI running
+            throw e
+        }
+        if (!finished) {
             process.destroyForcibly()
             null
         } else if (process.exitValue() != 0) {

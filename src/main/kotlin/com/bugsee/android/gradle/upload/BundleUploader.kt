@@ -68,7 +68,9 @@ internal object BundleUploader {
     private val SENSITIVE_JSON_KEY = Regex(SENSITIVE_KEY_PATTERN, RegexOption.IGNORE_CASE)
     private val SIGV4_PAIR = Regex("(Signature|Credential)=[^\\s,&\"'<>]+", RegexOption.IGNORE_CASE)
     // `scheme://user:pass@host` (a proxy URL in an env var or an error message): the whole userinfo goes.
-    private val URL_USERINFO = Regex("\\b([a-zA-Z][a-zA-Z0-9+.-]*://)[^\\s/?#@\"'<>]+@")
+    // `@` and `'` are allowed inside (an unencoded `p@ss` password; URL parsers split at the LAST `@` before
+    // the path), and both runs are bounded so a huge plain-text body cannot make the scan quadratic.
+    private val URL_USERINFO = Regex("\\b([a-zA-Z][a-zA-Z0-9+.-]{0,31}://)[^\\s/?#\"<>]{1,512}@")
     private val BEARER = Regex("\\b(Bearer|Basic)\\s+[A-Za-z0-9._~+/=\\-]+", RegexOption.IGNORE_CASE)
     private val SECRET_HEADER = Regex("\\b(Authorization|Cookie|X-Amz-[A-Za-z-]+)\\s*:\\s*[^\\r\\n]+", RegexOption.IGNORE_CASE)
     // Opening (or self-closing) tag candidates. Quote-aware: a `>` inside a quoted attribute value does not end the tag.

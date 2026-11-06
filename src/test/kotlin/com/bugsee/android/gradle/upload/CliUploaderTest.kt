@@ -1124,6 +1124,8 @@ class CliUploaderTest {
             "using https://bob:p%40ss-LEAKPASS2@proxy.corp/ as proxy" to "LEAKPASS2",
             "HTTPS_PROXY=http://LEAKTOKEN3@proxy.corp:3128" to "LEAKTOKEN3",
             "tunnel via socks5://svc:LEAKPASS4@10.0.0.1:1080;" to "LEAKPASS4",
+            "HTTPS_PROXY=http://alice:p@ssLEAKPASS6@proxy.corp:8080" to "LEAKPASS6",
+            "connect to http://alice:pa'LEAKPASS7@proxy.corp:8080 failed" to "LEAKPASS7",
         )
         for ((input, leak) in cases) {
             val out = BundleUploader.scrubForLog(input)
@@ -1138,6 +1140,10 @@ class CliUploaderTest {
         )) {
             assertEquals(benign, BundleUploader.scrubForLog(benign))
         }
+        // A huge body with many scheme-like runs and no `://` must stay fast (bounded scan).
+        val started = System.nanoTime()
+        BundleUploader.scrubForLog("a-".repeat(2_000_000))
+        assertTrue((System.nanoTime() - started) < 5_000_000_000L, "scrubForLog is not linear")
         // A userinfo cut by the length cap must not leave a partial password behind.
         val long = "x".repeat(4090) + " http://u:LEAKPASS5@host/"
         assertFalse(BundleUploader.scrubForLog(long).contains("LEAKPASS5"))

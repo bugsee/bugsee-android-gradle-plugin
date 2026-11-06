@@ -757,7 +757,7 @@ Kotlin Gradle plugin on the classpath.
 
 ### Java-only apps
 
-The plugin is also a Kotlin compiler plugin, and AGP 8.x does not bring the Kotlin Gradle plugin with it (AGP 9 does, so nothing is needed there). An
+The plugin is also a Kotlin compiler plugin, and AGP 8.x does not bring the Kotlin Gradle plugin with it (AGP 9 does when AGP is visible to Bugsee, so no separate Kotlin plugin declaration is needed then). An
 Android app with no Kotlin in the build (a Java-only app) therefore fails when the plugin applies:
 
 ```text
@@ -771,7 +771,7 @@ Put the Kotlin Gradle plugin on the build's plugin classpath without applying it
 plugins {
     id("com.android.application") version "8.6.0" apply false
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false   // classpath only; :app stays Java
-    id("com.bugsee.android.gradle") apply false
+    id("com.bugsee.android.gradle") version "<plugin version>" apply false
 }
 ```
 
