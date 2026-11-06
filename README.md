@@ -757,7 +757,7 @@ Kotlin Gradle plugin on the classpath.
 
 ### Java-only apps
 
-The plugin is also a Kotlin compiler plugin, and AGP does not bring the Kotlin Gradle plugin with it. An
+The plugin is also a Kotlin compiler plugin, and AGP 8.x does not bring the Kotlin Gradle plugin with it (AGP 9 does, so nothing is needed there). An
 Android app with no Kotlin in the build (a Java-only app) therefore fails when the plugin applies:
 
 ```text
