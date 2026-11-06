@@ -385,7 +385,23 @@ internal class FixtureProject private constructor(
             // PATH is occasionally consulted by `cmake` / `ndk-build`
             // during AGP's preBuild — forward.
             System.getenv("PATH")?.let { env["PATH"] = it }
+            env.putAll(releaseEnvironment(System::getenv))
             return env
         }
+
+        /**
+         * `RELEASE` of the OUTER build, for the fixture builds.
+         *
+         * The fixtures include THIS project as the plugin under test, and its `build.gradle.kts` derives the plugin's
+         * version from `RELEASE` (a plain version, or `-SNAPSHOT` without it), which it writes into the plugin's version
+         * resource in this project's own `build/` directory, shared with the outer build. The Compose pipeline fixtures
+         * then ask for the Bugsee compose-compiler artifacts at that version, while the outer build published them at ITS
+         * version. `withEnvironment` replaces the environment, so without forwarding `RELEASE` a fixture build always
+         * computed `-SNAPSHOT`: harmless in a SNAPSHOT build, but in a release build (the production deploy) any
+         * fixture build that re-ran `processResources` left `-SNAPSHOT` behind and every later Compose fixture failed
+         * with "Could not find com.bugsee:bugsee-compose-compiler-plugin-k22:<version>-SNAPSHOT" (4.1.1).
+         */
+        internal fun releaseEnvironment(getenv: (String) -> String?): Map<String, String> =
+            getenv("RELEASE")?.let { mapOf("RELEASE" to it) } ?: emptyMap()
     }
 }
