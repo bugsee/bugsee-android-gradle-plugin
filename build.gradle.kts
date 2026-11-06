@@ -49,7 +49,7 @@ repositories {
 dependencies {
     compileOnly("com.android.tools.build:gradle-api:8.6.0")
     compileOnly("com.android.tools.build:gradle:8.6.0")
-    compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin-api:2.1.0")
+    compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin-api:2.4.21")
     implementation("org.apache.httpcomponents:httpclient:4.5.14")
     implementation("org.apache.httpcomponents:httpmime:4.5.14")
     implementation("org.json:json:20240303")
@@ -90,7 +90,7 @@ dependencies {
     // ManifestTaskStripGateWiringTest applies the real plugin to a
     // ProjectBuilder project to pin the ExtensionStripGate call site, which
     // requires the type at test runtime.
-    testImplementation("org.jetbrains.kotlin:kotlin-gradle-plugin-api:2.1.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-gradle-plugin-api:2.4.21")
 
     // ASM toolchain used by the app-startup-tracing test harness
     // (CheckClassAdapter for verifier-compatibility assertions, Analyzer
@@ -105,7 +105,7 @@ dependencies {
     // Kotlin compiler embeddable for the test harness's Kotlin-source
     // compiler (compiles inline Kotlin snippets to class bytes that the
     // ASM harness then transforms).
-    testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.1.0")
+    testImplementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
 }
 
 // ============================================================================
