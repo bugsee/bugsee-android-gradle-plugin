@@ -16,6 +16,10 @@ import org.junit.rules.TemporaryFolder
  * the compose-compiler artifacts under the plain version: the 4.1.1 production deploy failed six Compose fixtures
  * with "Could not find ...-SNAPSHOT". A SNAPSHOT build cannot show that (both sides say SNAPSHOT), so the check is on
  * the environment itself, which differs in every mode.
+ *
+ * The end-to-end test below has teeth only when the outer build has `RELEASE` set, as every CI job does (`pr.yml`
+ * sets it to "false", the production deploy to "true"): with it unset, as in a plain local run, both sides see
+ * nothing and it passes either way. The two unit tests above pin the forwarding logic in every mode.
  */
 class FixtureEnvironmentTest {
 
