@@ -24,7 +24,7 @@ Release builds: set `RELEASE=true` environment variable to drop `-SNAPSHOT` suff
 After making changes:
 0. `./gradlew :test` (unit tests) and `./gradlew :integrationTest` (Gradle TestKit tests)
 1. `./gradlew build` — plugin compiles and `validatePlugins` passes
-2. `./gradlew publishToMavenLocal` — publishes `com.bugsee:bugsee-android-gradle-plugin:4.1.1-SNAPSHOT`
+2. `./gradlew publishToMavenLocal` — publishes `com.bugsee:bugsee-android-gradle-plugin:4.1.2-SNAPSHOT`
 3. Apply plugin in the SDK's `app/` module → `./gradlew :app:assembleDebug` — verify manifest UUID injection
 4. For instrumentation testing: inspect bytecode of a consuming app via `javap` or ASM bytecode dump
 
@@ -33,7 +33,7 @@ After making changes:
 | Property | Value |
 |----------|-------|
 | Plugin ID | `com.bugsee.android.gradle` |
-| Version | 4.1.1 (in `version.txt`) |
+| Version | 4.1.2 (in `version.txt`) |
 | Artifact | `com.bugsee:bugsee-android-gradle-plugin` |
 | Language | Kotlin (2.1.0) |
 | Java target | 11 |
