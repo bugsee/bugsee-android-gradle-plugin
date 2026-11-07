@@ -293,6 +293,10 @@ tasks.register<Test>("integrationTest") {
     inputs.files(fileTree(layout.projectDirectory.dir("compose-compiler-plugin/build/integrationTest/compose-plugin-repo")) { include("**/*.jar") })
         .withPropertyName("composePluginJars").withPathSensitivity(PathSensitivity.NONE)
     useJUnit()
+    // The fixture builds are given the outer RELEASE (FixtureProject.releaseEnvironment), and the plugin's version, and
+    // so the compose artifacts the fixtures resolve, depend on it: a result produced in one mode must not satisfy the
+    // other (a SNAPSHOT run proves nothing about the production deploy, which runs with RELEASE=true).
+    inputs.property("bugsee.release", providers.environmentVariable("RELEASE").orElse("")).optional(true)
     providers.gradleProperty("bugsee.it.shard").orNull?.takeIf { it.isNotBlank() }?.let { raw ->
         val shard = raw.toIntOrNull()?.takeIf { it in 1..integrationShardCount }
             ?: throw GradleException("-Pbugsee.it.shard must be an integer from 1 to $integrationShardCount, got '$raw'")
