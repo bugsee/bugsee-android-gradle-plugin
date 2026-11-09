@@ -258,7 +258,7 @@ val compose19Runtime by configurations.creating {
 }
 val compose19CompilerCoordinates = "androidx.compose.compiler:compiler:1.5.15"
 // Compose Multiplatform runtime, not the androidx one: the compiler only needs `Composer` to resolve.
-val compose19RuntimeCoordinates = "org.jetbrains.compose.runtime:runtime-desktop:1.6.11"
+val compose19RuntimeCoordinates = "org.jetbrains.compose.runtime:runtime-desktop:1.12.2"
 dependencies {
     compose19Compiler(compose19CompilerCoordinates)
     compose19Runtime(compose19RuntimeCoordinates)
