@@ -61,6 +61,9 @@ release build) the whole suite runs as before.
   version, so a request bumped by conflict resolution, `2.2.0 -> 2.2.10`, fails).
 - The legs fetch the pinned `bugsee-cli` through `.github/actions/fetch-bugsee-cli` (shared with the
   `unit` job) and fail if `NativeMergedLibsE2ETest` was skipped.
+- `NativeMergedLibsE2ETest` needs the real `bugsee-cli` (`BUGSEE_CLI_BIN`), which only the `unit` job and the
+  toolchain legs fetch; in the `integration` shard jobs it skips, by design, and the aggregate does not count that as
+  a failure.
 - `.gitattributes` pins `gradlew` and `*.sh` to LF (and `*.bat` to CRLF): Git for Windows would
   otherwise check them out with CRLF and bash would fail on `gradlew`.
 
